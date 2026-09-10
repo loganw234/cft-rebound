@@ -2508,3 +2508,170 @@ somewhere else.
 **Not done: Windows.** A DLL may not carry undefined symbols, so it must
 link against `rebound.__libpath__` rather than leave REBOUND's symbols to
 the loader. Different rule, its own change, its own test.
+
+
+---
+
+## 29. The Linux legs, the card checkpoint, and what a documentation audit found
+
+**2026-09-10, amd-arc-box (Ubuntu 24.04, gcc 13, Alveo U50C) unless
+stated.**
+
+### The full software suite on Linux, for the first time
+
+```
+software make check: rc=0 in 4454 s
+  RESULT: PASS lines: 6
+```
+
+This box has had a working card for weeks and had never run the gate
+suite once, because `tools/gen_constants.py` imports mpmath and the
+system python had never had it — every session here built
+`build/ias15_cft` directly. So this is the first confirmation that the
+whole suite passes on a second platform and compiler at every format.
+It takes 74 minutes there against 48 on the Windows host.
+
+### The cross-process checkpoint, on the card
+
+`tools/check_checkpoint.py` with `CFT_REBOUND_ARTIFACT` pointing at the
+quad tile: three separate processes per format, each opening the card
+for itself, plus a fourth that discards the loaded state and must
+differ.
+
+```
+card checkpoint: rc=0 in 1766 s
+  fp64   PASS  14 values identical, control differs, archive 10536 B
+  fp128  PASS  14 values identical, control differs, archive 15336 B
+  fp256  PASS  14 values identical, control differs, archive 24936 B
+```
+
+This is the strongest form of the claim: a run on the tile wrote a
+Simulationarchive, exited, and a different process opened the tile
+again and continued from it bit for bit. Entry 27's `gate_real` runs
+were the single-process version of the same test.
+
+### `make example` failed, and the reason was a real user-facing gap
+
+It failed instantly, with a page of undefined references to `std::`
+symbols out of `backend_xrt.o`. `examples/Makefile` is a standalone
+makefile whose whole purpose is to MODEL a user's own build, and it had
+no XRT link flags — the top-level Makefile learned to derive them from
+`XILINX_XRT` earlier the same day and the example did not. So the
+README's "two lines go into your own build" was incomplete for anybody
+whose libcft carries the card backend, which is everybody who has a
+card.
+
+It passes on Windows and on any software-only build, which is how it
+survived a whole day of testing. It took a build on a machine that
+actually has an XRT libcft installed. Fixed, and `make example` on the
+box now runs both examples:
+
+```
+cft-rebound worked round trip: Sun, Jupiter, Saturn; 300 fixed steps of dt = 0.5
+40 binary256 steps: t = 0.40000000000000002
+reloaded (restored exactly): p1.x = 0x1.d7975ec563c7fp-1 -> the same bits it was saved with
+```
+
+`p1.x` there is bit-identical to the Windows run recorded in entry 26.
+
+### An Opus agent audited every document against the code
+
+It found eleven things wrong in the sense that sends a reader somewhere
+that does not exist: a `cft_rebound_register()` reserved in
+`include/cft_rebound.h` and never written; a library named
+`libias15_cft.so` in four places where the Makefile builds
+`libcft_ias15.so`; `make examples` where the target is `make example`
+(the plural matches the *directory* and silently does nothing); and —
+the one worth naming — `src/cft_ias15.h` still calling `x0/v0/a0`
+"position, velocity, acceleration", which is the exact comment
+ROADMAP identifies as the root cause of the broken checkpoint, still
+sitting there after the fix.
+
+`docs/VALIDATION.md` was left alone as it must be: 21 insertions, 0
+deletions, all of them pointer lines on entries 25 to 27 naming the
+later entry that closed each "not tested" item.
+
+### Three code defects it found, and one of them needed measuring
+
+**1. The drop-in ran every format at REBOUND's cap of 12.** ROADMAP
+says the shim must pick per-format caps; only
+`cft_ias15_configure(..., 0)` ever did, so every caller that set
+`state->format` directly — `check_dropin`, `gate_real`,
+`examples/dropin.c` and the README's own snippet — got 12.
+`state->max_iter = 0` now means the default for the format, resolved on
+the first step and written back so an archive carries the number
+actually used.
+
+The audit's note said the binary256 run "reaches the cap on every step
+and the iteration is truncated". **Measured, that is not what happens
+on this problem.** Asking the engine directly, 180 steps of the
+four-body problem in `examples/dropin.c`:
+
+| cap | step attempts that hit it | library calls | p1.x |
+|---|---|---|---|
+| 60 (the new default) | 0 | 1,284,801 | `-0x1.d0e9da952b141p-3` |
+| 12 (the old one) | 2 | 1,282,743 | `-0x1.d0e9da952b141p-3` |
+
+Two attempts out of 180, and the binary64 output is bit-identical. The
+fix is still right — an intent stated in ROADMAP and not implemented is
+a defect — but nothing recorded in entry 26 is invalidated, and the
+claim of a truncated iteration would have been wrong to publish.
+
+**2. `cft_archive_state_blob()` hardcoded its last two indices** as 48
+and 49 rather than deriving them from `CFT_N_BLOBS`. They derive now,
+and `cft_archive_selftest()` walks every index requiring each to yield
+a distinct non-NULL member and index `CFT_N_BLOBS` to yield none. The
+guard is the part that matters: a stale copy of this walker is what
+took three gates down with an access violation earlier the same day.
+
+**3. The drop-in's refusal list is a strict subset** of the subprocess
+API's in three places: `pre_`/`post_timestep_modifications`,
+`r->gravity_custom` and `r->N_odes`. A REBOUNDx force or an attached ODE
+set reaches the drop-in unrefused. **Not fixed** — the timestep hooks
+look deliberate (`reb_integrator_cft.c` relies on them) and the other
+two need a decision rather than a patch. Recorded so it is not
+discovered by someone's wrong answer.
+
+### An open question, closed by running it
+
+The audit corrected my explanation of why `cft_rebound.configure()`
+exists. I had written that REBOUND generates a built-in integrator's
+settings from structs it knows and does not know `struct
+cft_ias15_state`. The audit said that is the 3.x/4.x story and that
+5.1.1 resolves `sim.integrator.<field>` against the **registered**
+descriptor list, custom integrators included — and honestly marked it
+unverified, having no wheel to test on.
+
+Run on the box:
+
+```
+type(sim.integrator)       : IntegratorConfiguration
+  get epsilon      -> AttributeError: Field 'epsilon' not found in BinarydataFieldDescriptor
+  get cft_epsilon  -> 1e-09
+  get cft_format   -> 1
+  get cft_max_iter -> 12
+
+attribute path vs configure(): IDENTICAL
+```
+
+Setting `sim.integrator.cft_format`, `cft_epsilon` and `cft_max_iter`
+directly produces a run identical to `cft_rebound.configure()`. So the
+audit was right and I was wrong: the fields ARE reachable from Python.
+What is not reachable is the spelling every REBOUND example uses,
+because our descriptor names carry a `cft_` prefix. `configure()`
+remains worth having for the validation and the per-format default, but
+it is a convenience, not the only way in, and the documentation now
+says so.
+
+The same probe also confirmed `cft_max_iter` reading back as 12, which
+is defect 1 seen from Python.
+
+### Still not run
+
+macOS. Windows Python (a DLL may not carry undefined symbols, so it has
+to link `rebound.__libpath__`, which ties the build to a Python minor
+version — docs/PYTHON.md has the detail). CI, which this repository does
+not have. And four documents — `docs/ENSEMBLE.md`, `docs/HORIZON.md`,
+`results/horizon/README.md` and `NOTICE` — got only a targeted grep in
+the audit and were not checked line by line; the audit says so itself
+rather than implying coverage it did not have.

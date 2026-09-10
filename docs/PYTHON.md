@@ -46,11 +46,17 @@ with a probe integrator:
 - `sim.integrator.<field>` reads and writes your state through your
   `field_descriptor_list`, by the name the descriptor gives - so for
   REBOUND's own ias15, `sim.integrator.epsilon = 0.0` is how a Python
-  user turns off adaptive stepping. **Not for this integrator:** every
-  name in `cft_ias15_field_descriptor_list` is `cft_`-prefixed, so the
-  spelling above raises rather than resolving, and
-  `cft_rebound.configure()` is the supported way in. Whether
-  `sim.integrator.cft_epsilon = 0.0` works has not been run;
+  user turns off adaptive stepping. For this integrator the same
+  mechanism works and the **name is different**: every entry in
+  `cft_ias15_field_descriptor_list` is `cft_`-prefixed, so
+  `sim.integrator.epsilon` raises `AttributeError: Field 'epsilon' not
+  found` and `sim.integrator.cft_epsilon` resolves. Measured against
+  the 5.1.1 wheel: setting `cft_format`, `cft_epsilon` and
+  `cft_max_iter` that way gives a run identical to
+  `cft_rebound.configure()`'s (docs/VALIDATION.md entry 29). Use
+  whichever you prefer; `configure()` validates the values and applies
+  the per-format `max_iter` default, and the attribute path is there
+  when you want REBOUND's own idiom;
 - `repr(sim.integrator)` prints every field, and `sim.integrator.__doc__`
   is generated from your `documentation` string and your field
   documentation;
@@ -151,11 +157,14 @@ known ratio.
    `sim.integrator`.
 
 4. **A way to configure it, which did not exist.** Selecting the
-   integrator always worked. The next line did not: `sim.integrator`
-   resolves a field by the name its descriptor gives, and ours are all
-   `cft_`-prefixed, so `sim.integrator.epsilon` - the spelling every
-   REBOUND example uses - does not resolve, and nothing in REBOUND's
-   Python layer knows to try `cft_epsilon`. Python could reach
+   integrator always worked. The next line did not, though not for the
+   reason first recorded here: `sim.integrator` resolves a field by the
+   name its descriptor gives, and ours are all `cft_`-prefixed, so
+   `sim.integrator.epsilon` - the spelling every REBOUND example uses -
+   does not resolve, and nothing in REBOUND's Python layer knows to try
+   `cft_epsilon`. A reader who knew to try it could always have
+   configured the integrator; a reader following any REBOUND example
+   could not. Python could reach
    binary64 with the default step control and nothing else - the one
    thing this repository is for was unreachable from Python.
    `cft_ias15_configure()` takes format, epsilon and max_iter by value,
