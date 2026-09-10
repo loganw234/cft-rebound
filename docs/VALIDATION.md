@@ -1079,3 +1079,46 @@ run was. The position floor at e = 0.99 peaks at 1.2e-7 at samples
 that land near pericentre and reads 7e-9 at the last, which is the
 oracle's reason for reporting the along-track phase error instead of
 `|dx|/a` (the 2026-09-10 horizon entry).
+
+
+## 2026-09-10 - the ensemble as an instrument: eight members one to sixty-four ulps apart, at binary64 and at binary256
+
+The chaotic-horizon entry above left one run unfinished: the eight-
+member Pythagorean ensemble (`--geometric m3 x 0x1p-52`: member k
+has body 3's x displaced by 2^(k-1) binary64 ulps, member 0 is
+untouched) on the replayed 6,000-step sequence at binary256. It took
+2 h 25 min on the software backend - 72 lanes at binary256 are
+element-bound there, 5.22 system-steps a second, 16.93 corrector
+passes a step, none rejected, inexact the only flag - and it is the
+measurement the ensemble mode was built for. tools/divergence.py,
+each member against member 0, `|dx|/L`, and the ratio of each
+member's divergence to member 1's:
+
+    binary256                                                    binary64
+    t       d(m1)      d(m2)/d(m1) d(m3) d(m4) d(m5)  d(m6)  d(m7)   d(m1)      ratios
+    0.0     7.40e-17   2.00  4.00  8.00  16.00  32.00  64.00      7.40e-17   2.00 4.00 8.00 16.00 32.00 64.00
+    9.8     1.89e-16   2.00  4.00  8.00  16.00  32.00  64.00      5.76e-13   0.90 1.97 1.51 0.71 2.91 1.30
+    19.8    4.05e-16   2.00  4.00  8.00  16.00  32.00  64.00      4.91e-10   1.34 1.90 1.66 1.46 0.63 2.38
+    29.8    1.88e-15   2.00  4.00  8.00  16.00  32.00  64.00      2.11e-8    1.34 1.90 1.65 1.46 0.62 2.39
+    41.9    2.19e-13   2.00  4.00  8.00  16.00  32.00  64.00      1.22e-7    1.34 1.90 1.65 1.46 0.63 2.38
+    52.1    4.22e-11   2.00  4.00  8.00  16.00  32.00  64.00      2.24e-5    1.33 1.90 1.65 1.46 0.63 2.38
+    59.8    3.90e-9    2.00  4.00  8.00  16.00  32.00  64.00      2.20e-3    1.32 1.85 1.62 1.44 0.63 2.27
+    63.2    1.03e-8    2.00  4.00  8.00  16.00  31.99  63.97      7.80e-4    1.33 1.88 1.64 1.45 0.63 2.34
+    73.4    1.13e-9    2.00  4.00  8.00  16.00  32.00  64.00      (replay lost)
+
+At binary256 every member is its seed times one common factor, to
+three digits, at every one of 301 samples through the whole chaotic
+evolution, every close encounter included - the linear-response
+regime of the dynamics, which is what a Lyapunov measurement assumes
+and here is seen directly; the common factor climbs from 1 to 2e8
+(1.49e-8 / 7.4e-17 at t = 71) along the same staircase as the format
+differences of the entry above. At binary64 the same eight members
+are within a factor of four of each other in no order from t = 10 on,
+member 6 (32 ulps) below member 1 (1 ulp) throughout, because a
+perturbation of one to sixty-four ulps is the size of the round-off
+noise and the ensemble is measuring the noise. **At binary64 an
+ulp-scale ensemble measures the arithmetic; at binary256 it measures
+the dynamics.** That is the scientific case for a wide format in a
+chaotic system in one table, and it is the ensemble mode's case for
+existing: 72 lanes in one run, every member bit for bit its solo run
+(the gate), a perturbation 2^184 above the floor instead of at it.

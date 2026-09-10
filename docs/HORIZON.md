@@ -176,11 +176,23 @@ format's cost, and the tighter step control that the regular orbit
 needs is only for the science that wants the trajectory further
 still.
 
+And the ensemble says the same thing from the other side. Eight
+copies of the problem with one coordinate displaced by 1, 2, 4, ...
+64 binary64 ulps, integrated together on the same steps: at
+binary256 their divergences from the unperturbed member stay in the
+ratios 2.00, 4.00, 8.00, 16.00, 32.00, 64.00 at every sample through
+the whole evolution while the common amplification climbs to 2e8 -
+the linear-response regime a Lyapunov measurement assumes, seen
+directly; at binary64 the same eight are within a factor of four of
+each other in no order from t = 10 on, the seeds drowned in the
+arithmetic's noise. At binary64 an ulp-scale ensemble measures the
+arithmetic; at binary256 it measures the dynamics.
+
 **Close encounters** are where the amplifying is done, in bursts, and
 they are what a wide format is *for* in a chaotic system: not a longer
 Lyapunov horizon in itself, but the encounter passed with the energy
-still the method's. **Long secular runs** are where the t^1.5 law gets
-its time.
+still the method's and the ensemble still a measurement. **Long
+secular runs** are where the t^1.5 law gets its time.
 
 ## Where binary64 is entirely sufficient
 

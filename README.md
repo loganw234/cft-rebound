@@ -168,4 +168,51 @@ See docs/VALIDATION.md for every number. In brief:
   100-250x, that at binary64 the tile is three times slower than one
   CPU core running REBOUND itself, and that the scratch block - where
   the state lives - is staged every run under today's contract, which
-  is the first thing to change. None of that was run on a card.
+  is the first thing to change. The first run on a tile then gave
+  identical records to the software backend and was 4.5x slower on
+  the two-body problem; the crossover, measured by the integrator, is
+  width - the card wins at 496 pairs a call and loses at 28 - and
+  difficulty alone does not move the ratio.
+- **Ensembles.** E systems integrate in one run with their
+  coordinates side by side in every vector, each with its own
+  adaptive step, corrector exit and accept/reject decision, masked by
+  snapshot where they part; the one-pair problem becomes E pairs.
+  The gate: an ensemble reproduces, bit for bit, the records of its
+  members run alone - 27 cases at three formats, fixed and adaptive,
+  both engines, including an attempt in which four members reject a
+  step while the fifth accepts it (tools/check_ensemble.py,
+  docs/ENSEMBLE.md). The cost is idle lanes when members disagree
+  about their corrector pass count: 1 to 31 percent, measured.
+- **The horizon** (docs/HORIZON.md). Binary64's error is a random walk
+  and a single run is one draw of it; a 64-member binary64 ensemble
+  through REBOUND itself gives Brouwer's law to 0.02 dex, the
+  90th-percentile phase error 2.1e-16 orbits^1.5, which reaches 1e-6
+  of an orbit near 2e6 orbits at any setting (a billion-step single
+  run landed at 8e-7 after 1e7 orbits). The wide formats' error is
+  the method's, a t^2 ruler to 0.00 dex, 1.7e-21 orbits^2 at REBOUND's
+  default tolerance and 3.9e-28 at 1e-12: binary128 reaches 1e-6 at
+  2.4e7 orbits at the default and 5e10 at 1e-12, for 2.5 to 12 times
+  the force evaluations. On Burrau's chaotic Pythagorean problem the
+  binary64 solution is lost by t = 66 and the binary128 solution runs
+  eighteen decades under it on the same steps, the two divergence
+  curves being one curve 2^60 apart; the method's own error, measured
+  separately, is nine decades under binary64's round-off at t = 60.
+  An eight-member ensemble one to sixty-four ulps apart keeps its
+  members in the ratios 2, 4, ... 64 through the whole evolution at
+  binary256 and in no order at binary64: at binary64 an ulp-scale
+  ensemble measures the arithmetic, at binary256 the dynamics.
+  Eccentricity multiplies every floor by about fifty at e = 0.99.
+  Binary64 is entirely sufficient for regular systems under a million
+  orbits at 1e-6 of an orbit, for chaotic systems past their horizon
+  where the science is statistical, and for anything limited by its
+  physics; the niche is phases of a regular system past a few million
+  orbits, close encounters passed with the energy still the method's,
+  and results demanded exact rather than close.
+- **What exactness permits.** Two formats differenced on identical
+  steps measure a round-off floor rather than estimate it; an
+  ensemble is gated bit for bit against its members; a recorded step
+  sequence replayed reproduces its run to the bit. What it does not
+  give IAS15 is an exact return: forward N steps and back N, no
+  format comes home bit for bit (the Radau nodes are asymmetric), but
+  binary128 and binary256 return to the same 7.8e-19, the method's
+  own reversal error, where binary64 returns to 1.2e-13.
