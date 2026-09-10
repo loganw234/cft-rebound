@@ -40,6 +40,8 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "rebound.h"       /* and binarydata.h below needs its REB_API
+                            * macro, so the order here is not cosmetic */
 #include "binarydata.h"    /* struct reb_binarydata_field_descriptor, which
                             * the field list below is an array of - so this
                             * header compiles on its own rather than only
