@@ -60,7 +60,9 @@ def run(integrator, G, bodies, dt, steps, lib=None, format="fp64"):
         cft_rebound.configure(lib, sim, format=format, epsilon=0.0)
         print("  configured through the library: %s, fixed step" % format)
     else:
-        sim.ri_ias15.epsilon = 0.0   # REBOUND's convention for a fixed step
+        # REBOUND's own: sim.integrator returns the settings object for the
+        # selected built-in. 0.0 is its convention for a fixed step.
+        sim.integrator.epsilon = 0.0
     for m, x, y, z, vx, vy, vz in bodies:
         sim.add(m=m, x=x, y=y, z=z, vx=vx, vy=vy, vz=vz)
     sim.steps(steps)
