@@ -123,11 +123,12 @@ const struct reb_binarydata_field_descriptor *cft_archive_descriptor_list(int fo
 }
 
 /* A list that has drifted writes the wrong bytes silently, so check its
- * shape rather than trusting it: CFT_N_BLOBS blobs then 11 scalars, every name
- * cft_-prefixed and unique, every blob's element_size the format's
- * width and its offset_N the one member the read path is allowed to
- * scribble on, and cft_n_elem last (NOTE 3). Returns 0 if all three
- * lists are sound, otherwise the number of complaints, each printed. */
+ * shape rather than trusting it: CFT_N_BLOBS blobs then 11 scalars,
+ * every name cft_-prefixed and unique, every blob's element_size the
+ * format's width and its offset_N the one member the read path is
+ * allowed to scribble on, and cft_n_elem last (NOTE 3). Returns 0 if
+ * all three lists are sound, otherwise the number of complaints, each
+ * printed. */
 int cft_archive_selftest(void){
     int bad = 0;
     const int fmts[3] = { CFT_FP64, CFT_FP128, CFT_FP256 };

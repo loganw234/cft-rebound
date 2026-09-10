@@ -88,6 +88,15 @@ format-width values, 1,504 bytes at binary256; plus the working
 `x, at` and the pair intermediates. For E = 1,000 six-body systems
 that is 18,000 coordinates and 27 MB, a fraction of the U50's 8 GB.
 
+*Do not read 47 as the archive's blob count, which is 50
+(`CFT_N_BLOBS`). They count different things and neither is the other
+plus a constant: the archive carries `csa0` and the live `x` and `v`,
+which this list either omits or counts as working state, and the
+sizing above has not been re-derived since `x` and `v` were added on
+2026-09-10. Whether a resident design needs 47, 48 or 50 slots a lane
+is a question for whoever builds it, and no card has run the resident
+path.*
+
 **Per substep-pass:**
 
 1. `predict` - one program run over all coordinates. Streams `a, b, c`
