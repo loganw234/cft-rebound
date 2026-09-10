@@ -2296,3 +2296,21 @@ docs/PYTHON.md rather than described: two of the three unknowns are
 answered there, and the third is that neither host has the `rebound`
 wheel installed, so the gate that would prove it cannot run as things
 stand.
+
+**A long checkpoint, measured.** The gate uses 60 steps and 120 because
+it has to be affordable on a card. The question a long run actually
+asks is whether the state still restores exactly after thousands of
+steps, where the compensated sums and the seven polynomial arrays have
+had time to accumulate. With `--steps-a 2000 --steps-b 4000` at
+binary256, three separate processes:
+
+```
+2000 steps, checkpoint, 4000 more, against 6000 straight, binary256
+  differing lines: 0 of 14
+  t = 0x1.ep+5   (exactly 60.0)
+  elapsed: 1747 s for all three runs
+```
+
+Bit for bit, so nothing about the restore degrades with run length -
+which is the property that makes the archive useful for the workloads
+this card exists for, and it had not been measured.
