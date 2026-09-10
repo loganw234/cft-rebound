@@ -105,10 +105,28 @@ static void note(cft_status st, uint32_t fl, const char *what){
 typedef unsigned char *V;
 #define E(v, i) ((v) + (size_t)(i) * ESZ)
 
+/* A capacity floor for every allocation, used only by the REBOUND shim
+ * (IAS15_CFT_LIBRARY, src/reb_integrator_cft.c). REBOUND lets a user add
+ * particles between steps, and several of the step's scratch vectors are
+ * allocated lazily at their first call and never resized; sizing every
+ * allocation for the largest body count the run may reach is what makes
+ * a later resize safe without touching one line of the arithmetic. It is
+ * 0 in the standalone program, where N is fixed by the problem file, so
+ * there every allocation is exactly the size it always was. */
+static size_t cap_elems;
+
 static V valloc(size_t n){
+    if (n < cap_elems) n = cap_elems;
     V v = calloc(n ? n : 1, ESZ);
     if (!v) die("out of memory");
     return v;
+}
+/* the same capacity floor for the one-byte class arrays */
+static void *cbytes(size_t n){
+    if (n < cap_elems) n = cap_elems;
+    void *p = malloc(n ? n : 1);
+    if (!p) die("out of memory");
+    return p;
 }
 
 /* ------------------------------------------------------------------ */
@@ -198,10 +216,12 @@ static V from_text(const char *s, int hex){
     if (st != CFT_OK) die("cannot parse '%s': %s", s, cft_strerror(st));
     return v;
 }
+#ifndef IAS15_CFT_LIBRARY
 static int is_hex_text(const char *s){
     if (s && (*s == '-' || *s == '+')) s++;
     return s && s[0] == '0' && (s[1] == 'x' || s[1] == 'X');
 }
+#endif
 static V kdec(const char *dec){  /* a broadcast constant from its decimal text */
     V s = from_text(dec, 0);
     V v = valloc(NMAX); vbcast(v, s, NMAX); free(s);
@@ -237,7 +257,9 @@ static V KPOSR[8], KVELR[8];    /* 1/((m+2)(m+3)), 1/(m+2); [7] is a0's 1/2 and 
 static V KHALF;
 static int arith_fma = 0;       /* 0: REBOUND's divisions; 1: the FMA form */
 static int engine_program = 0;  /* 1: predictor and corrector as sequencer programs */
+#ifndef IAS15_CFT_LIBRARY
 static const char *programs_dir = "programs/out";
+#endif
 
 static long binom(long n, long k){ long r = 1; for (long i = 1; i <= k; i++) r = r * (n - k + i) / i; return r; }
 
@@ -304,14 +326,17 @@ static size_t E = 1;       /* systems in this run */
 static size_t N, NB, N3;   /* bodies per system, bodies in all, coordinates in all */
 static size_t L;           /* lanes per system, 3N */
 static size_t PS, P;       /* pairs per system, pairs in all */
-static int member = -1;    /* --member k: run system k of an ensemble file alone */
 static V mass;             /* NB */
 static V G;                /* broadcast */
+#ifndef IAS15_CFT_LIBRARY
+static int member = -1;    /* --member k: run system k of an ensemble file alone */
 static V X0, V0;           /* the initial condition as read (N3) */
 static char problem_name[64];
+#endif
 static char (*body_names)[32];   /* NB */
 static char (*sys_names)[32];    /* E */
 
+#ifndef IAS15_CFT_LIBRARY
 static void read_problem(const char *path){
     FILE *f = fopen(path, "r");
     if (!f){ perror(path); exit(2); }
@@ -382,6 +407,7 @@ static void read_problem(const char *path){
     if (!have_G) die("no G line in %s", path);
     if (!ns) snprintf(sys_names[0], sizeof sys_names[0], "%.31s", problem_name);
 }
+#endif /* !IAS15_CFT_LIBRARY */
 
 /* ------------------------------------------------------------------ */
 /* State                                                                */
@@ -617,7 +643,7 @@ static void correct(int n){
  * (GLOBAL/PRS23 modes), per system over its own coordinates */
 static void pc_error(const V tmp){
     static V maxak, maxb6, aabs, tabs; static uint8_t *ca, *ct;
-    if (!maxak){ maxak = valloc(E); maxb6 = valloc(E); aabs = valloc(N3); tabs = valloc(N3); ca = malloc(N3); ct = malloc(N3); }
+    if (!maxak){ maxak = valloc(E); maxb6 = valloc(E); aabs = valloc(N3); tabs = valloc(N3); ca = cbytes(N3); ct = cbytes(N3); }
     vabs(aabs, at, N3); vabs(tabs, tmp, N3);
     vclass(ca, aabs, N3); vclass(ct, tabs, N3);
     for (size_t s = 0; s < E; s++){
@@ -641,6 +667,7 @@ static cft_program *prog_predict, *prog_predict_ens, *prog_correct[8];
 static V prog_bank, prog_sin, prog_sout, prog_dep;
 static int use_ens_predict;   /* E > 1 with per-system steps: dt rides in the scratch block, not the bank */
 
+#ifndef IAS15_CFT_LIBRARY
 static void *read_file(const char *path, size_t *len){
     FILE *f = fopen(path, "rb");
     if (!f) die("cannot open program image %s", path);
@@ -666,6 +693,7 @@ static void load_programs(void){
     for (int n = 1; n < 8; n++){ char stem[16]; snprintf(stem, sizeof stem, "correct%d", n); prog_correct[n] = load_one(stem); }
     prog_bank = valloc(16); prog_sin = valloc(N3 * 22); prog_sout = valloc(N3 * 22); prog_dep = valloc(N3);
 }
+#endif /* !IAS15_CFT_LIBRARY */
 
 static void run_program(cft_program *prog, const V a_, const V bb, const V c, size_t nbank,
                         size_t nsin, size_t nsout, const char *what){
@@ -775,6 +803,13 @@ static void sqrt7(V out, const V ain){
 }
 
 static V EPS, EPS5040;
+/* sqrt7(epsilon 5040), broadcast. It depends only on epsilon, which is
+ * fixed for a run of the standalone program - so it is computed once and
+ * is the same bits at every step. The library shim (IAS15_CFT_LIBRARY)
+ * may bind a second simulation with a different epsilon to the same
+ * process-wide engine, and that, and only that, makes it stale. */
+static V S7B;
+static int s7_stale = 1;
 
 /* For every active system: accepted[s] and SDTNEW[s], from SDTDONE[s].
  * The per-particle timescale is REBOUND's; every particle's is computed
@@ -786,17 +821,21 @@ static V EPS, EPS5040;
  * branches computed and each system keeping its own. The step
  * control's call count is therefore independent of E. */
 static void choose_timestep(void){
-    static V sq, tmp, y[6], a0i, ts2, mints2, num, den, s7, S7B, INVB;
+    static V sq, tmp, y[6], a0i, ts2, mints2, num, den, INVB;
     static V y1m, y2m, y3m, mim, r, dtnA, dtnB, ad, rr, ar, P0, PR, PL, PI; static uint8_t *cls, *cls2, *clsm;
     if (!sq){
         sq = valloc(N3); tmp = valloc(N3); for (int i = 0; i < 6; i++) y[i] = valloc(NB); a0i = valloc(NB); ts2 = valloc(NB);
-        mints2 = valloc(E); num = valloc(NB); den = valloc(NB); cls = malloc(NB); cls2 = malloc(NB); clsm = malloc(E);
+        mints2 = valloc(E); num = valloc(NB); den = valloc(NB); cls = cbytes(NB); cls2 = cbytes(NB); clsm = cbytes(E);
         y1m = valloc(NB); y2m = valloc(NB); y3m = valloc(NB); mim = valloc(E); r = valloc(E); dtnA = valloc(E); dtnB = valloc(E);
         ad = valloc(E); rr = valloc(E); ar = valloc(E); P0 = valloc(E); PR = valloc(E); PL = valloc(E); PI = valloc(E);
         if (!cls || !cls2 || !clsm) die("out of memory");
-        /* sqrt7(epsilon*5040) and 1/safety_factor depend on nothing that changes: once, the same bits every step */
-        s7 = valloc(1); sqrt7(s7, EPS5040); S7B = valloc(NMAX); vbcast(S7B, s7, NMAX);
+        /* 1/safety_factor depends on nothing at all: once, the same bits every step */
         { V inv = valloc(1); vdiv(inv, K1, K0_25, 1); INVB = valloc(NMAX); vbcast(INVB, inv, NMAX); free(inv); }
+    }
+    if (s7_stale){
+        if (!S7B) S7B = valloc(NMAX);
+        V s7 = valloc(1); sqrt7(s7, EPS5040); vbcast(S7B, s7, NMAX); free(s7);
+        s7_stale = 0;
     }
     /* per component: a0^2; (a0+b0+...+b6)^2; (sum (m+1) b_m)^2; (sum m(m+1) b_m)^2; (sum (m-1)m(m+1) b_m)^2 */
     V sums[5];
@@ -1046,6 +1085,7 @@ static void step_attempt(void){
 /* ------------------------------------------------------------------ */
 /* Energy, as REBOUND's reb_simulation_energy, every system at once     */
 /* ------------------------------------------------------------------ */
+#ifndef IAS15_CFT_LIBRARY
 static void energy_all(V out){
     static V bvx, bvy, bvz, bt, bu, ekin, epot, half, halfb, tt, uu;
     if (!bvx){ bvx = valloc(NB); bvy = valloc(NB); bvz = valloc(NB); bt = valloc(NB); bu = valloc(NB);
@@ -1086,10 +1126,12 @@ static void energy_all(V out){
     vadd(out, ekin, epot, E);
     vadd(out, out, K0, E);   /* + energy_offset, which is 0 */
 }
+#endif /* !IAS15_CFT_LIBRARY */
 
 /* ------------------------------------------------------------------ */
 /* Records                                                              */
 /* ------------------------------------------------------------------ */
+#ifndef IAS15_CFT_LIBRARY
 static void puthex(const V a_){
     char buf[160]; size_t len = 0;
     cft_status st = cft_to_hex_char(dev, F, a_, buf, sizeof buf, &len);
@@ -1271,3 +1313,195 @@ int main(int argc, char **argv){
     cft_close(dev);
     return 0;
 }
+#endif /* !IAS15_CFT_LIBRARY */
+
+#ifdef IAS15_CFT_LIBRARY
+/* ==================================================================== */
+/* The engine, as a library: everything above, driven by a caller that   */
+/* holds the particles rather than by a problem file.                    */
+/*                                                                       */
+/* src/reb_integrator_cft.c is that caller. Nothing below issues a       */
+/* floating-point operation of its own: promotion and rounding are       */
+/* cft_convert (5.4.2), and one step is exactly the step_attempt() above */
+/* repeated until the step is accepted, which is what REBOUND's          */
+/* reb_integrator_ias15_step does with reb_integrator_ias15_step_try.    */
+/*                                                                       */
+/* ONE ENGINE PER PROCESS. Every buffer above is a file-scope static, so */
+/* two simulations cannot use this integrator at the same time; the shim */
+/* detects that and refuses.                                             */
+/* ==================================================================== */
+#include "ias15_engine.h"
+
+static int   eng_open;
+static size_t eng_cap;          /* bodies the allocation can reach */
+static int   eng_have_eps;
+static uint64_t eng_digest;
+
+static void eng_promote(V d, const double *s, size_t n){
+    if (!n) return;
+    if (F == CFT_FP64){ memcpy(d, s, n * ESZ); return; }   /* the same bits, no operation */
+    uint32_t fl = 0;
+    cft_status st = cft_convert(dev, CFT_FP64, F, CFT_RNE, s, d, n, &fl);
+    if (st != CFT_OK) die("convert to %s: %s", cft_format_name(F), cft_strerror(st));
+    /* widening is exact and silent (754-2019 5.4.2); nothing to record */
+}
+static void eng_round(double *d, const V s, size_t n){
+    if (!n) return;
+    if (F == CFT_FP64){ memcpy(d, s, n * ESZ); return; }
+    uint32_t fl = 0;
+    cft_status st = cft_convert(dev, F, CFT_FP64, CFT_RNE, s, d, n, &fl);
+    if (st != CFT_OK) die("convert from %s: %s", cft_format_name(F), cft_strerror(st));
+    /* narrowing to the binary64 VIEW rounds and may be inexact by
+     * construction; that is the point of the view and is not a
+     * certificate failure, so its flags are deliberately not ORed into
+     * flags_union. */
+}
+
+int ias15_engine_open(int fmt, const char *artifact){
+    if (eng_open) return -1;
+    switch (fmt){
+        case CFT_FP64:  F = CFT_FP64;  FI = 0; break;
+        case CFT_FP128: F = CFT_FP128; FI = 1; break;
+        case CFT_FP256: F = CFT_FP256; FI = 2; break;
+        default: return -2;
+    }
+    ESZ = cft_format_size(F);
+    if (cft_open(artifact, 0, &dev) != CFT_OK) return -3;
+    /* A REBOUND user's process must not be killed by an underflow that
+     * REBOUND's own IAS15 would have taken silently. The flags are still
+     * accumulated and readable through ias15_engine_flags(). */
+    flag_abort = 0;
+    eng_open = 1;
+    return 0;
+}
+
+int ias15_engine_is_open(void){ return eng_open; }
+int ias15_engine_format(void){ return (int)F; }
+size_t ias15_engine_capacity(void){ return eng_cap; }
+uint32_t ias15_engine_flags(void){ return flags_union; }
+unsigned long long ias15_engine_calls(void){ return ncalls; }
+uint64_t ias15_engine_constants_digest(void){ return eng_digest; }
+unsigned long long ias15_engine_max_exceeded(void){ return eng_open && max_exceeded ? (unsigned long long)max_exceeded[0] : 0; }
+
+/* FNV-1a over the exact bytes of the derived Gauss-Radau arrays at this
+ * format: what the run actually used, not what a table says it used. */
+static uint64_t digest_constants(void){
+    uint64_t h = 1469598103934665603ULL;
+    V sets[4 + 8 + 28 + 21 + 21];
+    size_t n = 0;
+    for (int i = 0; i < 8;  i++) sets[n++] = KH[i];
+    for (int i = 0; i < 28; i++) sets[n++] = KRR[i];
+    for (int i = 0; i < 21; i++) sets[n++] = KC[i];
+    for (int i = 0; i < 21; i++) sets[n++] = KD[i];
+    for (size_t k = 0; k < n; k++)
+        for (size_t j = 0; j < ESZ; j++){ h ^= sets[k][j]; h *= 1099511628211ULL; }
+    return h;
+}
+
+int ias15_engine_alloc(size_t n_cap, int max_iter_, int arith_fma_, int cs_aug, int tol_shift, int quiet){
+    if (!eng_open || eng_cap) return -1;
+    if (n_cap < 1) return -2;
+    max_iter = max_iter_; arith_fma = arith_fma_; cs_augmented = cs_aug; engine_program = 0;
+    /* size everything for n_cap bodies, one system */
+    E = 1; N = n_cap; NB = n_cap; N3 = 3 * NB; L = 3 * N;
+    PS = N * (N - 1) / 2; P = E * PS;
+    NMAX = N3 > P ? N3 : P; if (NMAX < 8) NMAX = 8;
+    mass = valloc(NB);
+    G = valloc(NMAX);
+    body_names = calloc(NB, sizeof *body_names);
+    sys_names = calloc(E, sizeof *sys_names);
+    if (!body_names || !sys_names) die("out of memory");
+    make_constants(tol_shift, quiet);       /* scalars here are still one element */
+    eng_digest = digest_constants();
+    cap_elems = NMAX;                       /* from here on nothing is smaller */
+    alloc_state();
+    vzero(csx, N3); vzero(csv, N3); vzero(gcs, N3);
+    vzero(SDT, E); vzero(SDTLAST, E); vzero(STPLAIN, E); vzero(STHI, E); vzero(STLO, E);
+    for (int m = 0; m < 7; m++){ vzero(g[m], N3); vzero(b[m], N3); vzero(e[m], N3); vzero(csb[m], N3); vzero(er[m], N3); vzero(br[m], N3); }
+    vzero(x, N3); vzero(v, N3); vzero(a, N3);
+    eng_cap = n_cap;
+    return 0;
+}
+
+/* The IAS15 state proper, zeroed. Called when the body count changes:
+ * b, e and the compensations describe a particle set that no longer
+ * exists, and REBOUND's own integrators discard them for the same
+ * reason. */
+void ias15_engine_reset_state(void){
+    vzero(csx, N3); vzero(csv, N3); vzero(csa0, N3); vzero(gcs, N3); vzero(at, N3);
+    for (int m = 0; m < 7; m++){ vzero(g[m], N3); vzero(b[m], N3); vzero(e[m], N3); vzero(csb[m], N3); vzero(er[m], N3); vzero(br[m], N3); }
+    done[0] = 0; rejected[0] = 0; max_exceeded[0] = 0; pc_total[0] = 0; pc_max[0] = 0;
+}
+
+int ias15_engine_set_bodies(size_t n){
+    if (!eng_cap) return -1;
+    if (n > eng_cap) return -2;             /* the caller must reserve more and start again */
+    if (n < 1) return -3;
+    N = n; NB = n; N3 = 3 * NB; L = 3 * N;
+    PS = N * (N - 1) / 2; P = E * PS;
+    size_t l = 0;
+    for (size_t s = 0; s < E; s++)
+        for (size_t i = 1; i < N; i++) for (size_t j = 0; j < i; j++){ pair_i[l] = s * N + i; pair_j[l] = s * N + j; l++; }
+    return 0;
+}
+
+int ias15_engine_set_epsilon_f64(double eps){
+    if (!eng_cap) return -1;
+    if (!EPS){ EPS = valloc(1); EPS5040 = valloc(1); }
+    eng_promote(EPS, &eps, 1);
+    vmul(EPS5040, EPS, K5040, 1);
+    adaptive = s_lt(K0, EPS);
+    s7_stale = 1;                           /* sqrt7(epsilon 5040) must be derived again */
+    eng_have_eps = 1;
+    return 0;
+}
+void ias15_engine_set_max_iter(int n){ max_iter = n; }
+void ias15_engine_set_arith_fma(int on){ arith_fma = on; }
+int ias15_engine_adaptive(void){ return adaptive; }
+
+void ias15_engine_set_G_f64(double g_){
+    V s = valloc(1); eng_promote(s, &g_, 1); vbcast(G, s, NMAX); free(s);
+}
+
+void ias15_engine_set_masses_f64(const double *m){
+    eng_promote(mass, m, NB);
+    for (size_t l = 0; l < P; l++){ memcpy(E(pmi, l), E(mass, pair_i[l]), ESZ); memcpy(E(pmj, l), E(mass, pair_j[l]), ESZ); }
+}
+
+void ias15_engine_put_xv_f64(const double *xs, const double *vs){ eng_promote(x, xs, N3); eng_promote(v, vs, N3); }
+void ias15_engine_get_xv_f64(double *xs, double *vs){ eng_round(xs, x, N3); eng_round(vs, v, N3); }
+void ias15_engine_get_a_f64(double *as){ eng_round(as, a, N3); }
+void ias15_engine_put_dt_f64(double dt){ eng_promote(SDT, &dt, 1); bcast_sys(DTB, SDT); }
+void ias15_engine_put_dt_last_f64(double dtl){ eng_promote(SDTLAST, &dtl, 1); }
+double ias15_engine_get_dt_f64(void){ double d; eng_round(&d, SDT, 1); return d; }
+double ias15_engine_get_dt_last_f64(void){ double d; eng_round(&d, SDTLAST, 1); return d; }
+void ias15_engine_put_t_f64(double t){ eng_promote(STPLAIN, &t, 1); vcopy(STHI, STPLAIN, 1); vzero(STLO, 1); }
+double ias15_engine_get_t_f64(void){ double d; eng_round(&d, STPLAIN, 1); return d; }
+
+/* One REBOUND step: attempts until one is accepted, exactly as
+ * reb_integrator_ias15_step's `while(!step_try(...))`. Returns the
+ * number of attempts; *dt_done_out is the step that was taken. */
+long ias15_engine_step(double *dt_done_out){
+    long attempts = 0;
+    long before = done[0];
+    active[0] = 1;
+    while (done[0] == before){
+        step_attempt();
+        attempts++;
+        if (attempts > 1000000) die("no step accepted in a million attempts");
+    }
+    if (dt_done_out) eng_round(dt_done_out, SDTDONE, 1);
+    return attempts;
+}
+
+void ias15_engine_view(struct ias15_engine_view *o){
+    memset(o, 0, sizeof *o);
+    o->x = x; o->v = v; o->a = a; o->at = at;
+    o->x0 = x0; o->v0 = v0; o->a0 = a0;
+    o->csx = csx; o->csv = csv; o->csa0 = csa0;
+    for (int m = 0; m < 7; m++){ o->g[m] = g[m]; o->b[m] = b[m]; o->e[m] = e[m]; o->csb[m] = csb[m]; o->er[m] = er[m]; o->br[m] = br[m]; }
+    o->n_elem = N3;
+    o->elem_size = ESZ;
+    o->n_bodies = N;
+}
+#endif /* IAS15_CFT_LIBRARY */

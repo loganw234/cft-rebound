@@ -56,7 +56,7 @@ else
   CFT_MAKEVARS :=
 endif
 
-all: $(B)/ias15_ref$(EXE) $(B)/ias15_cft$(EXE)
+all: $(B)/ias15_ref$(EXE) $(B)/ias15_cft$(EXE) $(B)/check_dropin$(EXE)
 
 .PHONY: all third-party libcft librebound constants check clean
 
@@ -85,6 +85,36 @@ $(B)/ias15_ref$(EXE): ref/ias15_ref.c src/hexfloat.h $(B)/librebound.a
 $(B)/ias15_cft$(EXE): src/ias15_cft.c src/ias15_constants.h src/hexfloat.h $(CFTLIB)
 	$(CC) $(CSTD) $(CFLAGS) $(WARN) -I$(CFT)/include -o $@ src/ias15_cft.c $(CFTLIB) $(LIBS)
 
+# ---------------------------------------------------------------------
+# The drop-in: the same engine compiled as a library (no main) plus the
+# struct reb_integrator shim, and the gate that runs it against
+# REBOUND's own ias15 inside one program.
+#
+# src/cft_ias15_fields.c is PARCEL B's file: it defines
+# cft_ias15_field_descriptor_list and today holds only the terminator.
+DROPIN_OBJ := $(B)/ias15_cft_lib.o $(B)/reb_integrator_cft.o $(B)/cft_ias15_fields.o
+
+$(B)/ias15_cft_lib.o: src/ias15_cft.c src/ias15_constants.h src/ias15_engine.h
+	@mkdir -p $(B)
+	$(CC) -c $(CSTD) $(CFLAGS) $(WARN) -DIAS15_CFT_LIBRARY -Isrc -I$(CFT)/include -o $@ src/ias15_cft.c
+
+$(B)/reb_integrator_cft.o: src/reb_integrator_cft.c src/cft_ias15.h src/ias15_engine.h
+	@mkdir -p $(B)
+	$(CC) -c $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -Isrc -I$(CFT)/include -I$(REB) -o $@ src/reb_integrator_cft.c
+
+$(B)/cft_ias15_fields.o: src/cft_ias15_fields.c src/cft_ias15.h
+	@mkdir -p $(B)
+	$(CC) -c $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -Isrc -I$(CFT)/include -I$(REB) -o $@ src/cft_ias15_fields.c
+
+$(B)/libcftrebound.a: $(DROPIN_OBJ)
+	ar rcs $@ $^
+
+.PHONY: dropin
+dropin: $(B)/libcftrebound.a $(B)/check_dropin$(EXE)
+
+$(B)/check_dropin$(EXE): tools/check_dropin.c $(DROPIN_OBJ) $(B)/librebound.a $(CFTLIB)
+	$(CC) $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -Isrc -I$(CFT)/include -I$(REB) 	      -o $@ tools/check_dropin.c $(DROPIN_OBJ) $(B)/librebound.a $(CFTLIB) $(LIBS)
+
 constants:
 	$(PYTHON) tools/gen_constants.py
 
@@ -103,6 +133,8 @@ programs: $(ASM)
 
 check: all programs
 	$(PYTHON) tools/gen_constants.py --no-write
+	$(B)/check_dropin$(EXE)
+	$(B)/check_dropin$(EXE) --wide
 	$(PYTHON) tools/check_equivalence.py --build $(B)
 	$(PYTHON) tools/check_program_engine.py --build $(B)
 	$(PYTHON) tools/check_records.py --build $(B)
@@ -112,6 +144,8 @@ check: all programs
 .PHONY: check-quick
 check-quick: all programs
 	$(PYTHON) tools/gen_constants.py --no-write
+	$(B)/check_dropin$(EXE)
+	$(B)/check_dropin$(EXE) --wide
 	$(PYTHON) tools/check_equivalence.py --build $(B) --quick
 	$(PYTHON) tools/check_program_engine.py --build $(B) --formats fp64
 	$(PYTHON) tools/check_records.py --build $(B) --quick
