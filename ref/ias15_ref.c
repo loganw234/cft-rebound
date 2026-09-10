@@ -32,11 +32,15 @@ static double need_hex(const char *tok, const char *what){
     return v;
 }
 
-static int read_problem(const char *path, char *name, double *G, struct body *bodies, int max){
+/* The body list grows as it is read. The port's cap on N is
+ * CFT_MAX_BODIES (src/ias15_cft.c) and this program is diffed against
+ * it body for body, so it must not impose a smaller one of its own. */
+static int read_problem(const char *path, char *name, double *G, struct body **out){
     FILE *f = fopen(path, "r");
     if (!f){ perror(path); exit(2); }
-    char line[1024];
-    int n = 0, N = -1;
+    char line[2048];
+    int n = 0, N = -1, cap = 0;
+    struct body *bodies = NULL;
     *G = 1.0;
     name[0] = 0;
     while (fgets(line, sizeof line, f)){
@@ -47,7 +51,11 @@ static int read_problem(const char *path, char *name, double *G, struct body *bo
         else if (strcmp(tok, "G") == 0){ *G = need_hex(strtok(NULL, " \t\r\n"), "G"); }
         else if (strcmp(tok, "N") == 0){ N = atoi(strtok(NULL, " \t\r\n")); }
         else if (strcmp(tok, "body") == 0){
-            if (n >= max){ fprintf(stderr, "too many bodies\n"); exit(2); }
+            if (n == cap){
+                cap = cap ? 2 * cap : 64;
+                bodies = realloc(bodies, (size_t)cap * sizeof *bodies);
+                if (!bodies){ fprintf(stderr, "ias15_ref: out of memory\n"); exit(2); }
+            }
             struct body *b = &bodies[n++];
             strncpy(b->name, strtok(NULL, " \t\r\n"), 31); b->name[31] = 0;
             b->m  = need_hex(strtok(NULL, " \t\r\n"), "m");
@@ -64,6 +72,7 @@ static int read_problem(const char *path, char *name, double *G, struct body *bo
     }
     fclose(f);
     if (N != n){ fprintf(stderr, "ias15_ref: N says %d, %d bodies read\n", N, n); exit(2); }
+    *out = bodies;
     return n;
 }
 
@@ -87,8 +96,8 @@ int main(int argc, char **argv){
     }
     if (!problem){ fprintf(stderr, "usage: ias15_ref --problem FILE [--dt DT] [--epsilon EPS] [--steps N] [--sample K]\n"); return 2; }
 
-    char name[32]; double G; struct body bodies[64];
-    int N = read_problem(problem, name, &G, bodies, 64);
+    char name[32]; double G; struct body *bodies = NULL;
+    int N = read_problem(problem, name, &G, &bodies);
 
     struct reb_simulation *r = reb_simulation_create();
     r->G = G;
@@ -153,5 +162,6 @@ int main(int argc, char **argv){
     printf("# steps_done=%llu iterations_max_exceeded=%llu\n",
            (unsigned long long)r->steps_done, (unsigned long long)ias15->iterations_max_exceeded);
     reb_simulation_free(r);
+    free(bodies);
     return 0;
 }
