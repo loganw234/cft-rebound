@@ -219,7 +219,18 @@ static int adopt_loaded_state(struct reb_simulation *r, struct cft_ias15_state *
      * exact defect gate_real found - so the checker can require its own
      * comparison to FAIL and thereby prove it would notice. A gate that
      * cannot fail on demand is not evidence. */
-    if (getenv("CFT_REBOUND_NO_ADOPT")) return 1;
+    if (getenv("CFT_REBOUND_NO_ADOPT")){
+        /* Discard rather than leak: publish_state is about to overwrite
+         * these pointers either way, and nothing else frees them. */
+        free(st->x);   free(st->v);
+        free(st->x0);  free(st->v0);  free(st->a0);
+        free(st->csx); free(st->csv); free(st->csa0);
+        for (int m = 0; m < 7; m++){
+            free(st->g[m]);  free(st->b[m]);  free(st->e[m]);
+            free(st->br[m]); free(st->er[m]); free(st->csb[m]);
+        }
+        return 1;
+    }
 
     size_t width = cft_format_size((cft_format)st->format);
     if (!width) return 1;
