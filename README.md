@@ -280,7 +280,8 @@ convention for a fixed step.
 `ias15_cft` options that matter:
 
 - `--format fp64|fp128|fp256`; `--artifact PATH` opens a tile instead
-  of the software backend (untested here; the card was in use).
+  of the software backend, and `$CFT_REBOUND_ARTIFACT` is the same
+  thing for a program that takes no flag of its own.
 - `--arith rebound|fma`: REBOUND's exact sequence of roundings
   (divisions and all), or the FMA form with reciprocal constants that a
   sequencer program can run. `--engine program` runs the predictor and
@@ -377,7 +378,13 @@ See docs/VALIDATION.md for every number. In brief:
   identical records to the software backend and was 4.5x slower on
   the two-body problem; the crossover, measured by the integrator, is
   width - the card wins at 496 pairs a call and loses at 28 - and
-  difficulty alone does not move the ratio.
+  difficulty alone does not move the ratio. The whole drop-in gate
+  has since run on the quad tile at binary64: every case bit for bit
+  against REBOUND's own IAS15, and every refusal refused, in 2,030 s
+  against a few seconds in software. That ratio is the per-call cost
+  at N = 2 and is exactly what the paragraph above predicts; what it
+  establishes is that the backend does not change the answer, which
+  is the claim the card exists to keep.
 - **Ensembles.** E systems integrate in one run with their
   coordinates side by side in every vector, each with its own
   adaptive step, corrector exit and accept/reject decision, masked by
