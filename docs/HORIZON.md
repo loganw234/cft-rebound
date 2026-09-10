@@ -149,15 +149,23 @@ time units; one close passage costs binary64 three orders of
 magnitude of energy (4e-14 to 7e-11 in a step) and costs binary128 an
 energy error that is binary256's to every digit, i.e. the method's.
 
-The caveat is the method's. The truncation seed at REBOUND's default
-tolerance is common to all three and does not appear in any of those
-differences; at about 1e-19 it sits three decades under binary64's
-floor and would, at the staircase's rate, be lost some twelve time
-units after binary64 is. The eighteen decades binary128 has in hand
-are therefore for sale only against a tighter step control (epsilon
-1e-16 is ten times the steps), exactly as for the regular orbit; the
-direct measurement of the truncation-seeded error at one time is in
-docs/VALIDATION.md.
+The method's own error does not appear in any of those differences,
+so it was measured separately at one time: two step sequences, at
+epsilon 1e-9 and at 1e-11, cut to end at exactly t = 60 and both
+replayed at binary256, differ by 1.3e-13 there, while the binary64
+run of the epsilon 1e-9 steps is 3.4e-4 from the same reference.
+The truncation-seeded error is nine decades *below* the round-off-
+seeded one at the moment the binary64 solution is lost - a
+fifteenth-order method's truncation error is smooth and lies along
+the flow, a time shift the encounters do not amplify, whereas
+round-off is random and has the transverse components they do. (The
+first draft of this document inferred the opposite from the sweep's
+energy errors and was wrong; docs/VALIDATION.md keeps both.) So on
+a chaotic problem at REBOUND's default tolerance a wider format buys
+its first nine decades of trajectory accuracy for nothing but the
+format's cost, and the tighter step control that the regular orbit
+needs is only for the science that wants the trajectory further
+still.
 
 **Close encounters** are where the amplifying is done, in bursts, and
 they are what a wide format is *for* in a chaotic system: not a longer

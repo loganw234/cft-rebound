@@ -973,3 +973,62 @@ same perturbations are 2^184 times the round-off, is the measurement
 that ensemble was made for; it is recorded in the entry below when it
 completes (a 72-lane binary256 run on the software backend is
 element-bound and takes hours).
+
+
+## 2026-09-10 - the truncation-seeded error of the chaotic problem, measured at one time; a correction to the entry above
+
+The entry above inferred that the truncation seed at epsilon 1e-9,
+"about 1e-19 in energy, three decades below the binary64 round-off
+floor", would be amplified like the round-off seeds and lost about
+twelve time units after binary64 is, near t = 78. That inference was
+wrong, and the measurement that shows it is this one.
+
+**Method.** The replay mechanism compares formats at identical
+times but cannot compare step controls, whose sequences differ. Two
+sequences can, however, be made to end at the same time: an fp256
+adaptive run at epsilon 1e-11 (12,000 steps to t = 76, 14.4 corrector
+passes a step, none rejected, 41 minutes) recorded its sequence; that
+sequence and the epsilon 1e-9 one were each rounded to binary64 and
+cut at T* = 60, the final step of each computed exactly (as a
+rational) as the remainder and rounded once, so that both end at
+t = 60 to within 5e-19 (`T* - 1.7e-19` and `T* + 4.9e-19`); both were
+replayed at binary256 (3,650 and 7,049 steps), where the arithmetic's
+own contribution is 1e-70 and irrelevant, and the epsilon 1e-9
+sequence at binary64 as well. The epsilon 1e-11 run's truncation
+error is (1e-11/1e-9)^(15/7) = 1.9e4 times smaller than the epsilon
+1e-9 run's, so their difference at T* is the epsilon 1e-9 run's
+truncation-seeded error to five parts in 1e5.
+
+**Result**, the largest relative coordinate difference at t = 60.000:
+
+    epsilon 1e-9 at binary256   against epsilon 1e-11 at binary256:   1.333e-13
+    epsilon 1e-9 at binary64    against epsilon 1e-11 at binary256:   3.412e-4
+
+(the two final times differ by 6.6e-19; the binary64 number agrees
+with the staircase of the entry above, 1.27e-3 at t = 59.78 and
+4.39e-4 at t = 60.76.) The truncation-seeded error at REBOUND's
+default tolerance is nine decades *below* the binary64 round-off-
+seeded error at the same time, not three decades above it.
+
+**Why the inference was wrong.** The round-off seed is random and has
+components across the flow, which the encounters amplify; a
+fifteenth-order method's truncation error is smooth and lies mostly
+along the flow - a time shift on the trajectory, which is why the
+energy stays at 1e-19 while the round-off-seeded position error
+reaches 1e-3 - and a shift along the trajectory is a neutral
+direction that chaos does not amplify. The sweep's "four orders above
+binary64's floor" was an energy statement; the divergence is a
+transverse one. One time was measured, not a curve, so the growth
+law of the truncation-seeded error is not known from this; what is
+known is its size at the time binary64 is lost.
+
+**What it changes in the answer.** At REBOUND's default tolerance,
+on this problem, the binary128 solution is not merely "binary256's
+to 1e-21": it is nine decades closer to the true trajectory than the
+binary64 solution at the moment the binary64 solution becomes
+worthless, with no change of step control. The eighteen decades of
+arithmetic headroom are not all needed to buy that; the first nine
+come free. Tightening the step control buys the rest, if the science
+needs a trajectory past that point. docs/HORIZON.md is corrected
+accordingly, and the entry above stands as written with this entry
+beside it.
