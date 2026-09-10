@@ -8,7 +8,7 @@ measured, where the one obstacle is, and what a user installs.
     import rebound
     import cft_rebound                     # python/cft_rebound.py
 
-    cft_rebound.load("build/libias15_cft.so")
+    cft_rebound.load("build/libcft_ias15.so")
     sim = rebound.Simulation()
     sim.integrator = "ias15_cft"           # works: the name goes straight to C
 
@@ -60,8 +60,8 @@ is `RTLD_LOCAL`. Its symbols are therefore not in the global scope, and
 the obvious snippet fails:
 
     >>> import rebound, ctypes
-    >>> ctypes.CDLL("libias15_cft.so")
-    OSError: libias15_cft.so: undefined symbol: reb_integrator_register
+    >>> ctypes.CDLL("libcft_ias15.so")
+    OSError: libcft_ias15.so: undefined symbol: reb_integrator_register
 
 The fix is one line. Re-opening the same file with `RTLD_GLOBAL`
 promotes the mapping already in the process - it is not a second copy;
@@ -69,7 +69,7 @@ the address of `reb_integrator_configurations_custom` seen through both
 handles is the same - and our library then resolves against it:
 
     ctypes.CDLL(rebound.__libpath__, mode=ctypes.RTLD_GLOBAL)
-    ctypes.CDLL("libias15_cft.so")        # registers "ias15_cft"
+    ctypes.CDLL("libcft_ias15.so")        # registers "ias15_cft"
 
 That is `cft_rebound.load()`, and it is the entire Python-side cost.
 
@@ -224,18 +224,32 @@ name is the second-registration hang above.
 
 ## What has not been tested
 
-- **Parcel A's integrator.** It did not exist when this was written.
-  Everything above was measured with a probe integrator written for the
-  purpose (a drift-only step with two archivable state fields), because
-  the load-bearing question is reachability, not arithmetic. The
-  equivalence example has been exercised on its identical path
-  (`ias15` against `ias15`, 13 values, bit for bit) and on its differing
-  path (against the probe), never against `ias15_cft`.
+Two of the four entries here were closed later the same day; they are
+kept, struck through, because what a document once could not show is
+part of its record. docs/VALIDATION.md entry 28 is the measurement.
+
+- ~~**Parcel A's integrator.**~~ **Closed.** The sections above were
+  first measured with a probe integrator written for the purpose (a
+  drift-only step with two archivable state fields), because the
+  load-bearing question was reachability, not arithmetic, and
+  `ias15_cft` did not exist yet. It does: `make check-python` runs
+  `ias15_cft` against REBOUND's own `ias15` from Python on the same
+  problem and the same fixed step and gets 13 values identical bit for
+  bit, and the wide formats reach the arithmetic (the timings above).
 - **macOS.** The mechanism is the POSIX one, and the wheel sets
   `-Wl,-install_name,@rpath/librebound<suffix>`, but no run was made.
-- **The card.** Nothing here goes near XRT, an artifact or `cft://`.
-- **Simulationarchive round trips with the wide `cft_` state.** Parcel
-  B's fields did not exist either. What was shown is that a custom
-  integrator's `field_descriptor_list` survives a write and a read
-  through the Python API, including five snapshots of an archive read
-  back with `rebound.Simulationarchive`.
+- ~~**The card.**~~ **Partly closed, and not from Python.** The shared
+  library links `libcft.so`, which carries the card backend when
+  cft-fp256 is built with `XRT=1`, and the shim it contains resolves
+  `$CFT_REBOUND_ARTIFACT` like every other entry point - so a Python
+  caller *can* reach a tile. Nobody has: the hardware run of entry 27
+  was `check_dropin` and `gate_real`, both C. No Python run has opened
+  an artifact or a `cft://` server.
+- **Simulationarchive round trips with the wide `cft_` state, from
+  Python.** Parcel B's fields exist now and `tests/gate_real.c` and
+  `tools/check_checkpoint.py` gate the round trip in C, at all three
+  formats and across processes. What was shown *here* is only that a
+  custom integrator's `field_descriptor_list` survives a write and a
+  read through the Python API, including five snapshots of an archive
+  read back with `rebound.Simulationarchive` - with the probe's two
+  fields, not with the 50 wide blobs.

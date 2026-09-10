@@ -59,10 +59,17 @@ extern "C" {
  * The state, as ROADMAP.md defines it.
  *
  * This struct is the contract between the integrator (parcel A) and the
- * Simulationarchive support (parcel B): parcel B writes
- * cft_ias15_field_descriptor_list against these offsets. The fields
- * below, their names, their types and their order are ROADMAP.md's, and
- * nothing may be inserted among them.
+ * Simulationarchive support (parcel B): src/cft_ias15_fields.c writes
+ * the descriptor lists against these offsets with offsetof, so a field
+ * may be added but the meaning of an existing one may not change under
+ * an archive already written.
+ *
+ * ROADMAP.md's first version of this struct was wrong in one place and
+ * both parcels inherited it: it had no x and v, so a checkpoint carried
+ * the previous step's starting copy instead of the live coordinates and
+ * silently truncated position and velocity to binary64 above binary64.
+ * They are here now and the blob count is 50 (CFT_N_BLOBS in
+ * src/cft_ias15_fields.h). docs/VALIDATION.md entry 25.
  *
  * W is the wide element width in bytes - cft_format_size(format), 8, 16
  * or 32. The byte blobs hold n_elem elements each; the seven-fold arrays
@@ -172,7 +179,11 @@ int cft_ias15_format_code(const char *name);
 void cft_ias15_reserve(size_t n);
 
 /* The libcft artifact to open, or NULL (the default) for the software
- * backend. Not exercised in this parcel. */
+ * backend. An explicit setting here wins; otherwise $CFT_REBOUND_ARTIFACT
+ * names one, which is what lets the gate suite reach a card without a
+ * flag of its own. Empty is treated as unset. The bits are the same
+ * either way - docs/VALIDATION.md entry 27 is the whole gate suite run
+ * on a U50C quad tile, output identical to the software backend. */
 void cft_ias15_set_artifact(const char *path);
 
 /* The predictor-corrector tolerance exponent: the loop stops under
@@ -185,13 +196,19 @@ uint32_t           cft_ias15_flags_seen(void);
 unsigned long long cft_ias15_library_calls(void);
 
 /* --------------------------------------------------------------------
- * Parcel B's symbol
+ * The archive field descriptors
  *
- * The archive field descriptors. Parcel A ships a placeholder holding
- * only the terminator (src/cft_ias15_fields.c), which REBOUND reads as
- * "this integrator adds no fields"; parcel B replaces that file. The
- * names it defines are prefixed cft_ and reach the file as
- * "integrator.<name>.cft_<field>", REBOUND prefixing them itself.
+ * Defined once, in src/cft_ias15_fields.c, from the macros in
+ * src/cft_ias15_fields.h. The names are prefixed cft_ and reach the file
+ * as "integrator.<name>.cft_<field>", REBOUND prefixing them itself.
+ *
+ * This file held only a terminator until 2026-09-10 - "parcel A's
+ * placeholder, for parcel B to replace" - while parcel B kept the real
+ * lists as file-scope statics in src/cft_archive.c, which is not linked
+ * into every drop-in target. REBOUND therefore resolved no cft_ field on
+ * read and a checkpoint came back from create() defaults. See
+ * docs/VALIDATION.md entry 25 and tests/gate_real.c, the gate that
+ * caught it.
  * -------------------------------------------------------------------- */
 struct reb_binarydata_field_descriptor;
 extern const struct reb_binarydata_field_descriptor cft_ias15_field_descriptor_list[];

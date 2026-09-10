@@ -12,16 +12,19 @@
  * value, done by libcft, which is the definition of the bits in this
  * project.
  *
- * When ROADMAP parcel A lands, the middle of cft_rebound_steps() - from
- * "write the problem" to "read the record" - is replaced by
+ * IT IS STILL THE SUBPROCESS FORM, ON PURPOSE. ROADMAP parcel A landed
+ * and the registration form exists - src/reb_integrator_cft.c,
+ * src/cft_ias15.h, -lcft_ias15 - but this file was NOT rewritten as a
+ * wrapper around it. The two are different products: there the engine
+ * runs in the caller's address space and the wide state lives across
+ * steps; here the caller keeps the engine out of its process and pays
+ * one exec per call. A caller who wants the wide state to persist
+ * should use the drop-in, which is what examples/dropin.c shows and
+ * what the README's "The drop-in" section documents.
  *
- *     cft_rebound_register();
- *     reb_simulation_set_integrator(r, "ias15_cft");
- *     ... set format and epsilon on the integrator state ...
- *     reb_simulation_steps(r, nsteps);
- *
- * and the wide state stops being thrown away between calls. The two
- * ends of this file - the refusal list and the result struct - stay.
+ * What that means for a caller of THIS file is unchanged and is the
+ * warning in include/cft_rebound.h: the wide state does not survive the
+ * call, so ask for a whole run in one call.
  */
 
 #include "cft_rebound.h"

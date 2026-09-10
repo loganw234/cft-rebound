@@ -15,11 +15,16 @@
  * itself - the promotion, the step boundary, the clock, the view written
  * back - did not disturb the arithmetic.
  *
- * The last two cases are not equivalence cases and say so: one checks
- * that every unsupported feature is refused by name rather than
- * computed, and one checks that a particle added mid-run is handled.
+ * The last case is not an equivalence case and says so: it checks that
+ * every unsupported feature is refused by name rather than computed.
+ * The one before it, a particle added mid-run, IS an equivalence case -
+ * it compares against REBOUND on the grown simulation - and is listed
+ * separately only because what it exercises is the add hook.
  *
- *   build/check_dropin            all cases
+ *   build/check_dropin            all cases, at binary64
+ *   build/check_dropin --wide     the same shim at binary128, which is
+ *                                 the second half of the gate and is
+ *                                 what `make check` runs after the first
  *   build/check_dropin -v         and print the first differing value
  */
 #include <stdio.h>

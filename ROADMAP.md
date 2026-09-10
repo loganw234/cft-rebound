@@ -2,6 +2,26 @@
 
 Written 2026-09-10, after the port ran on the FP256 tile.
 
+> **STATUS: all four parcels landed the same day this was written.**
+> Read the body below as the plan and the reasoning, not as a statement
+> of what is missing - every "will", "should" and "must" in parcels A
+> through D describes work that has since been done. What is current:
+>
+> | the plan said | where it is now |
+> |---|---|
+> | A. the integrator shim | `src/reb_integrator_cft.c`, `src/cft_ias15.h`, `-lcft_ias15`; gated by `tools/check_dropin.c` |
+> | B. Simulationarchive support | `src/cft_archive.c`, `src/cft_ias15_fields.c`; gated by `tests/gate_{restart,write,stock,promote,real}.c` |
+> | C. scope, limits, packaging | the README's scope table, the 1024-body cap, `examples/roundtrip.c`, `make install` |
+> | D. Python | `make python-lib`, `make check-python`, `python/cft_rebound.py`, `cft_ias15_configure()` - closed, except Windows |
+>
+> Two things in the body are **still open** and are marked where they
+> appear: `max_iter` by format in the shim (see "A footgun found by
+> building on it"), and the `provenance` member (see "Corrections to the
+> state struct above"). The last section, "What integration found",
+> is the newest text in this file and is the one to read first if you
+> only read one. docs/VALIDATION.md entries 25 through 28 are the
+> measurements.
+
 The hard part is done and it is the part that is normally hard:
 **correctness**. At binary64 this is REBOUND's own IAS15 bit for bit;
 on the card every record is bit-identical to the software backend,
@@ -12,6 +32,11 @@ Today `ias15_cft` is a standalone program that reads a bespoke problem
 file and writes a bespoke record. A REBOUND user has a
 `struct reb_simulation` in C, or a `rebound.Simulation` in Python, and
 there is no path from one to the other. That is the gap.
+
+*(Those two paragraphs are the problem statement this document was
+written to answer. There are three paths now: the drop-in, the
+subprocess API, and Python. The README's "Using it from your own
+REBOUND program" is the current account.)*
 
 ---
 
@@ -161,7 +186,11 @@ The field names mirror REBOUND's own IAS15 descriptor list - `at`,
 
 ## The work, in four parcels
 
-Each is independently reviewable and they share only the struct above.
+**All four landed on 2026-09-10.** Kept as written, because the last
+section of this file is about what this way of splitting the work cost,
+and that argument needs the briefs it is arguing about. Each is
+independently reviewable and they share only the struct above - which
+is exactly the problem, as it turned out.
 
 ### A. The REBOUND integrator shim (the drop-in)
 
@@ -233,7 +262,7 @@ that would cost and stop.
 
 ---
 
-## Testing policy for this round
+## Testing policy for this round (as it was set)
 
 **Quick tests only.** Every parcel runs the fast gates - the binary64
 equivalence check, a short archive round trip, `make check-quick` - and
@@ -336,6 +365,16 @@ Two members are **aspirational, not ports of existing behaviour**:
 `min_dt` (no such option exists). Implement them or drop them
 deliberately; do not assume there is behaviour to wrap.
 
+**Settled:** neither was implemented, and both are refused rather than
+ignored. `src/reb_integrator_cft.c` stops the integration with a named
+REBOUND error for any `adaptive_mode` but PRS23 (2) and for a non-zero
+`min_dt`. The members stay in the struct because they are archived and
+removing them would change the on-disk field list. `provenance` was
+**not** added and is still owed: nothing in the state records that it
+was promoted from binary64 rather than restored exactly, and only the
+return value of `cft_archive_finish_load()` carries that, which a
+caller may discard.
+
 ## Two REBOUND defaults that will bite the refusal checks
 
 Parcel C's first refusal list rejected every default simulation.
@@ -354,8 +393,10 @@ coordinates**.
 That is the empirical case for everything above: a restart that does
 not carry `b` and `e` is not the same run, it is a nearby one. It is
 why the state struct lists them, why the archive has to persist them,
-and why parcel B's restart gate compares all 48 blobs rather than just
-the particles.
+and why parcel B's restart gate compares all the blobs rather than just
+the particles. (It said "all 48 blobs" when written. There are 50; the
+gate reads the count from `CFT_N_BLOBS` and no longer has a number of
+its own - see the last section of this file.)
 
 ---
 
@@ -404,9 +445,14 @@ a count or a name list can be derived from a definition, derive it: blob
 identity now comes from the descriptor list, and the count from
 `CFT_N_BLOBS` in the header that defines the macros.
 
-**The gate that would have caught all of it** is 190 lines and takes
-under a second: 30 steps straight against 20 steps, save, free, load,
-10 more, compared bit for bit. It is `tests/gate_real.c`. Neither
+**The gate that would have caught all of it** is short and takes under
+a second: N steps straight against a save and a resume that add to N,
+compared bit for bit. It is `tests/gate_real.c`. (It was 30 = 20 + 10
+when written; the defaults are 180 = 60 + 120 now, because at 20 + 10
+only 2 of the 14 dumped lines differ between binary64 and binary256 and
+a truncated restart could pass on the other 12. `--steps-a`/`--steps-b`
+set them, and `tools/check_checkpoint.py` drives the same binary in
+three separate processes.) Neither
 parcel was asked for it, because it belongs to no parcel - it tests the
 seam. A round split into parcels should name the seam tests too, and
 give them to the integrator.

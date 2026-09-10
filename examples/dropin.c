@@ -64,6 +64,17 @@ int main(void){
     s->format  = CFT_FP256;   /* CFT_FP64 reproduces REBOUND bit for bit */
     s->epsilon = 0.0;         /* REBOUND's convention: 0 is a fixed step */
 
+    /* NOTE. max_iter is left at the struct default, which is REBOUND's
+     * 12 at every format. binary256's corrector wants about 18 to 22
+     * passes, so the run below reaches the cap on every step and the
+     * iteration is truncated rather than converged - the correct answer
+     * to a truncated iteration, which is not the same thing as the
+     * answer this format can give. cft_ias15_configure(r, CFT_FP256,
+     * 0.0, 0) picks 60; setting s->max_iter yourself does the same.
+     * Left as it is here because the numbers below are recorded in
+     * docs/VALIDATION.md entry 26 and changing them is not a
+     * documentation change. */
+
     /* An artifact, if one is wanted, goes here:
      *     cft_ias15_set_artifact("/path/to/cft_hw_quad.xclbin");
      * or in $CFT_REBOUND_ARTIFACT. Unset means the software backend,

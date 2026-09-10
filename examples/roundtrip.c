@@ -8,7 +8,9 @@
  *     make -C examples PREFIX=/where/you/installed
  *     ./examples/roundtrip
  *
- * or from this repository's root, `make examples`.
+ * or from this repository's root, `make example` (singular - it
+ * stage-installs into build/stage, builds this and examples/dropin.c
+ * against that, and runs both).
  *
  *
  * WHICH FORM THIS USES, AND WHY
@@ -17,8 +19,7 @@
  * that is ONE CALL, cft_rebound_steps(), and behind it a subprocess:
  * the particles go out as an exact binary64 problem file, the
  * `ias15_cft` program integrates them at binary128, and the result is
- * correctly rounded back into r->particles. That is the only form that
- * exists as this is written.
+ * correctly rounded back into r->particles.
  *
  * Note that the run below is ONE call for all 300 steps, deliberately.
  * The wide state does not persist between calls and IAS15 starts each
@@ -26,18 +27,19 @@
  * steps do not give the same bits as one call of 300. Ask for all the
  * steps you want at once.
  *
- * ROADMAP parcel A is building the other one. REBOUND takes
- * user-provided integrators through reb_integrator_register() and
- * reb_simulation_set_integrator(), so the port becomes a registered
- * integrator, the wide state lives across steps instead of being
- * rebuilt per call, and the middle of cft_rebound_steps() is replaced
- * by three lines of REBOUND API.
+ * The other form now exists: ROADMAP parcel A landed, and REBOUND's
+ * user-provided-integrator API (reb_integrator_register() plus
+ * reb_simulation_set_integrator()) gives a registered integrator whose
+ * wide state lives across steps instead of being rebuilt per call.
+ * That is examples/dropin.c, a different header and a different
+ * library (-lcft_ias15). cft_rebound_steps() was deliberately NOT
+ * rewritten as a wrapper around it: this file goes on covering the
+ * subprocess API, for a caller who does not want the engine in their
+ * own process, and `make example` builds and runs both.
  *
- * This example is written so that swap changes nothing here. It never
- * names the program, the problem file or the record; it sets options on
- * a struct and calls one function whose signature is the analogue of
- * reb_simulation_steps(). When the registration lands, this file still
- * compiles, still runs, and still prints the same numbers.
+ * This example is written so that it never names the program, the
+ * problem file or the record; it sets options on a struct and calls one
+ * function whose signature is the analogue of reb_simulation_steps().
  *
  *
  * WHAT IT PRINTS

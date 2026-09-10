@@ -5,8 +5,12 @@
  * This is the whole public surface. A REBOUND program adds two lines to
  * its build,
  *
- *     CFLAGS  += -I$(CFT_REBOUND_PREFIX)/include
- *     LDFLAGS += -L$(CFT_REBOUND_PREFIX)/lib -lcft_rebound -lcft
+ *     CFLAGS  += -I$(PREFIX)/include
+ *     LDLIBS  += -L$(PREFIX)/lib -lcft_rebound -lcft
+ *
+ * where PREFIX is what `make install` was given (the default is
+ * /usr/local). examples/Makefile is those two lines in a working
+ * makefile.
  *
  * includes this header instead of (or as well as) rebound.h, and calls
  * cft_rebound_steps() where it would have called reb_simulation_steps().
@@ -14,10 +18,10 @@
  *
  * WHICH FORM THIS IS
  * ------------------
- * There are two ways to reach the port, and this header describes the
- * one that exists today.
+ * There are two ways to reach the port. Both exist; this header is the
+ * subprocess one.
  *
- *   The subprocess form (today). cft_rebound_steps() writes the
+ *   The subprocess form (this header). cft_rebound_steps() writes the
  *   simulation's particles out as an exact binary64 problem file, runs
  *   the `ias15_cft` program on it at the format you asked for, and
  *   rounds the wide result back into r->particles. Cost is one process
@@ -30,16 +34,27 @@
  *   bits. Measured on Kepler at binary64, twenty fixed steps: one call
  *   of twenty and two calls of ten differ by one to six ulps in the
  *   final state (docs/VALIDATION.md). **Ask for a whole run in one
- *   call.** The registration form below removes the restriction,
+ *   call.** The registration form does not have this restriction,
  *   because there the state persists.
  *
- *   The registration form (ROADMAP parcel A). REBOUND accepts
- *   user-provided integrators - reb_integrator_register() plus
- *   reb_simulation_set_integrator() - so the port becomes a struct
- *   reb_integrator whose wide state lives across steps, and
- *   cft_rebound_steps() becomes a three-line wrapper around
- *   reb_simulation_steps(). The signature below is chosen so that
- *   swapping the inside changes nothing a caller wrote.
+ *   The registration form (src/cft_ias15.h). It LANDED - ROADMAP
+ *   parcel A - and it is a different header and a different library,
+ *   not a change to this one. REBOUND accepts user-provided
+ *   integrators, so the port is a struct reb_integrator whose wide
+ *   state lives across steps:
+ *
+ *       #include "cft_ias15.h"
+ *       cft_ias15_register("ias15_cft");
+ *       struct cft_ias15_state *s =
+ *           reb_simulation_set_integrator(r, "ias15_cft");
+ *       s->format = CFT_FP256;
+ *       reb_simulation_steps(r, 1000);      // REBOUND's own call
+ *
+ *   Link -lcft_ias15 for that and -lcft_rebound for this; `make
+ *   install` ships both, and examples/dropin.c is the worked example.
+ *   cft_rebound_steps() was NOT rewritten as a wrapper around it: this
+ *   file is still a subprocess, deliberately, for a caller that does
+ *   not want the engine in its own address space.
  *
  * Either way the division is the one ROADMAP.md sets out: REBOUND's
  * struct reb_particle holds double, so r->particles is the binary64
@@ -158,14 +173,19 @@ const char *cft_rebound_format_name(enum cft_rebound_format f);
 const char *cft_rebound_program_path(const struct cft_rebound_options *opt);
 
 /* ------------------------------------------------------------------
- * Reserved for ROADMAP parcel A, the registration form:
+ * The registration form is NOT declared here.
  *
- *     extern const struct reb_integrator cft_ias15_integrator;
- *     void cft_rebound_register(void);
+ * This header once reserved the names `cft_rebound_register()` and
+ * `cft_ias15_integrator` for ROADMAP parcel A. Parcel A landed with its
+ * own header instead, because the drop-in needs rebound.h's integrator
+ * types and this header's callers may not want them:
  *
- * When those land they belong in this header, beside the calls above,
- * and cft_rebound_steps() becomes a wrapper around them. Nothing
- * declared above needs to change for that to happen.
+ *     src/cft_ias15.h    cft_ias15_register(), struct cft_ias15_state,
+ *                        cft_ias15_configure(), cft_ias15_format_code()
+ *     src/cft_archive.h  the Simulationarchive round trip
+ *     -lcft_ias15        the library, beside -lcft_rebound
+ *
+ * There is no cft_rebound_register(); do not look for one.
  * ------------------------------------------------------------------ */
 
 #ifdef __cplusplus

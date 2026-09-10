@@ -15,7 +15,7 @@
 # So this drives three separate processes per format:
 #
 #   gate_real --fpNNN --straight            -> the reference dump
-#   gate_real --fpNNN --save   ckpt.bin     -> stops half way
+#   gate_real --fpNNN --save   ckpt.bin     -> stops after --steps-a
 #   gate_real --fpNNN --resume ckpt.bin     -> the continued dump
 #
 # and requires the two dumps to be identical. The dumps are exact hex

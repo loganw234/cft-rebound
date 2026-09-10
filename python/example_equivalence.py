@@ -7,7 +7,7 @@ binary64 the two must agree to the last bit - that is the gate the C
 side runs (tools/check_equivalence.py) and this is the same claim seen
 from a ``rebound.Simulation``.
 
-    python python/example_equivalence.py --library build/libias15_cft.so
+    python python/example_equivalence.py --library build/libcft_ias15.so
 
 The initial conditions are read from data/problems/kepler.txt as exact
 hex floats, so this run and ``build/ias15_ref`` start from identical
@@ -53,15 +53,19 @@ def run(integrator, G, bodies, dt, steps, lib=None, format="fp64"):
 
     # Both runs must have the SAME step control or the comparison is
     # between two different integrations and says nothing about
-    # arithmetic. REBOUND's own integrators expose it as an attribute;
-    # this one is configured through the library, because REBOUND
-    # generates those attributes from structs it knows.
+    # arithmetic. REBOUND's own integrators expose it as an attribute
+    # under the name a user knows; this one is configured through the
+    # library, because REBOUND resolves sim.integrator.<field> against
+    # the registered field descriptor list and every name in ours is
+    # cft_-prefixed - so sim.integrator.epsilon does not resolve here.
     if lib is not None:
         cft_rebound.configure(lib, sim, format=format, epsilon=0.0)
         print("  configured through the library: %s, fixed step" % format)
     else:
-        # REBOUND's own: sim.integrator returns the settings object for the
-        # selected built-in. 0.0 is its convention for a fixed step.
+        # REBOUND's own: sim.integrator is the configuration object for
+        # whichever integrator is selected, and ias15's descriptor list
+        # spells this field "epsilon". 0.0 is REBOUND's convention for
+        # a fixed step.
         sim.integrator.epsilon = 0.0
     for m, x, y, z, vx, vy, vz in bodies:
         sim.add(m=m, x=x, y=y, z=z, vx=vx, vy=vy, vz=vz)
