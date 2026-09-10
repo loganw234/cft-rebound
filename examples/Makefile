@@ -49,6 +49,25 @@ else
   SYSLIBS := -lm
 endif
 
+# ---- a third line, if libcft was built for a card -----------------
+# An XRT build of libcft carries a C++ backend, and linking against it
+# needs the XRT runtime. Without this the link fails on undefined
+# std:: and xrt:: symbols, which names neither the cause nor the fix.
+# Sourcing XRT's own setup.sh sets XILINX_XRT and that is the signal;
+# XRT=0 turns it off for a software-only libcft in a shell that happens
+# to have XRT sourced. Copy this block too if your libcft has the card
+# backend in it.
+ifneq ($(OS),Windows_NT)
+  ifneq ($(XILINX_XRT),)
+    XRT ?= 1
+  endif
+  XRT ?= 0
+  ifeq ($(XRT),1)
+    SYSLIBS += -L$(XILINX_XRT)/lib -lxrt_coreutil -lstdc++ -lpthread -luuid
+  endif
+endif
+# -------------------------------------------------------------------
+
 INC := $(if $(REBOUND_INCLUDE),-I$(REBOUND_INCLUDE),)
 
 .PHONY: all clean

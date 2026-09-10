@@ -172,9 +172,15 @@ static int supported(struct reb_simulation *r, struct cft_ias15_state *st){
     if (st->format != CFT_FP64 && st->format != CFT_FP128 && st->format != CFT_FP256){
         refuse(r, "ias15_cft: format %d is not one of CFT_FP64 (%d), CFT_FP128 (%d) or "
                   "CFT_FP256 (%d).", st->format, CFT_FP64, CFT_FP128, CFT_FP256); return 0; }
+    /* 0 means "the default for this format", which cannot be resolved in
+     * create() because the caller chooses the format afterwards. Written
+     * back, so the state - and any archive of it - carries the number
+     * that was actually used rather than the sentinel. */
+    if (st->max_iter == 0) st->max_iter = cft_ias15_default_max_iter(st->format);
     if (st->max_iter < 1){
-        refuse(r, "ias15_cft: max_iter = %d; REBOUND uses 12 and binary256 needs about "
-                  "22.", st->max_iter); return 0; }
+        refuse(r, "ias15_cft: max_iter = %d. Use 0 for the default at this format, "
+                  "or a positive cap; REBOUND uses 12 and binary256 needs about 22.",
+               st->max_iter); return 0; }
     return 1;
 }
 
@@ -456,7 +462,9 @@ static void *cft_ias15_create(void){
     st->min_dt = 0.0;
     st->adaptive_mode = 2;           /* PRS23 */
     st->format = CFT_FP64;
-    st->max_iter = 12;               /* REBOUND's hard-coded 12 */
+    st->max_iter = 0;                /* 0 = the default for the format the
+                                      * caller is about to choose; resolved
+                                      * on the first step */
     st->arith_fma = 0;               /* REBOUND's sequence of roundings */
     st->E = 1;
     snprintf(st->cft_abi, sizeof st->cft_abi, "%u.%u",
@@ -561,6 +569,19 @@ struct cft_ias15_state *cft_ias15_get_state(struct reb_simulation *r){
     return r->integrator.state;
 }
 
+int cft_ias15_default_max_iter(int format){
+    /* REBOUND's 12 is right at binary64 and is part of what makes the
+     * binary64 run REBOUND's own, bit for bit. Above it the measured
+     * pass counts are 4-9 at binary128 and 10-20 at binary256
+     * (docs/VALIDATION.md), so these sit clear of them. A converged
+     * step exits early, so a cap costs nothing until it is reached. */
+    switch (format){
+        case CFT_FP256: return 60;
+        case CFT_FP128: return 24;
+        default:        return 12;
+    }
+}
+
 int cft_ias15_format_code(const char *name){
     if (!name) return -1;
     if (!strcmp(name, "fp64"))  return CFT_FP64;
@@ -576,15 +597,7 @@ int cft_ias15_configure(struct reb_simulation *r, int format,
     if (format != CFT_FP64 && format != CFT_FP128 && format != CFT_FP256) return 2;
     if (epsilon < 0.0) return 3;
     if (max_iter < 0) return 4;
-    if (max_iter == 0){
-        /* The same defaults src/cft_rebound_run.c picks, and for the
-         * same reason: REBOUND's 12 is right at binary64 and is reached
-         * on essentially every step above it, which truncates the
-         * corrector rather than converging it. */
-        max_iter = (format == CFT_FP256) ? 60
-                 : (format == CFT_FP128) ? 24
-                 : 12;
-    }
+    if (max_iter == 0) max_iter = cft_ias15_default_max_iter(format);
     st->format   = format;
     st->epsilon  = epsilon;
     st->max_iter = max_iter;

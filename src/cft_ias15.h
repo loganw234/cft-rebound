@@ -36,7 +36,8 @@
  * stops the integration rather than compute something wrong. So are
  * four of the state's own settings: an adaptive_mode other than PRS23
  * (2), a non-zero min_dt, a format that is not one of the three, and a
- * max_iter below 1; and an E other than 1, because an ensemble is E
+ * max_iter below 0 (0 itself means the default for the format); and an
+ * E other than 1, because an ensemble is E
  * independent systems and a reb_simulation is one (docs/ENSEMBLE.md).
  *
  * Three things the subprocess API refuses and this does NOT check:
@@ -90,7 +91,10 @@ struct cft_ias15_state {
     double   min_dt;
     int      adaptive_mode;
     int      format;           /* CFT_FP64 | CFT_FP128 | CFT_FP256 */
-    int      max_iter;         /* 12 in REBOUND; binary256 needs ~22 */
+    int      max_iter;         /* the corrector's pass cap. 0 means the
+                                * default for this format, resolved on the
+                                * first step and written back here; see
+                                * cft_ias15_default_max_iter() */
     int      arith_fma;        /* 0 = REBOUND's roundings, 1 = the FMA form */
 
     /* the wide state: byte blobs, archived as REB_POINTER with
@@ -180,6 +184,13 @@ int cft_ias15_configure(struct reb_simulation *r, int format,
  * So a ctypes caller need not hard-code an enumerator that belongs to
  * libcft and could be renumbered there. */
 int cft_ias15_format_code(const char *name);
+
+/* The corrector's pass cap for a format when the caller has not chosen
+ * one: 12 at binary64, which is REBOUND's own and part of what makes
+ * the binary64 run bit-identical to it, and more above it because the
+ * corrector needs more passes there. state->max_iter of 0 means this,
+ * resolved on the first step and written back. */
+int cft_ias15_default_max_iter(int format);
 
 /* --------------------------------------------------------------------
  * Two things the state struct cannot carry

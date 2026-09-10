@@ -168,6 +168,39 @@ int cft_archive_selftest(void){
                     n ? l[n-1].name : "(empty)"); bad++;
         }
     }
+
+    /* The walker has to reach every blob the descriptor list names, and
+     * reach a different one each time. cft_archive_state_blob() maps an
+     * index to a member by position, so a blob added to CFT_FD_BLOBS
+     * without a matching case would return NULL here - which is how a
+     * stale copy of this walker took three gates down with an access
+     * violation rather than a message. Addresses in a dummy state, so
+     * nothing is allocated and nothing is read. */
+    {
+        struct cft_ias15_state probe;
+        unsigned char **seen[CFT_N_BLOBS];
+        memset(&probe, 0, sizeof probe);
+        for (int i = 0; i < CFT_N_BLOBS; i++){
+            unsigned char **b = cft_archive_state_blob(&probe, i);
+            if (!b){
+                fprintf(stderr, "cft_archive_selftest: blob %d of %d has no member; "
+                                "CFT_FD_BLOBS and cft_archive_state_blob() disagree\n",
+                        i, CFT_N_BLOBS); bad++; seen[i] = NULL; continue;
+            }
+            for (int j = 0; j < i; j++){
+                if (seen[j] == b){
+                    fprintf(stderr, "cft_archive_selftest: blobs %d and %d are the same "
+                                    "member\n", j, i); bad++; break;
+                }
+            }
+            seen[i] = b;
+        }
+        if (cft_archive_state_blob(&probe, CFT_N_BLOBS)){
+            fprintf(stderr, "cft_archive_selftest: index %d is past the end and still "
+                            "returns a member; CFT_N_BLOBS is too small\n", CFT_N_BLOBS);
+            bad++;
+        }
+    }
     return bad;
 }
 
@@ -219,8 +252,10 @@ unsigned char **cft_archive_state_blob(struct cft_ias15_state *s, int i){
         case 5: return &s->csa0;
         default: break;
     }
-    if (i == 48) return &s->x;      /* appended: see CFT_FD_BLOBS */
-    if (i == 49) return &s->v;
+    /* The two appended at the end of CFT_FD_BLOBS. Positional, and
+     * checked by cft_archive_selftest() rather than trusted. */
+    if (i == CFT_N_BLOBS - 2) return &s->x;
+    if (i == CFT_N_BLOBS - 1) return &s->v;
     i -= 6;
     if (i < 0 || i >= 42) return NULL;
     switch (i / 7){

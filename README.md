@@ -243,7 +243,10 @@ contraction changes REBOUND's doubles.
 
     make install PREFIX=/usr/local        # DESTDIR=... also honoured
 
-installs both ways in. Add the include path, then pick a library.
+installs both ways in. Add the include path, then pick a library. If
+your libcft was built for a card, a third line is needed - see the
+block marked in `examples/Makefile`, or source XRT's `setup.sh` and let
+that Makefile derive it.
 
 ### The drop-in
 
