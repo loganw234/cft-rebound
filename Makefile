@@ -90,7 +90,8 @@ ifneq ($(OS),Windows_NT)
   endif
 endif
 
-all: $(B)/ias15_ref$(EXE) $(B)/ias15_cft$(EXE) $(B)/check_dropin$(EXE) $(B)/libcft_rebound.a
+all: $(B)/ias15_ref$(EXE) $(B)/ias15_cft$(EXE) $(B)/check_dropin$(EXE) \
+     $(B)/libcft_rebound.a $(B)/libcft_ias15.a
 
 .PHONY: all third-party libcft librebound constants check clean
 
@@ -158,11 +159,22 @@ $(B)/cft_ias15_fields.o: src/cft_ias15_fields.c src/cft_ias15.h
 	@mkdir -p $(B)
 	$(CC) -c $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -Isrc -I$(CFT)/include -I$(REB) -o $@ src/cft_ias15_fields.c
 
-$(B)/libcftrebound.a: $(DROPIN_OBJ)
+# cft_archive.c compiled for the library rather than for a gate: the
+# gates add -Itests for the stub's header and this does not need it.
+$(B)/cft_archive.o: src/cft_archive.c src/cft_archive.h src/cft_ias15_fields.h src/cft_ias15.h
+	@mkdir -p $(B)
+	$(CC) -c $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -Isrc -I$(CFT)/include -I$(REB) -o $@ src/cft_archive.c
+
+# The drop-in as a library: the registered integrator, the engine and
+# Simulationarchive support. Named for the integrator it registers,
+# because libcft_rebound.a - the subprocess API - is a different
+# library and one underscore is not enough to tell them apart in a
+# lib directory.
+$(B)/libcft_ias15.a: $(DROPIN_OBJ) $(B)/cft_archive.o
 	ar rcs $@ $^
 
 .PHONY: dropin
-dropin: $(B)/libcftrebound.a $(B)/check_dropin$(EXE)
+dropin: $(B)/libcft_ias15.a $(B)/check_dropin$(EXE)
 
 $(B)/check_dropin$(EXE): tools/check_dropin.c $(DROPIN_OBJ) $(B)/librebound.a $(CFTLIB)
 	$(CC) $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -Isrc -I$(CFT)/include -I$(REB) 	      -o $@ tools/check_dropin.c $(DROPIN_OBJ) $(B)/librebound.a $(CFTLIB) $(LIBS)
@@ -262,6 +274,7 @@ example: $(B)/librebound.a
 	$(MAKE) -C examples PREFIX=$(CURDIR)/$(B)/stage \
 	    REBOUND_INCLUDE=../$(REB) REBOUND_LIB=../$(B)/librebound.a
 	examples/roundtrip$(EXE)
+	examples/dropin$(EXE)
 
 # A header and a library where a REBOUND build can find them, plus the
 # ias15_cft program the library runs. libcft is installed too (it is
@@ -272,6 +285,9 @@ install: all $(CFTLIB)
 	$(INSTALL) -d $(DESTDIR)$(INCLUDEDIR) $(DESTDIR)$(LIBDIR) $(DESTDIR)$(BINDIR)
 	$(INSTALL) -m 644 include/cft_rebound.h $(DESTDIR)$(INCLUDEDIR)/
 	$(INSTALL) -m 644 $(B)/libcft_rebound.a $(DESTDIR)$(LIBDIR)/
+	$(INSTALL) -m 644 $(B)/libcft_ias15.a $(DESTDIR)$(LIBDIR)/
+	$(INSTALL) -m 644 src/cft_ias15.h src/cft_ias15_state.h src/cft_archive.h \
+	    $(DESTDIR)$(INCLUDEDIR)/
 	$(INSTALL) -m 755 $(B)/ias15_cft$(EXE) $(DESTDIR)$(BINDIR)/
 	$(INSTALL) -m 644 $(CFT)/include/cft.h $(CFT)/include/cft_config.h $(CFT)/include/cft.hpp $(DESTDIR)$(INCLUDEDIR)/
 	$(INSTALL) -m 644 $(CFTLIB) $(DESTDIR)$(LIBDIR)/
@@ -283,7 +299,10 @@ install: all $(CFTLIB)
 uninstall:
 	rm -f $(DESTDIR)$(INCLUDEDIR)/cft_rebound.h
 	rm -f $(DESTDIR)$(INCLUDEDIR)/cft.h $(DESTDIR)$(INCLUDEDIR)/cft_config.h $(DESTDIR)$(INCLUDEDIR)/cft.hpp
-	rm -f $(DESTDIR)$(LIBDIR)/libcft_rebound.a $(DESTDIR)$(LIBDIR)/libcft.a
+	rm -f $(DESTDIR)$(LIBDIR)/libcft_rebound.a $(DESTDIR)$(LIBDIR)/libcft_ias15.a \
+	      $(DESTDIR)$(LIBDIR)/libcft.a
+	rm -f $(DESTDIR)$(INCLUDEDIR)/cft_ias15.h $(DESTDIR)$(INCLUDEDIR)/cft_ias15_state.h \
+	      $(DESTDIR)$(INCLUDEDIR)/cft_archive.h
 	rm -f $(DESTDIR)$(BINDIR)/ias15_cft$(EXE)
 
 clean:

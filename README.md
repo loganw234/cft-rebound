@@ -104,6 +104,8 @@ Nothing is vendored by hand.
     include/cft_rebound.h    the public surface: what a REBOUND program includes
     src/cft_rebound_run.c    and what it links: the refusal list and the run call
     examples/roundtrip.c     the worked round trip, runnable (`make example`)
+    examples/dropin.c        the same from the drop-in side: register,
+                             integrate at binary256, checkpoint, reload
     examples/Makefile        a REBOUND program's makefile with the two added lines
     src/ias15_cft.c          the port: every floating-point operation is a cft.h call
     src/ias15_constants.h    GENERATED: the Gauss-Radau constants at every format
@@ -194,12 +196,22 @@ contraction changes REBOUND's doubles.
 
     make install PREFIX=/usr/local        # DESTDIR=... also honoured
 
-installs `cft_rebound.h` and `libcft_rebound.a` (plus libcft and the
-`ias15_cft` program the library runs) under that prefix. Two lines go
-into your own build:
+installs both ways in. Two lines go into your own build either way:
 
     CFLAGS  += -I/usr/local/include
-    LDLIBS  += -L/usr/local/lib -lcft_rebound -lcft
+    LDLIBS  += -L/usr/local/lib -lcft_ias15 -lcft      # the drop-in
+    LDLIBS  += -L/usr/local/lib -lcft_rebound -lcft    # the subprocess API
+
+- **`-lcft_ias15`** with `cft_ias15.h` is the drop-in: the registered
+  integrator, the engine and Simulationarchive support, all in this
+  process. `cft_ias15_register("ias15_cft")`, then
+  `reb_simulation_set_integrator(r, "ias15_cft")`, and REBOUND's own
+  driver runs the rest.
+- **`-lcft_rebound`** with `cft_rebound.h` is the subprocess API:
+  `cft_rebound_steps()` writes a problem file and runs the
+  `ias15_cft` program, which the install also puts on the system.
+  It exists for a caller that does not want the engine in its own
+  address space.
 
 Then include `cft_rebound.h` instead of `rebound.h`, build your
 simulation exactly as you do now, and call `cft_rebound_steps()` where

@@ -30,6 +30,9 @@ REBOUND_LIB     ?= -lrebound
 CFLAGS  += -I$(PREFIX)/include
 CFTLIBS += -L$(PREFIX)/lib -lcft_rebound -lcft
 # -------------------------------------------------------------------
+# The other way in: the registered integrator, in this process. Same
+# shape, a different library.
+DROPINLIBS += -L$(PREFIX)/lib -lcft_ias15 -lcft
 
 ifeq ($(OS),Windows_NT)
   EXE     := .exe
@@ -45,10 +48,13 @@ endif
 INC := $(if $(REBOUND_INCLUDE),-I$(REBOUND_INCLUDE),)
 
 .PHONY: all clean
-all: roundtrip$(EXE)
+all: roundtrip$(EXE) dropin$(EXE)
 
 roundtrip$(EXE): roundtrip.c
 	$(CC) $(CSTD) $(CFLAGS) $(INC) -o $@ $< $(CFTLIBS) $(REBOUND_LIB) $(SYSLIBS)
 
+dropin$(EXE): dropin.c
+	$(CC) $(CSTD) $(CFLAGS) $(INC) -o $@ $< $(DROPINLIBS) $(REBOUND_LIB) $(SYSLIBS)
+
 clean:
-	rm -f roundtrip roundtrip.exe
+	rm -f roundtrip roundtrip.exe dropin dropin.exe dropin_checkpoint.bin
