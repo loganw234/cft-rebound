@@ -1,0 +1,19 @@
+# Pinned upstream clones are reproduced by tools/fetch_third_party.sh
+# from third_party/MANIFEST and are never committed.
+third_party/rebound/
+third_party/cft-fp256/
+
+# Build products
+build/
+*.o
+*.obj
+*.a
+*.so
+*.dll
+*.exe
+__pycache__/
+*.pyc
+
+# Large run outputs (the summaries in results/ are committed; raw
+# per-sample dumps are not)
+results/raw/

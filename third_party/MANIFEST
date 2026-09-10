@@ -1,0 +1,7 @@
+# Pinned upstreams. Each line: <directory> <git URL> <commit>
+# tools/fetch_third_party.sh clones them here and hard-fails unless the
+# checked-out HEAD is exactly the commit named. Nothing under
+# third_party/ is committed to this repository; the clones are
+# reproduced from this file.
+rebound   https://github.com/hannorein/rebound.git  bdfda4bda4c0a4b6b0c707afae5a86d3341cbc93
+cft-fp256 https://github.com/loganw234/cft-fp256.git 40ce35e388fe70c6e4f10e2dd7fb056a1166f869

@@ -1,0 +1,42 @@
+cft-rebound
+Copyright 2026 the cft-rebound contributors.
+
+This repository is licensed under the GNU General Public License,
+version 3 or (at your option) any later version. See LICENSE.
+
+It is a combined work of two upstream projects, consumed as pinned
+clones under third_party/ (see third_party/MANIFEST), and the licence
+of the combination is decided by the combination, not by preference:
+
+  * REBOUND, by Hanno Rein and collaborators, and its IAS15 integrator
+    by Hanno Rein and David S. Spiegel (Rein & Spiegel 2015, MNRAS 446,
+    1424; Everhart 1985 for the original Gauss-Radau scheme; Pham, Rein
+    & Spiegel 2024 for the current time-step criterion). REBOUND is
+    distributed under the GNU General Public License v3.0 or later.
+    https://github.com/hannorein/rebound
+
+  * libcft, the software library of the cft-fp256 project, a
+    deterministic IEEE 754-2019 binary32/64/128/256 arithmetic library
+    and the software backend of the FP256 Coordinated Fusion Compute
+    Tile. Copyright 2026 Logan W. Distributed under the Apache License,
+    Version 2.0. https://github.com/loganw234/cft-fp256
+
+Apache-2.0 code may be combined into a GPL-3.0 work; the reverse is not
+permitted. This repository therefore carries the GPL-3.0-or-later of
+REBOUND, and no REBOUND source is ever copied into the cft-fp256
+repository, whose stated ground rule is permissive-only dependencies.
+
+The IAS15 implementation in src/ here is a re-implementation of the
+algorithm as published in REBOUND's src/integrator_ias15.c, with its
+arithmetic routed through libcft's cft.h. The Gauss-Radau spacings and
+the derived coefficient arrays were NOT copied from REBOUND: they are
+derived from their definitions by tools/gen_constants.py and checked
+against REBOUND's published binary64 literals.
+
+The Apache-2.0 NOTICE of cft-fp256 reads:
+
+    cft-fp256 - Coordinated Fusion Compute Tile
+    Copyright 2026 Logan W.
+
+    This product includes software developed as part of the cft-fp256
+    project (https://github.com/loganw234/cft-fp256).
