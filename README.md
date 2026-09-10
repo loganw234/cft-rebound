@@ -324,6 +324,13 @@ fresh `ias15_cft` per case and would pay a device open every time;
 `build/check_dropin` and `build/gate_real` open the engine once for
 the whole program and are the ones worth pointing at a card.
 
+Budget for it. On a U50C quad tile, `check_dropin` takes 2,030 s at
+binary64 and 2,195 s for its binary128 pass, against a few seconds
+each in software. That is the per-call cost at two and five bodies,
+not a surprise - docs/HARDWARE.md predicts it and the ensemble numbers
+are where the card earns its keep. What the two runs establish is that
+the answer does not depend on the backend.
+
 `make check` runs every gate at every format (about half an hour);
 
 `make check-quick` runs them at binary64 in a few minutes. Both
