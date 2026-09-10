@@ -49,6 +49,20 @@ def followup_jobs():
     return J
 
 
+def followup2_jobs():
+    """The same question with DYADIC step sizes, so that every format
+    integrates literally the same step (0.05 rounds differently at
+    each format, which pollutes a record-to-record comparison at the
+    2^-p level; 1/16, 1/64 and 1/128 do not)."""
+    J = []
+    for dt, orbits, fmts in ((1.0 / 16, 100, FORMATS), (1.0 / 64, 20, FORMATS), (1.0 / 128, 10, ("fp128", "fp256"))):
+        steps = int(round(orbits * T_KEPLER / dt))
+        for f in fmts:
+            J.append(("kepler_fixed_dt%s_%s" % (repr(dt), f), KEPLER, f,
+                      ["--dt", repr(dt), "--epsilon", "0", "--steps", str(steps), "--sample", str(steps // 20)]))
+    return J
+
+
 def jobs():
     J = []
     # Kepler, fixed step, 200 orbits at three step sizes
@@ -114,13 +128,13 @@ def main():
     ap.add_argument("--only", default=None)
     ap.add_argument("--out", default=os.path.join(root, "results"))
     ap.add_argument("--list", action="store_true")
-    ap.add_argument("--set", default="main", choices=["main", "followup"])
+    ap.add_argument("--set", default="main", choices=["main", "followup", "followup2"])
     ap.add_argument("--exe", default=None, help="binary to run (default build/ias15_cft)")
     args = ap.parse_args()
     global CFT
     if args.exe:
         CFT = args.exe
-    J = jobs() if args.set == "main" else followup_jobs()
+    J = {"main": jobs, "followup": followup_jobs, "followup2": followup2_jobs}[args.set]()
     if args.only:
         J = [j for j in J if args.only in j[0]]
     J.sort(key=cost)

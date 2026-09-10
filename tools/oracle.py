@@ -202,7 +202,7 @@ def main():
     fixed = header.get("epsilon", "") in ("0x0p+0", "0x0.0p+0", "0")
     dt0 = hex_to_fraction(header["dt0"]) if "dt0" in header else None
     rows = []
-    out = open(args.csv, "w") if args.csv else None
+    out = open(args.csv, "w", newline="\n") if args.csv else None
     if out:
         out.write("sample,step,orbits,t,rel_energy_err,rel_angmom_err,rel_pos_err,rel_vel_err\n")
     maxE = mpf(0); maxL = mpf(0); maxP = mpf(0); lastP = mpf(0); lastE = mpf(0)

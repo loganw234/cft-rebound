@@ -22,3 +22,5 @@ results/raw/
 programs/out/
 results/sweep.log
 results/sweep_followup.log
+results/sweep_fp64.log
+results/sweep_followup2.log
