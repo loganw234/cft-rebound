@@ -134,6 +134,7 @@ programs: $(ASM)
 check: all programs
 	$(PYTHON) tools/gen_constants.py --no-write
 	$(B)/check_dropin$(EXE)
+	$(B)/check_dropin$(EXE) --wide
 	$(PYTHON) tools/check_equivalence.py --build $(B)
 	$(PYTHON) tools/check_program_engine.py --build $(B)
 	$(PYTHON) tools/check_records.py --build $(B)
@@ -144,6 +145,7 @@ check: all programs
 check-quick: all programs
 	$(PYTHON) tools/gen_constants.py --no-write
 	$(B)/check_dropin$(EXE)
+	$(B)/check_dropin$(EXE) --wide
 	$(PYTHON) tools/check_equivalence.py --build $(B) --quick
 	$(PYTHON) tools/check_program_engine.py --build $(B) --formats fp64
 	$(PYTHON) tools/check_records.py --build $(B) --quick

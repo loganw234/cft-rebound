@@ -1206,3 +1206,202 @@ that is 21x, not the 100x the projection quoted against the E = 1
 software rate, because the software backend gains 3.5x from width
 too. That is the honest number to put beside the card's, when it is
 measured.
+## 2026-09-10 - Parcel A: the drop-in, and the same bits from REBOUND's side
+
+ROADMAP.md's first parcel: `struct reb_integrator` over the engine in
+src/ias15_cft.c, so that a REBOUND user changes one line and keeps
+their particles, outputs, callbacks and visualisation.
+
+    cft_ias15_register("ias15_cft");
+    struct cft_ias15_state* st = reb_simulation_set_integrator(r, "ias15_cft");
+    st->format = CFT_FP128;          // optional; the default is CFT_FP64
+
+New: src/cft_ias15.h (the public header and ROADMAP.md's state struct
+verbatim), src/reb_integrator_cft.c (the shim), src/ias15_engine.h and a
+library mode in src/ias15_cft.c, src/cft_ias15_fields.c (parcel B's
+file, today only the list terminator), tools/check_dropin.c (the gate).
+
+### The gate
+
+`build/check_dropin`: the same program twice inside one process, once
+with REBOUND's own `"ias15"` and once with the registered `"ias15_cft"`
+at binary64, comparing every particle's nine values (x, y, z, vx, vy,
+vz, ax, ay, az) and `r->t`, `r->dt`, `r->dt_last_done` as **bit
+patterns**. Thirteen cases, 54.2 s on this host:
+
+    kepler, fixed step        N = 2, dt = 0.05, epsilon = 0,      400 steps
+    kepler, adaptive          N = 2, dt = 0.05, epsilon = 1e-9,   400 steps
+    kepler, tight tolerance   N = 2, dt = 0.05, epsilon = 1e-12,  200 steps
+    pythagorean, adaptive     N = 3, dt = 0.01, epsilon = 1e-9,   400 steps
+    five bodies, adaptive     N = 5, dt = 0.5,  epsilon = 1e-9,   300 steps
+    five bodies, fixed step   N = 5, dt = 0.5,  epsilon = 0,      200 steps
+    kepler, rejected steps    N = 2, dt = 8,    epsilon = 1e-9,   200 steps
+    pythagorean, rejected     N = 3, dt = 5,    epsilon = 1e-9,   200 steps
+    kepler, integrate to tmax        reb_simulation_integrate to t = 37
+    five bodies, to tmax             reb_simulation_integrate to t = 211
+    kepler, two integrate calls      to 20, then to 53
+    kepler, a coordinate edited      200 steps, vy nudged by 1e-6, 200 more
+    kepler, a particle added         150 steps of 2 bodies, a third added, 150 more
+
+All identical, every value. `make check-quick` was run after the change
+and the four existing gates still say what they said: check_equivalence
+6 cases and 528 values, check_program_engine 3 cases and 320 values,
+check_records 4 records and 264 values, check_ensemble 9 cases and 1,728
+values, all at binary64, all PASS. The engine's arithmetic is untouched,
+which is the point: this parcel had to add a shim without moving a bit.
+
+The last four cases exist because each is a place where a shim can be
+wrong without the arithmetic being wrong.
+
+- **exact_finish_time.** ROADMAP.md asks the integrator to honour it. It
+  does not have to: `reb_check_exit` in simulation.c shrinks `r->dt`
+  itself before the last step and restores `last_full_dt` afterwards, so
+  the integrator's job is only to use `r->dt` as it finds it and to put
+  back the step it actually took. What the shim must do is notice that
+  REBOUND changed `r->dt` under it.
+- **Two `reb_simulation_integrate` calls.** `reb_simulation_integrate_raw`
+  sets `r->dt_last_done = 0` at the top of every call, and step_try reads
+  exactly that to decide whether to predict e and b after a rejected
+  first attempt. A shim that kept its own `dt_last_done` would diverge
+  at the first rejection of the second call - and only there, which is
+  why this is a case and not a comment.
+- **A coordinate edited between steps.** REBOUND has no reliable flag
+  for it: `r->did_modify_particles` is set by `reb_simulation_add` and
+  by three integrators, not by a user assigning to `particles[i].vy`.
+- **A particle added.** This is an equivalence case, which was not
+  obvious. `reb_integrator_ias15_alloc` only reallocates when the array
+  grows past its high-water mark, and `realloc_dp7` then zeroes the
+  *whole* array, so REBOUND itself discards g, e, b, csb, er, br and
+  zeroes csx, csv on a grow - which is exactly what the shim's
+  invalidate-and-reset does. **Removal is not equivalent and is not
+  claimed:** REBOUND keeps a polynomial that no longer describes the
+  particle set (the array only shrinks logically), and the shim
+  deliberately resets. Nothing here tests removal.
+
+### The refusals
+
+Thirteen more cases, each asserting that the step names the feature in a
+REBOUND error message, sets `REB_STATUS_GENERIC_ERROR` and does not move
+the clock: non-zero softening, `additional_forces`,
+`force_is_velocity_dependent`, ghost boxes, `REB_GRAVITY_COMPENSATED`,
+the tree code, collision detection, periodic boundaries, test particles
+(`N_active`), variational particles, MEGNO, `min_dt` and
+`adaptive_mode != PRS23`. `r->map` is refused too and is not in the
+gate. The assertion is the clock and the status, not the positions,
+because REBOUND's own boundary check and collision search run *after*
+the integrator callback returns and may touch particles - which is
+REBOUND's doing, not this integrator's.
+
+### The wide path, which the binary64 gate cannot reach
+
+At CFT_FP64 promotion and rounding are `memcpy`: the equivalence gate
+above exercises no conversion at all. `build/check_dropin --wide` is a
+separate run of the same program at binary128 - separate because the
+engine's format is fixed for the process once opened - on Kepler at a
+fixed dt = 0.05 for 2,000 steps, 16 orbits:
+
+    t: ias15 99.999999999996461, ias15_cft 100 (the wide clock, rounded)
+    largest relative difference in the twelve coordinates: 1.619e-13
+
+The clock is the sharpest thing in it. REBOUND adds fl(0.05) to a double
+2,000 times and lands on 99.999999999996461; the shim adds it in
+binary128, where 2,000 fl(0.05) is exact, and the rounded view is 100.
+That is the wide state surviving the step boundary, which is the whole
+claim of the division of state, in one number. The 1.6e-13 in the
+coordinates is the binary64 run's own accumulated round-off.
+
+**A failure kept beside it.** The first version of that case reported
+`0.000e+00` and "bit-identical to binary64 - the format did not take",
+and the format had taken: the fault was the gate's own initial
+condition. The Kepler pair had been given `v = 2.4506122933227936` at
+r = 0.5 against an escape velocity of 2.0009997501249219, so it was a
+hyperbolic flyby, and after 16 units of nearly free flight at x = -71
+the two runs rounded to the same double. Replaced by a barycentric,
+zero-momentum pericentre state, v_rel = 1.7329166165744962, period
+6.2800460687587085 - and the difference appeared. Every binary64 case
+had passed on the escaping problem too, which is true but was not the
+test it said it was.
+
+### What the design looked like when it met the code
+
+Five things, in the order they cost time.
+
+1. **`create()` cannot see `r`.** `void* (*create)()` takes no
+   arguments, so ROADMAP.md's "create/free: allocate and release the
+   state for `r->N` particles" is not implementable as written.
+   Everything sized by the body count is allocated at the first step
+   instead, which is the first moment `r->N` is knowable. `free()` is
+   symmetric only for the state struct; see 2.
+2. **The engine is one global instance, and the scratch is sized once.**
+   Every buffer in ias15_cft.c is a file-scope static - correct for a
+   standalone program that runs one problem - and several of the step's
+   vectors are allocated lazily at their first call and never resized
+   (`static V gk; if (!gk) gk = valloc(N3);` and several dozen more like
+   it). Rather than touch every one of those declarations in a file
+   whose arithmetic is the thing being preserved, ias15_cft.c gained one
+   capacity floor:
+   `cap_elems`, which `valloc` and the class arrays' `cbytes` apply to
+   every allocation, set once from the reserved body count. It is 0 in
+   the standalone program, where nothing resizes, so nothing there
+   changed. The consequences the user meets are honest and named:
+   `cft_ias15_reserve(N)` before the first step if the simulation will
+   grow, and one simulation at a time (a second is refused, a freed one
+   releases the engine for the next).
+3. **`min_dt` is in the state struct and the engine does not have it.**
+   The step control issues `fabs(dt_new) < 0` as a comparison against an
+   exact zero, because that is what REBOUND's default does and a real
+   floor would change the arithmetic. The field is kept, since it is
+   ROADMAP.md's struct and parcel B archives it, and a non-zero value is
+   refused.
+4. **`dt_last_done` is not missing from the state struct.** It looked
+   like a gap - the struct has nowhere to keep it and a restart needs it
+   - until REBOUND turned out not to keep it in its own IAS15 state
+   either: `struct reb_integrator_ias15_state` has no such field and
+   step_try reads `r->dt_last_done`, which is a top-level simulation
+   field and is already archived. Parcel B should not add one.
+5. **`at` is named in ROADMAP.md's prose and absent from its struct, and
+   that is right.** `at` is the acceleration at the current corrector
+   substep: written and read within one substep, never live across a
+   step boundary. REBOUND archives it because its descriptor list is
+   mechanical, not because a restart needs it. The shim exposes it
+   through `struct ias15_engine_view` for anyone who wants it and the
+   state struct does not carry it.
+
+And one thing that is upstream's, found by trying it:
+**REBOUND cannot register two custom integrators.**
+`reb_integrator_register` scans with
+`while (list[N].name){ N++; if (strcmp(list[N].name, name)==0) ... }`,
+reading `list[N].name` after the increment, so the second registration
+passes the `{0}` terminator's NULL name to `strcmp`. A two-line scratch
+program that registers two no-op integrators prints "registering a
+second..." and never returns on this host. It does not affect
+"ias15_cft" alone, and it is written down in src/cft_ias15.h because
+docs/INTEGRATORS.md ranks WHFast next and a "whfast_cft" would meet it.
+
+### What parcel B has, and what it should not do
+
+`struct cft_ias15_state` in src/cft_ias15.h is ROADMAP.md's, field for
+field and in its order; nothing has been inserted among the fields and
+nothing appended. `n_elem` (3N), `E` (1), `format`, `cft_abi` (from
+`cft_abi_version()`, "0.11") and `constants_digest` are filled in and
+the blob pointers are refreshed after every step, so an archive written
+from a heartbeat sees live pointers. `constants_digest` is FNV-1a over
+the exact bytes of the derived h, rr, c and d at the run's format - what
+the run used, not what a table says it used.
+
+`cft_ias15_field_descriptor_list` is declared in the header and defined
+in src/cft_ias15_fields.c, which is parcel B's file and today holds only
+the terminator - which REBOUND reads as "this integrator adds no
+fields", so a cft archive written today is a plain, complete binary64
+REBOUND archive. REBOUND prefixes the names itself
+(`output_fields_from_list`, binarydata.c:646), so a descriptor named
+`cft_x0` reaches the file as `integrator.ias15_cft.cft_x0`.
+
+The one thing that needs a decision and cannot be taken here:
+`element_size` is a plain field of every REBOUND descriptor and every
+built-in list fills it with a compile-time `sizeof`. W is 8, 16 or 32
+according to `state->format`, so either the list is built at run time
+(REBOUND stores the pointer, so a per-state list is possible) or the
+blob is declared as bytes with `element_size = 1` and `n_elem` scaled.
+Both work; neither is obviously right; it is written down rather than
+guessed at.

@@ -40,10 +40,14 @@ static int failures;
 /* ------------------------------------------------------------------ */
 struct body { double m, x, y, z, vx, vy, vz; };
 
-/* a Kepler pair, a = 1, e = 1/2, the planet at pericentre */
+/* A Kepler pair at pericentre, a = 1, e = 1/2, barycentric and with
+ * zero total momentum, so the pair stays where it is put and a round-off
+ * difference is not buried under a linear drift. v_rel is
+ * sqrt(G(M+m)(1+e)/(a(1-e))) = 1.7329166165744962, against an escape
+ * velocity of 2.0009997501249219; the period is 6.2800460687587085. */
 static const struct body kepler[] = {
-    { 1.0,   0.0, 0.0, 0.0,  0.0, 0.0, 0.0 },
-    { 1e-3,  0.5, 0.0, 0.0,  0.0, 2.4506122933227936, 0.0 },   /* sqrt(G(M+m)(1+e)/(a(1-e))) */
+    { 1.0,  -0.00049950049950049961, 0.0, 0.0,  0.0, -0.0017311854311433533, 0.0 },
+    { 1e-3,  0.49950049950049957,    0.0, 0.0,  0.0,  1.7311854311433532,    0.0 },
 };
 
 /* Burrau's Pythagorean problem: three bodies at rest, masses 3, 4, 5 */
@@ -62,6 +66,8 @@ static const struct body five[] = {
     { 5.18e-5,  0.0,-30.1,  -0.5,     0.182, 0.0,      0.005   },
 };
 
+static int wide_format = CFT_FP64;   /* --wide runs the cft side at binary128 */
+
 static struct reb_simulation *build(const struct body *bs, size_t n, double dt, double epsilon,
                                     int use_cft){
     struct reb_simulation *r = reb_simulation_create();
@@ -72,7 +78,7 @@ static struct reb_simulation *build(const struct body *bs, size_t n, double dt, 
         struct cft_ias15_state *s = reb_simulation_set_integrator(r, "ias15_cft");
         if (!s){ fprintf(stderr, "check_dropin: ias15_cft not registered\n"); exit(2); }
         s->epsilon = epsilon;
-        s->format = CFT_FP64;
+        s->format = wide_format;
     }else{
         struct reb_integrator_ias15_state *s = reb_simulation_set_integrator(r, "ias15");
         if (!s){ fprintf(stderr, "check_dropin: ias15 missing\n"); exit(2); }
@@ -220,6 +226,64 @@ static void case_add_particle(const char *label, double dt, double epsilon){
     reb_simulation_free(rb);
 }
 
+/* ------------------------------------------------------------------ *
+ * The wide path, in its own process.
+ *
+ * The binary64 gate above never exercises a single conversion: at
+ * CFT_FP64 promotion and rounding are memcpy. This case is what says
+ * cft_convert, the wide state kept across the step boundary and the
+ * rounded view written back all work - and it has to be a separate run
+ * of this program, because the engine's format is fixed for the process
+ * once it is opened (the Gauss-Radau constants are derived at that
+ * format and every buffer is sized for its element width).
+ *
+ * It is a smoke test and says so. The assertion is that the binary128
+ * run is finite, close to the binary64 answer, and NOT bit-identical to
+ * it - the last being what proves the arithmetic really was wider,
+ * rather than the format silently falling back.
+ */
+static void case_wide(void){
+    const size_t steps = 2000;
+    const double dt = 0.05;
+    printf("binary128 through the shim (kepler, fixed dt = %g, %zu steps)\n", dt, steps);
+    struct reb_simulation *ra = build(kepler, 2, dt, 0.0, 0);   /* REBOUND's own, binary64 */
+    struct reb_simulation *rb = build(kepler, 2, dt, 0.0, 1);   /* the shim at binary128 */
+    double e0 = reb_simulation_energy(ra);
+    reb_simulation_steps(ra, steps);
+    reb_simulation_steps(rb, steps);
+    if (rb->status == REB_STATUS_GENERIC_ERROR){
+        printf("  FAIL binary128: the step refused\n"); failures++;
+        reb_simulation_free(ra); reb_simulation_free(rb); return;
+    }
+    int identical = 1, finite = 1;
+    double worst = 0;
+    for (size_t i = 0; i < 2; i++){
+        double A[6] = { ra->particles[i].x, ra->particles[i].y, ra->particles[i].z,
+                        ra->particles[i].vx, ra->particles[i].vy, ra->particles[i].vz };
+        double B[6] = { rb->particles[i].x, rb->particles[i].y, rb->particles[i].z,
+                        rb->particles[i].vx, rb->particles[i].vy, rb->particles[i].vz };
+        for (int k = 0; k < 6; k++){
+            if (!isfinite(B[k])) finite = 0;
+            if (bits_differ(A[k], B[k])) identical = 0;
+            double scale = fabs(A[k]) > 1e-3 ? fabs(A[k]) : 1e-3;
+            double d = fabs(A[k] - B[k]) / scale;
+            if (d > worst) worst = d;
+        }
+    }
+    double ea = fabs((reb_simulation_energy(ra) - e0) / e0);
+    double eb = fabs((reb_simulation_energy(rb) - e0) / e0);
+    printf("    t: ias15 %.17g, ias15_cft %.17g (the wide clock, rounded)\n", ra->t, rb->t);
+    printf("    largest relative difference in the twelve coordinates: %.3e\n", worst);
+    printf("    relative energy change of the binary64 VIEW, a weak measure because the\n"
+           "      view is rounded: ias15 %.3e, ias15_cft at binary128 %.3e\n", ea, eb);
+    if (!finite){ printf("  FAIL binary128: a coordinate is not finite\n"); failures++; }
+    else if (identical){ printf("  FAIL binary128: bit-identical to binary64 - the format did not take\n"); failures++; }
+    else if (worst > 1e-9){ printf("  FAIL binary128: %.3e from the binary64 answer, too far to be round-off\n", worst); failures++; }
+    else printf("  ok   binary128 ran, finite, %.3e from binary64 and not bit-identical to it\n", worst);
+    reb_simulation_free(ra);
+    reb_simulation_free(rb);
+}
+
 /* ------------------------------------------------------------------ */
 /* The refusals: named, not computed                                    */
 /* ------------------------------------------------------------------ */
@@ -285,15 +349,26 @@ static void case_refusals(void){
 
 /* ------------------------------------------------------------------ */
 int main(int argc, char **argv){
+    int wide = 0;
     setvbuf(stdout, NULL, _IOLBF, 0);   /* so a pipe sees every case as it happens */
     for (int i = 1; i < argc; i++)
         if (!strcmp(argv[i], "-v")) verbose = 1;
-        else { fprintf(stderr, "usage: check_dropin [-v]\n"); return 2; }
+        else if (!strcmp(argv[i], "--wide")){ wide = 1; wide_format = CFT_FP128; }
+        else { fprintf(stderr, "usage: check_dropin [-v] [--wide]\n"); return 2; }
 
     cft_ias15_register("ias15_cft");
     /* Several of the step's scratch vectors are sized at their first use,
      * so the largest body count of the whole process is declared here. */
     cft_ias15_reserve(8);
+
+    if (wide){
+        printf("check_dropin --wide: the same shim at binary128, a smoke test\n\n");
+        case_wide();
+        printf("\n");
+        if (failures){ printf("check_dropin --wide: %d FAILURES\n", failures); return 1; }
+        printf("check_dropin --wide: passed\n");
+        return 0;
+    }
 
     printf("check_dropin: REBOUND's own ias15 against the registered "
            "ias15_cft at binary64, bit for bit\n\n");

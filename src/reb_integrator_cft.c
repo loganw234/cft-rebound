@@ -72,6 +72,7 @@ static int    engine_arith_fma;
  * theirs and is promoted back in; if not, the wide state is the truth
  * and is left alone. At CFT_FP64 both branches are the same bits. */
 static double *view_x, *view_v;
+static double *tmp_x, *tmp_v, *tmp_a, *tmp_m;   /* the step's scratch, sized once */
 static size_t  view_N_allocated;
 static size_t  view_N;
 static double  view_t, view_dt, view_dt_last;
@@ -83,10 +84,15 @@ static int same_bits(const double *a, const double *b, size_t n){
 
 static void view_alloc(size_t n){
     if (n <= view_N_allocated && view_x) return;
-    free(view_x); free(view_v);
+    free(view_x); free(view_v); free(tmp_x); free(tmp_v); free(tmp_a); free(tmp_m);
     view_x = malloc(3 * n * sizeof(double));
     view_v = malloc(3 * n * sizeof(double));
-    if (!view_x || !view_v){ fprintf(stderr, "ias15_cft: out of memory\n"); exit(1); }
+    tmp_x  = malloc(3 * n * sizeof(double));
+    tmp_v  = malloc(3 * n * sizeof(double));
+    tmp_a  = malloc(3 * n * sizeof(double));
+    tmp_m  = malloc(n * sizeof(double));
+    if (!view_x || !view_v || !tmp_x || !tmp_v || !tmp_a || !tmp_m){
+        fprintf(stderr, "ias15_cft: out of memory\n"); exit(1); }
     view_N_allocated = n;
 }
 
@@ -285,14 +291,9 @@ static void cft_ias15_step(struct reb_simulation *r, void *p){
     const size_t N = r->N, N3 = 3 * N;
 
     /* --- masses and G, every step: cheap, and a user may change them - */
-    {
-        double *m = malloc(N * sizeof(double));
-        if (!m){ refuse(r, "ias15_cft: out of memory"); return; }
-        for (size_t i = 0; i < N; i++) m[i] = r->particles[i].m;
-        ias15_engine_set_masses_f64(m);
-        free(m);
-        ias15_engine_set_G_f64(r->G);
-    }
+    for (size_t i = 0; i < N; i++) tmp_m[i] = r->particles[i].m;
+    ias15_engine_set_masses_f64(tmp_m);
+    ias15_engine_set_G_f64(r->G);
 
     /* --- the particles ------------------------------------------------
      * The wide state is the truth. r->particles are re-promoted only if
@@ -304,18 +305,12 @@ static void cft_ias15_step(struct reb_simulation *r, void *p){
      * cannot tell them apart; at CFT_FP128 and above, re-reading a view
      * that nobody touched would truncate the run to binary64 once a
      * step, which is exactly the mistake this guard exists to avoid. */
-    {
-        double *xs = malloc(N3 * sizeof(double));
-        double *vs = malloc(N3 * sizeof(double));
-        if (!xs || !vs){ free(xs); free(vs); refuse(r, "ias15_cft: out of memory"); return; }
-        for (size_t i = 0; i < N; i++){
-            xs[3*i] = r->particles[i].x; xs[3*i+1] = r->particles[i].y; xs[3*i+2] = r->particles[i].z;
-            vs[3*i] = r->particles[i].vx; vs[3*i+1] = r->particles[i].vy; vs[3*i+2] = r->particles[i].vz;
-        }
-        if (!view_valid || !same_bits(xs, view_x, N3) || !same_bits(vs, view_v, N3))
-            ias15_engine_put_xv_f64(xs, vs);
-        free(xs); free(vs);
+    for (size_t i = 0; i < N; i++){
+        tmp_x[3*i] = r->particles[i].x; tmp_x[3*i+1] = r->particles[i].y; tmp_x[3*i+2] = r->particles[i].z;
+        tmp_v[3*i] = r->particles[i].vx; tmp_v[3*i+1] = r->particles[i].vy; tmp_v[3*i+2] = r->particles[i].vz;
     }
+    if (!view_valid || !same_bits(tmp_x, view_x, N3) || !same_bits(tmp_v, view_v, N3))
+        ias15_engine_put_xv_f64(tmp_x, tmp_v);
 
     /* --- the clock and the step ---------------------------------------
      * r->dt is REBOUND's, and the driver rewrites it to land exactly on
@@ -335,17 +330,12 @@ static void cft_ias15_step(struct reb_simulation *r, void *p){
     ias15_engine_step(&dt_done);
 
     /* --- the binary64 view -------------------------------------------- */
-    {
-        double *as = malloc(N3 * sizeof(double));
-        if (!as){ refuse(r, "ias15_cft: out of memory"); return; }
-        ias15_engine_get_xv_f64(view_x, view_v);
-        ias15_engine_get_a_f64(as);
-        for (size_t i = 0; i < N; i++){
-            r->particles[i].x = view_x[3*i]; r->particles[i].y = view_x[3*i+1]; r->particles[i].z = view_x[3*i+2];
-            r->particles[i].vx = view_v[3*i]; r->particles[i].vy = view_v[3*i+1]; r->particles[i].vz = view_v[3*i+2];
-            r->particles[i].ax = as[3*i]; r->particles[i].ay = as[3*i+1]; r->particles[i].az = as[3*i+2];
-        }
-        free(as);
+    ias15_engine_get_xv_f64(view_x, view_v);
+    ias15_engine_get_a_f64(tmp_a);
+    for (size_t i = 0; i < N; i++){
+        r->particles[i].x = view_x[3*i]; r->particles[i].y = view_x[3*i+1]; r->particles[i].z = view_x[3*i+2];
+        r->particles[i].vx = view_v[3*i]; r->particles[i].vy = view_v[3*i+1]; r->particles[i].vz = view_v[3*i+2];
+        r->particles[i].ax = tmp_a[3*i]; r->particles[i].ay = tmp_a[3*i+1]; r->particles[i].az = tmp_a[3*i+2];
     }
     r->t = ias15_engine_get_t_f64();
     r->dt = ias15_engine_get_dt_f64();
@@ -392,9 +382,26 @@ static void cft_ias15_free(void *p){
     free(st);
 }
 
+/* Adding or removing a particle invalidates: the next step resizes the
+ * engine, zeroes g, e, b, csb, er, br, csx and csv, and re-promotes
+ * every coordinate from r->particles.
+ *
+ * On a grow that is REBOUND's own behaviour bit for bit -
+ * reb_integrator_ias15_alloc reallocates past its high-water mark and
+ * realloc_dp7 zeroes the whole array - which is why the binary64 gate
+ * has an add-a-particle case and it passes.
+ *
+ * Removal is NOT REBOUND's behaviour: REBOUND keeps a polynomial that no
+ * longer describes the particle set, and this does not.
+ *
+ * At a wide format both cases cost the surviving particles their wide
+ * coordinates, because the only thing left that describes them is the
+ * binary64 view. Nothing is lost at CFT_FP64, where the view is the
+ * state; at CFT_FP128 and above, change the particle set between runs
+ * rather than during one. */
 static void cft_ias15_did_add_particle(struct reb_simulation *r){
     (void)r;
-    view_valid = 0;      /* the next step re-promotes and, if N changed, resizes */
+    view_valid = 0;
 }
 
 static void cft_ias15_will_remove_particle(struct reb_simulation *r, size_t index){

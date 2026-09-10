@@ -94,7 +94,19 @@ extern const struct reb_integrator cft_ias15_integrator;
 
 /* Register under `name` (NULL means "ias15_cft"). Registering the same
  * name twice is a REBOUND error, so this is a no-op after the first
- * call with the same name. */
+ * call with the same name.
+ *
+ * ONE CUSTOM INTEGRATOR PER PROCESS, and that is upstream's limit, not
+ * this one. rebound.c's reb_integrator_register scans the existing list
+ * with
+ *
+ *     while (list[N].name){ N++; if (strcmp(list[N].name, name)==0) ... }
+ *
+ * which reads list[N].name AFTER the increment, so a SECOND registration
+ * reaches the {0} terminator and passes its NULL name to strcmp. On this
+ * host (REBOUND bdfda4bd, mingw64) the call never returns. So do not
+ * register another custom integrator alongside this one until upstream
+ * moves the increment. */
 void cft_ias15_register(const char *name);
 
 /* The state of a simulation using this integrator, or NULL if it is
