@@ -336,10 +336,24 @@ card, and what needs the card to confirm:
 
 ## What to do first, if a card is available
 
-1. Run tools/check_ensemble.py with `--artifact`: the ensemble gate on
-   the card, all three formats. The contract says the records are the
-   software backend's; the record of a 1,000-member ensemble on a tile
-   is the proof, and it does not exist yet.
+0. Point the whole suite at it, which is now one variable:
+
+       export CFT_REBOUND_ARTIFACT=/path/to/cft_hw_quad.xclbin
+       make check
+
+   No gate takes a flag for the card; every entry point falls back to
+   this variable. Until 2026-09-10 nothing in the suite could open an
+   artifact at all - the drop-in had a setter no gate called, and
+   `struct cft_rebound_options` had no artifact field - so every
+   hardware number in this document came from the standalone program.
+
+1. Run the ensemble gate on the card, all three formats. The contract
+   says the records are the software backend's; the record of a
+   1,000-member ensemble on a tile is the proof, and it does not exist
+   yet. Note that the python checkers spawn a fresh `ias15_cft` per
+   case and pay a device open every time, so they are the expensive way
+   to use a card; `build/check_dropin` and `build/gate_real` open the
+   engine once per process.
 2. Time the same Kepler ensemble at E = 1, 8, 64, 512, 4,096 members,
    fp256, `--engine program`, 20 steps, card against software backend,
    which is the ledger's throughput entry with the card column filled
