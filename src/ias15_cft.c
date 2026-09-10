@@ -57,9 +57,14 @@
  * Usage:
  *   ias15_cft --format fp64|fp128|fp256 --problem FILE [--dt DT]
  *             [--epsilon EPS] [--steps N] [--sample K] [--cs kahan|augmented]
- *             [--pc-tol-shift S] [--max-iter M] [--no-flag-abort]
- *             [--artifact PATH] [--dump-constants] [--quiet]
+ *             [--pc-tol-shift S] [--max-iter M] [--trace-pc N]
+ *             [--arith rebound|fma] [--engine loop|program] [--programs DIR]
+ *             [--no-flag-abort] [--artifact PATH] [--dump-constants] [--quiet]
  *             [--member K] [--dt-file FILE] [--dt-out FILE]
+ *
+ * --artifact opens a tile instead of the software backend; with no flag
+ * the program falls back to $CFT_REBOUND_ARTIFACT, which is how the
+ * whole gate suite reaches a card without any gate taking a flag.
  */
 #include "cft.h"
 #include "ias15_constants.h"

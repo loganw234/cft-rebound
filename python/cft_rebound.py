@@ -14,16 +14,20 @@ and no change to REBOUND, provided the registration lands in the *same*
 librebound the Python package already loaded. Making that so is the
 whole job of this module, and it differs by platform:
 
-* **Windows.** Automatic. REBOUND ships librebound as a ``.pyd`` whose
-  API is ``__declspec(dllexport)``, and a DLL that imports
-  ``reb_integrator_register`` from it binds to the module already in the
-  process. ``ctypes.CDLL(path)`` is enough.
+* **Windows: not built.** The loading rule would be simpler - REBOUND
+  ships librebound as a ``.pyd`` whose API is ``__declspec(dllexport)``,
+  so a DLL that imports ``reb_integrator_register`` binds to the module
+  already in the process and ``ctypes.CDLL(path)`` is enough - but a DLL
+  may not carry undefined symbols, so it would have to LINK against
+  ``rebound.__libpath__``, which is a different build rule. The
+  Makefile's shared-library target is POSIX only and nothing here
+  produces a Windows DLL. See docs/PYTHON.md, "Windows is not done".
 
 * **Linux and macOS.** Not automatic. ``rebound/__init__.py`` loads
   librebound with ``cdll.LoadLibrary``, which is ``RTLD_LOCAL``, so its
   symbols are not in the global scope and cannot resolve ours::
 
-      OSError: libias15_cft.so: undefined symbol: reb_integrator_register
+      OSError: libcft_ias15.so: undefined symbol: reb_integrator_register
 
   Re-opening the same file with ``RTLD_GLOBAL`` promotes it into the
   global scope - it is the same mapping, not a second copy - and our
@@ -34,7 +38,7 @@ Usage::
     import rebound
     import cft_rebound
 
-    cft_rebound.load("build/libias15_cft.so")
+    cft_rebound.load("build/libcft_ias15.so")   # `make python-lib`
     sim = rebound.Simulation()
     sim.integrator = "ias15_cft"
 
@@ -52,8 +56,10 @@ __all__ = ["load", "registered", "include_dir", "library_path"]
 def load(path):
     """Load a shared library that registers a REBOUND integrator.
 
-    ``path`` is the library built from this repository (``.so`` on Linux
-    and macOS, ``.dll`` on Windows). Registration happens in the
+    ``path`` is the library built from this repository: ``make
+    python-lib`` writes ``build/libcft_ias15.so`` on Linux and
+    ``build/libcft_ias15.dylib`` on macOS. There is no Windows build.
+    Registration happens in the
     library's own constructor, so the name is usable as soon as this
     returns. The handle is returned so the caller can keep it alive and
     read any symbols of its own; do not let it be garbage collected
@@ -77,10 +83,26 @@ def configure(lib, sim, format="fp64", epsilon=0.0, max_iter=0):
     """Set the wide format and step control on a simulation.
 
     ``sim`` must already be using the integrator (``sim.integrator =
-    "ias15_cft"``). REBOUND exposes a built-in integrator's settings as
-    ``sim.ri_<name>``, generated from a struct it knows; it does not
-    know this one, so there is no attribute to assign and this is how
-    the format is chosen from Python.
+    "ias15_cft"``).
+
+    Why this exists rather than an attribute assignment: the settings
+    this integrator needs are not the ones REBOUND generates. REBOUND
+    5.1.1 resolves ``sim.integrator.<field>`` against the registered
+    ``field_descriptor_list`` (``rebound/integrator.py``
+    ``__getattr__``/``__setattr__``), and every name in ours is
+    ``cft_``-prefixed, so ``sim.integrator.epsilon`` - the spelling a
+    REBOUND user knows - does not resolve. This call takes format,
+    epsilon and max_iter by value, validates them together, and applies
+    the per-format ``max_iter`` default that a raw field assignment
+    would not.
+
+    (An earlier version of this docstring said REBOUND exposes a
+    built-in integrator as ``sim.ri_<name>`` and knows nothing of a
+    custom one. Neither half is true of the pinned 5.1.1: ``ri_<name>``
+    is the 3.x/4.x API and appears nowhere in its Python package except
+    one unreachable line of ``citations.py``, and the descriptor-list
+    route above makes no distinction between built-in and custom.
+    Whether ``sim.integrator.cft_format = 2`` works has not been run.)
 
     ``lib`` is the handle ``load()`` returned. ``format`` is "fp64",
     "fp128" or "fp256". ``epsilon`` follows REBOUND: 0.0 is a fixed

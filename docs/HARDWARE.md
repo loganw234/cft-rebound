@@ -1,13 +1,22 @@
 # IAS15 as a resident workload on the tile: the design, the numbers, and what is unverified
 
-Everything below is a design plus a software-backend prototype. **No
-card was opened, no XRT call was made, and no `cft://` server was
-contacted for this document**; both were in use. Every card number
-here is either quoted from cft-fp256's own measurements (docs/
-INTEGRATION.md and docs/BENCHMARKS.md of the pinned clone, dated
-2026-09-09) or is a projection built from those and from operation
-counts measured here on the software backend. Projections are marked
-as such, each time.
+**Read this before any number below.** This document was written as a
+design plus a software-backend prototype, at a time when no card was
+opened, no XRT call was made and no `cft://` server was contacted for
+it, because both were in use. Every card number in the design sections
+is therefore either quoted from cft-fp256's own measurements (its
+docs/INTEGRATION.md and docs/BENCHMARKS.md, in the pinned clone under
+third_party/, dated 2026-09-09) or is a projection built from those
+and from operation counts measured here on the software backend.
+Projections are marked as such, each time.
+
+Two sections are **not** projections and were added later, from runs on
+an Alveo U50C: "What the card said, and the crossover", and item 0 of
+"What to do first". docs/VALIDATION.md entries 27 (the gate suite on
+the quad tile) and the "first run on a tile" entry are their record.
+Where a projection and a measurement disagree, the measurement is the
+one to believe; the projections are kept because the model they came
+from is what the measurements are a check on.
 
 ## Why IAS15 is unusually favourable, and where it is not
 
@@ -78,6 +87,15 @@ and a four-tile card.
 format-width values, 1,504 bytes at binary256; plus the working
 `x, at` and the pair intermediates. For E = 1,000 six-body systems
 that is 18,000 coordinates and 27 MB, a fraction of the U50's 8 GB.
+
+*Do not read 47 as the archive's blob count, which is 50
+(`CFT_N_BLOBS`). They count different things and neither is the other
+plus a constant: the archive carries `csa0` and the live `x` and `v`,
+which this list either omits or counts as working state, and the
+sizing above has not been re-derived since `x` and `v` were added on
+2026-09-10. Whether a resident design needs 47, 48 or 50 slots a lane
+is a question for whoever builds it, and no card has run the resident
+path.*
 
 **Per substep-pass:**
 
@@ -213,8 +231,8 @@ per step is a lower bound on how slow a naive one is, and the tile's
   elementwise engine's read path. A program instruction is one
   beat-operation per lane, but `LDL`/`STL` traffic, deposits and the
   16-lane block floor (a dependent chain runs at pipeline speed below
-  16 binary256 lanes in flight, docs/SEQUENCER.md) are not in that
-  number. Not measured.
+  16 binary256 lanes in flight, cft-fp256's docs/SEQUENCER.md) are not
+  in that number. Not measured.
 - **Gathers.** Steps 2 and 3 need a lane to read another lane's
   result. No device-side gather exists; the prototype's host does it.
   The asks are a device-side index-table copy, or a program-model
@@ -236,10 +254,13 @@ per step is a lower bound on how slow a naive one is, and the tile's
 
 ## What the card said, and the crossover
 
-Item 2 of the original list below was run by the integrator on the
-read-ahead quad (docs/VALIDATION.md, "the first run on a tile"): the
-records are identical bit for bit, and the tile was 4.5x slower than
-one core of the software backend on the two-body problem. The
+The record-diff task - `ias15_cft --engine program --artifact <xclbin>`
+against the software backend, byte for byte - was run by the integrator
+on the read-ahead quad (docs/VALIDATION.md, "the first run on a tile"):
+the records are identical bit for bit, and the tile was 4.5x slower than
+one core of the software backend on the two-body problem. (It was item 2
+of this document's first to-do list; that list has since been rewritten
+and renumbered, so the items below are not the ones those numbers named.) The
 crossover was then measured on the same integration at three widths,
 fp256, `--arith fma --engine program`:
 
@@ -260,7 +281,9 @@ calls at the same rate; width is the lever.
 
 ## The ensemble on the tile
 
-Item 3 is now implemented (docs/ENSEMBLE.md): E systems in one run,
+The ensemble - the third item of the first to-do list, and the step that
+turns the design's lane count from 6 into 6,000 - is implemented
+(docs/ENSEMBLE.md): E systems in one run,
 3NE lanes for the predictor and corrector, E N(N-1)/2 for the gravity,
 every member bit for bit its solo run (tools/check_ensemble.py, gated
 at all three formats on the software backend). What it maps to on the

@@ -69,7 +69,7 @@ struct cft_archive_info {
     uint64_t n_elem;           /* cft_n_elem, 0 if absent */
     uint64_t E;                /* cft_E, 0 if absent */
     uint64_t blob_bytes;       /* size_data of cft_x0, 0 if absent */
-    int      n_blobs_seen;     /* how many of the 48 wide blobs are present */
+    int      n_blobs_seen;     /* how many of the CFT_N_BLOBS wide blobs are present */
     int      blob_lengths_agree;
     char     abi[17];          /* cft_abi, NUL terminated */
     uint64_t constants_digest;

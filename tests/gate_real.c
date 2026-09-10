@@ -6,12 +6,13 @@
  * The four archive gates all drive tests/cft_shim_stub.c, whose own
  * header says "when parcel A lands, the gates should be re-pointed at
  * the real integrator". Parcel A landed. Nothing was re-pointed, and
- * nothing else in the suite archives anything, so the seam between the
+ * nothing else in the suite archived anything, so the seam between the
  * two halves - a real IAS15 state written to a Simulationarchive and
- * read back - has never been executed.
+ * read back - had never been executed. This file is that gate; `make
+ * check` and `make check-quick` both run it at all three formats.
  *
  * It is a seam worth a gate because the two halves hold their state
- * differently. The stub OWNS its 48 blobs. The real shim does not:
+ * differently. The stub OWNS its 50 blobs. The real shim does not:
  * publish_state() in src/reb_integrator_cft.c points the state at the
  * engine's live buffers, which are file-scope statics in
  * src/ias15_cft.c. So a load that fills the state's pointers with
@@ -20,16 +21,23 @@
  *
  * The test is the one a checkpoint has to pass:
  *
- *     30 steps straight              ==     20 steps, save, exit,
- *                                           load, 10 steps
+ *     steps_a + steps_b straight     ==     steps_a steps, save, exit,
+ *                                           load, steps_b steps
+ *
+ * which by default is 180 against 60 + 120 (--steps-a, --steps-b). It
+ * was 20 + 10 when written; see the note beside the defaults below for
+ * why that was not enough margin.
  *
  * bit for bit, in the particles and in r->t. Anything less than
  * identical is a checkpoint that silently changes the trajectory, which
  * for this repository is the same as a broken one.
  *
- * Two separate processes would be a stronger test still; one process is
- * enough to catch a state that is not carried, because the engine is
- * reset when a new simulation binds to it.
+ * Two separate processes are a stronger test still, and that one now
+ * exists: tools/check_checkpoint.py drives this binary's --save and
+ * --resume phases in three separate processes and compares exact hex
+ * floats, with a negative control (CFT_REBOUND_NO_ADOPT) that must
+ * differ. One process is enough to catch a state that is not carried,
+ * because the engine is reset when a new simulation binds to it.
  */
 #include <stdio.h>
 #include <stdlib.h>

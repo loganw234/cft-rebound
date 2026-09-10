@@ -11,7 +11,8 @@
 # every format, with a mixed attempt in which some members reject
 # their step while others accept it.
 #
-#   python tools/check_ensemble.py [--build build] [--formats fp64,fp128,fp256] [--quick]
+#   python tools/check_ensemble.py [--build build] [--formats fp64,fp128,fp256]
+#                                  [--quick] [--exe ias15_cft] [--keep]
 
 import argparse
 import os

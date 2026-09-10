@@ -22,6 +22,8 @@
  *   e               REB_POINTER  7*8         cft_e0 .. cft_e6
  *   br              REB_POINTER  7*8         cft_br0 .. cft_br6
  *   er              REB_POINTER  7*8         cft_er0 .. cft_er6
+ *   -                                       cft_x            REB_POINTER  W   NOTE 4
+ *   -                                       cft_v            REB_POINTER  W   NOTE 4
  *
  * NOTE 1. REBOUND archives `at`, the acceleration at the current
  * substep. ROADMAP.md's mirror list names it too, but the struct it
@@ -74,6 +76,17 @@
  * the WRITE side correct (size_data = n_elem*W), and cft_n_elem stays
  * last so that a whole-snapshot load is self-consistent even before the
  * repair runs.
+ *
+ * NOTE 4. cft_x and cft_v have no counterpart in REBOUND's list because
+ * REBOUND's live coordinates are in r->particles, which it archives as
+ * simulation fields. Here they are the integrator's own: step_attempt()
+ * copies x into x0 at the top of a step and leaves the advanced position
+ * in x, so after a completed step x0 is the PREVIOUS step's start and x
+ * is where the bodies are. They were missing from the first version of
+ * this list, which at binary128 and binary256 truncated a checkpoint's
+ * position and velocity to binary64 while every gate passed; that is
+ * what took the blob count from 48 to 50. docs/VALIDATION.md entry 25
+ * has the measurements.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -93,7 +106,12 @@
 
 #include "cft_ias15_fields.h"
 
-/* the number of wide blobs: 6 flat arrays + 6 seven-level arrays */
+/* The lists themselves are defined once, in src/cft_ias15_fields.c,
+ * from the macros in the header above; this file only selects among
+ * them. CFT_N_BLOBS is 50: eight flat arrays (x0, v0, a0, csx, csv,
+ * csa0 and the live x, v) and six seven-level ones. They were
+ * file-scope statics here until 2026-09-10, which meant the registered
+ * integrator could not name them - see docs/VALIDATION.md entry 25. */
 
 const struct reb_binarydata_field_descriptor *cft_archive_descriptor_list(int format){
     switch (format){
@@ -105,11 +123,12 @@ const struct reb_binarydata_field_descriptor *cft_archive_descriptor_list(int fo
 }
 
 /* A list that has drifted writes the wrong bytes silently, so check its
- * shape rather than trusting it: 48 blobs then 11 scalars, every name
- * cft_-prefixed and unique, every blob's element_size the format's
- * width and its offset_N the one member the read path is allowed to
- * scribble on, and cft_n_elem last (NOTE 3). Returns 0 if all three
- * lists are sound, otherwise the number of complaints, each printed. */
+ * shape rather than trusting it: CFT_N_BLOBS blobs then 11 scalars,
+ * every name cft_-prefixed and unique, every blob's element_size the
+ * format's width and its offset_N the one member the read path is
+ * allowed to scribble on, and cft_n_elem last (NOTE 3). Returns 0 if
+ * all three lists are sound, otherwise the number of complaints, each
+ * printed. */
 int cft_archive_selftest(void){
     int bad = 0;
     const int fmts[3] = { CFT_FP64, CFT_FP128, CFT_FP256 };

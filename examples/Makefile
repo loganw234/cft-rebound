@@ -2,11 +2,15 @@
 #
 # Building a REBOUND program against an INSTALLED cft-rebound.
 #
-# This is a normal REBOUND program's makefile with two lines added, and
-# they are marked below. Copy those two lines into your own.
+# This is a normal REBOUND program's makefile with the cft-rebound lines
+# added, and they are marked below. There are two ways in and they are
+# different libraries, so copy the pair that matches the one you want:
+# CFLAGS plus CFTLIBS for the subprocess API (roundtrip.c), CFLAGS plus
+# DROPINLIBS for the registered integrator (dropin.c).
 #
 #   make PREFIX=/usr/local
 #   ./roundtrip
+#   ./dropin
 #
 # If REBOUND itself is not installed system-wide, say where it is:
 #

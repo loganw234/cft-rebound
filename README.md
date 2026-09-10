@@ -28,7 +28,9 @@ systems integrates in one run, each with its own step
 (docs/ENSEMBLE.md).
 
 That is all of it. Everything below is refused, by name, with a
-message - never silently ignored, never approximated:
+message - never silently ignored, never approximated. (Three rows have
+an exception on the drop-in path; the note under the table says which
+and why.)
 
 | refused | |
 |---|---|
@@ -43,9 +45,29 @@ message - never silently ignored, never approximated:
 | every integrator except IAS15 | WHFast is ranked first to follow (docs/INTEGRATORS.md) and has not been done |
 | IAS15's `min_dt`, and adaptive modes other than PRS23 | not ported |
 
-`cft_rebound_check()` is that table in code, and `cft_rebound_steps()`
-calls it before doing anything, so a refusal arrives at the start of
-your run rather than in the middle of it.
+`cft_rebound_check()` (src/cft_rebound_run.c) is that table in code for
+the **subprocess API**, and `cft_rebound_steps()` calls it before doing
+anything, so a refusal arrives at the start of your run rather than in
+the middle of it.
+
+The **drop-in** has its own list, `supported()` in
+src/reb_integrator_cft.c, checked at the top of every step. The two
+overlap but are not identical, and the differences are worth knowing
+before you pick a path:
+
+- the drop-in additionally refuses **MEGNO** (`r->calculate_megno`), a
+  `format` or `max_iter` outside its range, and a state whose `E` is
+  not 1 (an ensemble is E independent systems and a `reb_simulation`
+  is one; use the standalone program, docs/ENSEMBLE.md);
+- the drop-in does **not** check
+  `pre_`/`post_timestep_modifications`, `r->gravity_custom`, or
+  `r->N_odes`, all of which `cft_rebound_check()` refuses. The
+  timestep hooks are not an oversight - the step re-promotes any
+  coordinate that changed under it, which is how a callback that edits
+  a particle is meant to work - but a REBOUNDx force or an attached
+  ODE set reaches the drop-in without a refusal and without being
+  integrated, so do not rely on the row above for that path. It is
+  recorded as an open item rather than papered over.
 
 **What it costs, and this is the part to weigh.** The arithmetic is a
 software library, not the hardware's doubles. On the outer solar
@@ -101,19 +123,35 @@ Nothing is vendored by hand.
 
 ## Layout
 
-    include/cft_rebound.h    the public surface: what a REBOUND program includes
+    include/cft_rebound.h    the subprocess API: what a REBOUND program includes
     src/cft_rebound_run.c    and what it links: the refusal list and the run call
+    src/cft_ias15.h          the DROP-IN's public header: the state struct, the
+                             registration, cft_ias15_configure()
+    src/reb_integrator_cft.c the struct reb_integrator shim over the engine, and
+                             the DROP-IN's refusal list (supported())
     examples/roundtrip.c     the worked round trip, runnable (`make example`)
     examples/dropin.c        the same from the drop-in side: register,
                              integrate at binary256, checkpoint, reload
-    examples/Makefile        a REBOUND program's makefile with the two added lines
+    examples/Makefile        a REBOUND program's makefile with the added lines,
+                             marked, for each of the two ways in
     src/ias15_cft.c          the port: every floating-point operation is a cft.h call
+    src/ias15_engine.h       the same file as a library: the entry points the shim
+                             drives (-DIAS15_CFT_LIBRARY, no main)
     src/ias15_constants.h    GENERATED: the Gauss-Radau constants at every format
     src/hexfloat.h           exact hex-float text for binary64, libc-independent
-    src/cft_ias15_state.h    the state the integrator shim and the archive share
-    src/cft_archive.c        Simulationarchive: the cft_ fields, the probe, the load
-    tests/cft_shim_stub.c    a stand-in integrator, for the archive gates only
-    tests/gate_*.c           those gates: restart, stock reader, promotion, refusal
+    src/cft_ias15_state.h    the width helper, and the include that reaches the
+                             state struct in cft_ias15.h
+    src/cft_archive.h/.c     Simulationarchive: the cft_ fields, the probe, the load
+    src/cft_ias15_fields.h/.c  the ONE definition of the field descriptors, and
+                             CFT_N_BLOBS - the count everything else derives from
+    tests/cft_shim_stub.c    a stand-in integrator, for four of the archive gates
+    tests/gate_restart.c     gate 1: checkpoint and restart, bit for bit
+    tests/gate_write.c       gate 2a: write a binary128 archive, and record the
+                             exact binary64 view a stock reader must recover
+    tests/gate_stock.c       gate 2b: that archive opened by a program linked
+                             against upstream REBOUND and nothing of ours
+    tests/gate_promote.c     gate 3: a stock archive promoted, and the refusal
+    tests/gate_real.c        the seam: the REAL integrator through an archive
     ref/ias15_ref.c          REBOUND's own IAS15 on the same problems, plain double
     ref/whfast512_stub.c     why REBOUND's WHFast512 is not built here (MinGW)
     tools/gen_constants.py   derives and CHECKS the constants (mpmath, 130 digits)
@@ -127,6 +165,10 @@ Nothing is vendored by hand.
     tools/check_records.py         the gate: the committed records, recomputed, bit for bit
     tools/check_archive.py         the gates: an archive round trip, and both readers
     tools/check_bodycount.py       the gate: the port == REBOUND at a few hundred bodies
+    tools/check_checkpoint.py      the gate: a checkpoint ACROSS processes, with a
+                                   negative control that must differ
+    tools/check_dropin.c           the gate: the registered integrator == REBOUND's
+                                   own ias15, and every refusal refused
     tools/oracle.py          scores a record from its exact bits (mpmath)
     tools/compare_formats.py the round-off floor: one run at two formats, differenced
     tools/horizon.py         percentiles of an ensemble's error against time, and crossings
@@ -152,8 +194,10 @@ Nothing is vendored by hand.
     python/example_equivalence.py  the binary64 equivalence gate, from Python
     src/cft_ias15_shared.c   the constructor that registers the integrator
                              when the shared library is loaded
-    ROADMAP.md               what is left before this is usable, and the two
-                             REBOUND extension points that make it cheap
+    tools/fetch_third_party.sh     clones the pinned upstreams, hard-fails on a
+                                   wrong commit
+    ROADMAP.md               the plan that got this here, all four parcels landed,
+                             plus what integration found and the upstream defects
 
 ## Building
 
@@ -162,9 +206,10 @@ that has mpmath:
 
     make third-party        # clone and verify the pinned upstreams
     make libcft             # libcft from the pinned clone
-    make                    # librebound (static), ias15_ref, ias15_cft
+    make                    # librebound (static), ias15_ref, ias15_cft,
+                            # check_dropin, libcft_rebound.a, libcft_ias15.a
     make programs           # assemble the sequencer programs (needs cft-asm)
-    make check              # the gates
+    make check              # the gates (make check-quick for binary64 only)
 
 On Windows the toolchain is MSYS2's mingw64 gcc from Git Bash, and the
 same three traps cft-fp256's host/Makefile documents apply; pass them
@@ -220,8 +265,19 @@ register once, and say which format.
         reb_simulation_set_integrator(r, "ias15_cft");
     s->format  = CFT_FP256;      /* CFT_FP64 is REBOUND, bit for bit */
     s->epsilon = 1e-9;           /* 0 is REBOUND's fixed step */
+    s->max_iter = 60;            /* see below - the struct default is 12 */
 
     reb_simulation_steps(r, 1000);               /* REBOUND's own call */
+
+**Set `max_iter` above binary64.** The state a fresh
+`reb_simulation_set_integrator()` hands you has `max_iter = 12`,
+REBOUND's own number, at *every* format, and binary256 needs about 18
+to 22 passes to converge its corrector - so a binary256 run that leaves
+it alone hits the cap on every step and truncates the iteration
+silently. The bits it produces are the correct answer to a truncated
+iteration, not a wrong one, but they are not the answer you asked for.
+`cft_ias15_configure(r, format, epsilon, 0)` picks 12/24/60 by format;
+setting the member yourself does not.
 
 Add `cft_archive.h` and a `cft_archive_bind(r)` before
 `reb_simulation_save_to_file()` and the Simulationarchive carries the
@@ -288,16 +344,17 @@ two lines above marked. `make example` stage-installs into
 `build/stage`, builds it against that, and runs it, so the example
 also tests the install.
 
-Today `cft_rebound_steps()` runs the `ias15_cft` program in a
-subprocess and the wide state does not survive the call, so **ask for a
-whole run in one call**: IAS15 starts each step's corrector from the
-previous step's b coefficients, and a call that begins with them zeroed
-lands on different bits - one to six ulps over twenty Kepler steps,
-measured in docs/VALIDATION.md. ROADMAP parcel A replaces that
-middle with `reb_integrator_register()`; the call above does not
-change when it does, which is why the example is written against it.
-Both `include/cft_rebound.h` and `examples/roundtrip.c` say which form
-they are and what replaces it.
+`cft_rebound_steps()` runs the `ias15_cft` program in a subprocess and
+the wide state does not survive the call, so **ask for a whole run in
+one call**: IAS15 starts each step's corrector from the previous step's
+b coefficients, and a call that begins with them zeroed lands on
+different bits - one to six ulps over twenty Kepler steps, measured in
+docs/VALIDATION.md. That restriction is the reason to prefer the
+drop-in above, where the state persists across steps and across a
+checkpoint. This form was deliberately kept rather than rewritten as a
+wrapper around it, for a caller who does not want the engine in their
+own address space; `make example` builds and runs both, so a change
+that breaks either is a build failure.
 
 ## Running
 
@@ -407,9 +464,11 @@ See docs/VALIDATION.md for every number. In brief:
   Replacing Kahan's `add_cs` with 9.5's exact augmentedAddition lowers
   the binary64 floor 3-4x on the one run tried and changes nothing at
   binary256.
-- **The programs.** The predictor and corrector run as 24
-  orbit-sequencer programs with the state in the per-lane scratch
-  block, bit-identical to the host loop at every format.
+- **The programs.** The predictor and corrector run as orbit-sequencer
+  programs with the state in the per-lane scratch block, bit-identical
+  to the host loop at every format: one predictor and seven correctors
+  at each of three formats, plus a per-lane-`dt` predictor for an
+  adaptive ensemble, which is the 27 files in `programs/`.
 - **The hardware.** docs/HARDWARE.md: the design keeps 47 values per
   coordinate resident; the projection is that a single system on the
   tile is 2-3x the software backend and an ensemble of a thousand is

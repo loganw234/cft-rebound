@@ -15,12 +15,20 @@
 # So this drives three separate processes per format:
 #
 #   gate_real --fpNNN --straight            -> the reference dump
-#   gate_real --fpNNN --save   ckpt.bin     -> stops half way
+#   gate_real --fpNNN --save   ckpt.bin     -> stops after --steps-a
 #   gate_real --fpNNN --resume ckpt.bin     -> the continued dump
 #
 # and requires the two dumps to be identical. The dumps are exact hex
 # floats (%a), so the comparison is over bits rather than over a decimal
 # rendering of them: a last-bit difference shows as a different line.
+#
+# THE NEGATIVE CONTROL IS NOT OPTIONAL, and is the fourth process. It
+# runs the resume again with CFT_REBOUND_NO_ADOPT set, which makes the
+# shim discard the loaded state instead of carrying it, and this gate
+# requires that run to DIFFER. Without it the comparison is not
+# evidence: at the default step counts only a few of the dumped lines
+# differ between binary64 and binary256, so agreement on the rest would
+# say nothing about whether the wide state was carried at all.
 #
 #   python tools/check_checkpoint.py [--build build] [--quick]
 #

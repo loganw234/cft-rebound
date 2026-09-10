@@ -2217,6 +2217,14 @@ checkpoint written by one process and read by another, which is a
 stronger test than `gate_real`'s single process and is what a real long
 run does.
 
+*Later: two of those three were closed the same day. The cross-process
+checkpoint is `tools/check_checkpoint.py` - entry 26. The card is
+entry 27, which is this entry's own gates run on a U50C quad tile with
+output identical to software. macOS still stands. Entry 26 also raised
+`gate_real`'s step counts from the 20 + 10 recorded above to 60 + 120,
+for the margin reason it gives, so the "30 steps straight" shape
+described here is not the gate's shape now.*
+
 
 ---
 
@@ -2315,6 +2323,14 @@ Bit for bit, so nothing about the restore degrades with run length -
 which is the property that makes the archive useful for the workloads
 this card exists for, and it had not been measured.
 
+*Later: this entry's "still not tested" list is closed except macOS.
+The card run in progress at the time of writing is entry 27. The Python
+shared library, blocked here on neither host having the `rebound` wheel,
+is entry 28 - built, gated, and bit for bit from Python at every format.
+Entry 28 also corrects what this entry pointed a reader at:
+docs/PYTHON.md's claim that `libcft.a` links into a shared object as it
+is was wrong, and `backend_xrt.o` is why.*
+
 
 ---
 
@@ -2391,6 +2407,11 @@ stronger test than `gate_real` and is what a long run actually needs;
 macOS; the Python shared library, whose requirements are specified in
 docs/PYTHON.md and whose gate cannot run until a `rebound` wheel is
 installed on one of these hosts.
+
+*Later: the last of those is closed - entry 28, on this same host, with
+the rebound 5.1.1 wheel installed. The other three stand: the full
+software `make check` on Linux, `check_checkpoint.py` on the card, and
+macOS.*
 
 
 ---

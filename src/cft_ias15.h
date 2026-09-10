@@ -33,7 +33,16 @@
  * but REB_GRAVITY_BASIC, non-zero softening, test particles (N_active),
  * r->map subsets, variational particles and MEGNO are out of scope. The
  * step detects each of them, names it in a REBOUND error message and
- * stops the integration rather than compute something wrong.
+ * stops the integration rather than compute something wrong. So are
+ * four of the state's own settings: an adaptive_mode other than PRS23
+ * (2), a non-zero min_dt, a format that is not one of the three, and a
+ * max_iter below 1; and an E other than 1, because an ensemble is E
+ * independent systems and a reb_simulation is one (docs/ENSEMBLE.md).
+ *
+ * Three things the subprocess API refuses and this does NOT check:
+ * pre_/post_timestep_modifications (deliberate - the step re-promotes
+ * a coordinate a callback edited), r->gravity_custom, and r->N_odes.
+ * The README's scope table says so beside the table.
  */
 #ifndef CFT_IAS15_H
 #define CFT_IAS15_H
@@ -59,10 +68,17 @@ extern "C" {
  * The state, as ROADMAP.md defines it.
  *
  * This struct is the contract between the integrator (parcel A) and the
- * Simulationarchive support (parcel B): parcel B writes
- * cft_ias15_field_descriptor_list against these offsets. The fields
- * below, their names, their types and their order are ROADMAP.md's, and
- * nothing may be inserted among them.
+ * Simulationarchive support (parcel B): src/cft_ias15_fields.c writes
+ * the descriptor lists against these offsets with offsetof, so a field
+ * may be added but the meaning of an existing one may not change under
+ * an archive already written.
+ *
+ * ROADMAP.md's first version of this struct was wrong in one place and
+ * both parcels inherited it: it had no x and v, so a checkpoint carried
+ * the previous step's starting copy instead of the live coordinates and
+ * silently truncated position and velocity to binary64 above binary64.
+ * They are here now and the blob count is 50 (CFT_N_BLOBS in
+ * src/cft_ias15_fields.h). docs/VALIDATION.md entry 25.
  *
  * W is the wide element width in bytes - cft_format_size(format), 8, 16
  * or 32. The byte blobs hold n_elem elements each; the seven-fold arrays
@@ -84,7 +100,15 @@ struct cft_ias15_state {
                                             * are the step's starting copy and
                                             * are refreshed from these at the
                                             * top of every step. */
-    unsigned char *x0, *v0, *a0;      /* position, velocity, acceleration */
+    unsigned char *x0, *v0, *a0;      /* NOT the live position, velocity and
+                                       * acceleration, whatever their names
+                                       * suggest: step_attempt() sets these
+                                       * FROM x/v at the top of a step, so
+                                       * after a completed step x0 is the
+                                       * PREVIOUS step's start. Calling them
+                                       * "position, velocity, acceleration"
+                                       * here is what made two parcels archive
+                                       * them and not x/v - VALIDATION 25. */
     unsigned char *csx, *csv, *csa0;  /* compensated-summation carries */
     unsigned char *g[7], *b[7], *e[7], *br[7], *er[7], *csb[7];
     size_t   n_elem;           /* 3N, or 3NE for an ensemble */
@@ -133,10 +157,11 @@ void cft_ias15_register(const char *name);
 struct cft_ias15_state *cft_ias15_get_state(struct reb_simulation *r);
 
 /* The same settings by value, for a caller that holds a simulation and
- * not the state - which is every ctypes caller, because REBOUND's
- * Python layer generates its integrator settings from structs it knows
- * and does not know this one. Without these, Python can select the
- * integrator and never reach the format.
+ * not the state - which is every ctypes caller. REBOUND resolves
+ * sim.integrator.<field> against the registered field_descriptor_list,
+ * and every name in ours is cft_-prefixed, so the spellings a REBOUND
+ * user knows (sim.integrator.epsilon) do not resolve here. Without
+ * these, Python can select the integrator and never reach the format.
  *
  *   format    CFT_FP64 | CFT_FP128 | CFT_FP256
  *   epsilon   as REBOUND's: 0 is a fixed step
@@ -172,7 +197,12 @@ int cft_ias15_format_code(const char *name);
 void cft_ias15_reserve(size_t n);
 
 /* The libcft artifact to open, or NULL (the default) for the software
- * backend. Not exercised in this parcel. */
+ * backend. An explicit setting here wins; otherwise $CFT_REBOUND_ARTIFACT
+ * names one, which is what lets the gate suite reach a card without a
+ * flag of its own. Empty is treated as unset. The bits are the same
+ * either way - docs/VALIDATION.md entry 27 ran check_dropin and
+ * gate_real on a U50C quad tile at every format and diffed the output
+ * against the software backend's: identical. */
 void cft_ias15_set_artifact(const char *path);
 
 /* The predictor-corrector tolerance exponent: the loop stops under
@@ -185,13 +215,19 @@ uint32_t           cft_ias15_flags_seen(void);
 unsigned long long cft_ias15_library_calls(void);
 
 /* --------------------------------------------------------------------
- * Parcel B's symbol
+ * The archive field descriptors
  *
- * The archive field descriptors. Parcel A ships a placeholder holding
- * only the terminator (src/cft_ias15_fields.c), which REBOUND reads as
- * "this integrator adds no fields"; parcel B replaces that file. The
- * names it defines are prefixed cft_ and reach the file as
- * "integrator.<name>.cft_<field>", REBOUND prefixing them itself.
+ * Defined once, in src/cft_ias15_fields.c, from the macros in
+ * src/cft_ias15_fields.h. The names are prefixed cft_ and reach the file
+ * as "integrator.<name>.cft_<field>", REBOUND prefixing them itself.
+ *
+ * This file held only a terminator until 2026-09-10 - "parcel A's
+ * placeholder, for parcel B to replace" - while parcel B kept the real
+ * lists as file-scope statics in src/cft_archive.c, which is not linked
+ * into every drop-in target. REBOUND therefore resolved no cft_ field on
+ * read and a checkpoint came back from create() defaults. See
+ * docs/VALIDATION.md entry 25 and tests/gate_real.c, the gate that
+ * caught it.
  * -------------------------------------------------------------------- */
 struct reb_binarydata_field_descriptor;
 extern const struct reb_binarydata_field_descriptor cft_ias15_field_descriptor_list[];

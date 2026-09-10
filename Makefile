@@ -5,15 +5,24 @@
 #   make third-party      clone/verify the pinned upstreams (needs git)
 #   make libcft           build libcft from the pinned cft-fp256 clone
 #   make librebound       build REBOUND's C library from the pinned clone
-#   make                  the reference program and the libcft port
+#   make                  the reference program, the libcft port, the
+#                         drop-in gate and the two libraries
 #   make constants        re-derive and re-check the IAS15 constants
-#   make check            the gates: constants, and the port at binary64
-#                         against REBOUND's own IAS15, bit for bit
+#   make programs         generate and assemble the sequencer programs
+#   make check            every gate at every format (about half an hour)
+#   make check-quick      the same at binary64 only (a few minutes)
 #   make archive          the Simulationarchive gate programs
 #   make check-archive    just those gates (seconds)
-#   make example          build the worked round trip and run it
-#   make install          a header and a library where a REBOUND build
+#   make dropin           the drop-in library and its gate
+#   make python-lib       the shared library for Python; check-python
+#                         runs the equivalence gate through it
+#   make example          build the two worked examples and run them
+#   make install          headers and libraries where a REBOUND build
 #                         can find them; PREFIX and DESTDIR as usual
+#   make uninstall        remove exactly what install put there
+#
+# Set CFT_REBOUND_ARTIFACT to an .xclbin and every gate that opens the
+# engine opens the tile instead; no gate takes a flag for it.
 #
 # On Windows (MSYS2 mingw64 gcc from Git Bash) the same traps as
 # cft-fp256's host/Makefile apply, and they are passed through here:
@@ -73,13 +82,6 @@ else
   CFT_MAKEVARS :=
 endif
 
-# An XRT build of libcft.a carries backend_xrt.o, which is C++ and needs
-# the XRT runtime at link time; without these a plain `make` fails with
-# undefined references to xrt::bo and operator new, which names neither
-# the cause nor the fix. Sourcing /opt/xilinx/xrt/setup.sh sets
-# XILINX_XRT, so that is the signal. XRT=0 turns it off for a
-# software-only libcft.a in a shell that happens to have XRT sourced;
-# LIBS= still overrides the lot.
 # The shared library for Python. POSIX only: a Windows DLL may not
 # carry undefined symbols, so it would have to link against the
 # wheel's librebound rather than leave REBOUND's symbols to the
@@ -94,6 +96,13 @@ else
   CFT_SHLIB := $(CFT)/libcft.so
 endif
 
+# An XRT build of libcft.a carries backend_xrt.o, which is C++ and needs
+# the XRT runtime at link time; without these a plain `make` fails with
+# undefined references to xrt::bo and operator new, which names neither
+# the cause nor the fix. Sourcing /opt/xilinx/xrt/setup.sh sets
+# XILINX_XRT, so that is the signal. XRT=0 turns it off for a
+# software-only libcft.a in a shell that happens to have XRT sourced;
+# LIBS= still overrides the lot.
 ifneq ($(OS),Windows_NT)
   ifneq ($(XILINX_XRT),)
     XRT ?= 1
@@ -316,8 +325,9 @@ $(B)/gate_stock$(EXE): tests/gate_stock.c $(B)/librebound.a
 # The four gates above link tests/cft_shim_stub.c, whose own header says
 # to re-point them once the real integrator exists; this gate is that
 # re-pointing, kept separate so the stub gates go on proving descriptor
-# completeness - their step touches all 48 blobs, and 20 steps of a real
-# IAS15 need not.
+# completeness - their step touches 48 of the 50 blobs and their
+# snapshot compares all 50, and 20 steps of a real IAS15 need not.
+# tests/cft_shim_stub.h has the exact division.
 $(B)/gate_real$(EXE): tests/gate_real.c $(ARCHIVE_SRC) $(DROPIN_OBJ) $(B)/librebound.a $(CFTLIB)
 	$(CC) $(ARCH_CFLAGS) -o $@ tests/gate_real.c src/cft_archive.c $(DROPIN_OBJ) $(B)/librebound.a $(CFTLIB) $(LIBS)
 

@@ -12,6 +12,7 @@
 # reported by the sign check below).
 #
 #   python tools/check_equivalence.py [--build build] [--quick]
+#                                     [--exe ias15_cft] [--cs kahan|augmented]
 
 import argparse
 import os
