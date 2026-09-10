@@ -103,10 +103,48 @@ links against nothing, is not.
    binary64 they must be identical, which is parcel A's gate seen from
    Python.
 
-Step 2 is the part this repository still owes. `libcft` must be built
-`-fPIC` and linked in, and today `src/ias15_cft.c` is a program with a
-`main`, not a library - so the Makefile has no shared-library target
-yet. That is packaging (parcel C), not Python.
+Step 2 is the part this repository still owes, and it is the only
+thing between here and a working Python path. Not started, because
+it is packaging rather than a Python question and it is not the
+"cheap addition" the parcel was scoped as. What it needs, with the
+parts that are already answered marked:
+
+1. **PIC objects of the four drop-in sources** - `ias15_cft.c` built
+   `-DIAS15_CFT_LIBRARY` (no `main`), `reb_integrator_cft.c`,
+   `cft_ias15_fields.c`, `cft_archive.c`. The first three are
+   already compiled as a group (`DROPIN_OBJ` in the Makefile); this
+   is the same list with `-fPIC` and the archive added.
+
+2. **libcft in the same shared object.** *Answered:* the objects in
+   `libcft.a` as built on this project's Linux host carry **no
+   absolute relocations** (`readelf -r` finds zero `R_X86_64_32`
+   or `R_X86_64_32S`), so the existing static archive links into a
+   shared object on x86-64 without rebuilding it. cft-fp256 also
+   builds a real `libcft.so`/`.dylib`/`.dll` from its own `.lo`
+   objects if a shared dependency is preferred to a static one -
+   that is a packaging choice, not a blocker.
+
+3. **REBOUND's symbols.** On POSIX, leave them undefined: the
+   process that calls `ctypes.CDLL` has already loaded REBOUND's
+   own shared library and resolves them. On Windows a DLL may not
+   have undefined symbols, so it must link against
+   `rebound.__libpath__`, which is what step 2's second sentence
+   above says. Both are stated in REBOUND's own terms and neither
+   has been tried here.
+
+4. **A verification that means something.** *Not possible on either
+   host as they stand:* the `rebound` wheel is not installed in any
+   Python reachable from this project's Windows or Linux machine
+   (parcel D installed its own). The gate is
+   `python/example_equivalence.py` against the built library, and
+   it must run on both platforms before the target is claimed -
+   a shared object that builds and does not load is worse than no
+   target, because the failure appears in a user's Python session
+   rather than in a build log.
+
+Note that item 3 is why this cannot be one rule with an `ifeq`: the
+two platforms disagree about whether an unresolved symbol is an
+error, and that difference decides what the library links against.
 
 ## Four sharp edges, all measured
 
