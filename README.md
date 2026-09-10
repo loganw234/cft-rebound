@@ -64,6 +64,8 @@ Nothing is vendored by hand.
     docs/HORIZON.md          when binary64 stops being enough, measured
     docs/HARDWARE.md         the resident design, its break-even, what is unverified
     docs/INTEGRATORS.md      which other REBOUND integrators port well, ranked
+    ROADMAP.md               what is left before this is usable, and the two
+                             REBOUND extension points that make it cheap
 
 ## Building
 
