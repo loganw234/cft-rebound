@@ -143,8 +143,11 @@ $(B)/ias15_cft$(EXE): src/ias15_cft.c src/ias15_constants.h src/hexfloat.h $(CFT
 # struct reb_integrator shim, and the gate that runs it against
 # REBOUND's own ias15 inside one program.
 #
-# src/cft_ias15_fields.c is PARCEL B's file: it defines
-# cft_ias15_field_descriptor_list and today holds only the terminator.
+# src/cft_ias15_fields.c holds the one definition of the archive's
+# field descriptors, including the list the integrator registers with.
+# It was a placeholder holding only its terminator until 2026-09-10,
+# which meant REBOUND could resolve no cft_ field on read - see
+# docs/VALIDATION.md entry 25.
 DROPIN_OBJ := $(B)/ias15_cft_lib.o $(B)/reb_integrator_cft.o $(B)/cft_ias15_fields.o
 
 $(B)/ias15_cft_lib.o: src/ias15_cft.c src/ias15_constants.h src/ias15_engine.h
@@ -155,7 +158,9 @@ $(B)/reb_integrator_cft.o: src/reb_integrator_cft.c src/cft_ias15.h src/ias15_en
 	@mkdir -p $(B)
 	$(CC) -c $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -Isrc -I$(CFT)/include -I$(REB) -o $@ src/reb_integrator_cft.c
 
-$(B)/cft_ias15_fields.o: src/cft_ias15_fields.c src/cft_ias15.h
+# The header carries the macros the lists are generated from, so an
+# added blob has to rebuild this object as well as cft_archive.o.
+$(B)/cft_ias15_fields.o: src/cft_ias15_fields.c src/cft_ias15_fields.h src/cft_ias15.h
 	@mkdir -p $(B)
 	$(CC) -c $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -Isrc -I$(CFT)/include -I$(REB) -o $@ src/cft_ias15_fields.c
 
