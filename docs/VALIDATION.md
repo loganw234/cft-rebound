@@ -1219,7 +1219,11 @@ Two REBOUND builds were used: the pinned clone at bdfda4bd, built here
 as a CPython extension module the way `setup.py` does, and - to be sure
 the result is not an artefact of a hand build - the **official PyPI
 wheels** for rebound 5.1.1, which are at githash 33549d1d. Every claim
-below was reproduced on both. No card, no XRT.
+below was reproduced on both. No card, no XRT. (The local build reports
+`githash b0c25d43`, setup.py's hard-coded fallback: the sources were
+copied out of the verified clone at bdfda4bd into the WSL filesystem
+without their `.git`, so setup.py's `git rev-parse` had nothing to read.
+The bytes are the pinned ones; only the string is the fallback.)
 
 **The question.** `reb_simulation_set_integrator(r, name)` takes a
 string, so a Python user might reach a registered C integrator with
