@@ -4,11 +4,11 @@
 design plus a software-backend prototype, at a time when no card was
 opened, no XRT call was made and no `cft://` server was contacted for
 it, because both were in use. Every card number in the design sections
-is therefore either quoted from cft-fp256's own measurements
-(docs/INTEGRATION.md and docs/BENCHMARKS.md of the pinned clone, dated
-2026-09-09) or is a projection built from those and from operation
-counts measured here on the software backend. Projections are marked as
-such, each time.
+is therefore either quoted from cft-fp256's own measurements (its
+docs/INTEGRATION.md and docs/BENCHMARKS.md, in the pinned clone under
+third_party/, dated 2026-09-09) or is a projection built from those
+and from operation counts measured here on the software backend.
+Projections are marked as such, each time.
 
 Two sections are **not** projections and were added later, from runs on
 an Alveo U50C: "What the card said, and the crossover", and item 0 of
@@ -222,8 +222,8 @@ per step is a lower bound on how slow a naive one is, and the tile's
   elementwise engine's read path. A program instruction is one
   beat-operation per lane, but `LDL`/`STL` traffic, deposits and the
   16-lane block floor (a dependent chain runs at pipeline speed below
-  16 binary256 lanes in flight, docs/SEQUENCER.md) are not in that
-  number. Not measured.
+  16 binary256 lanes in flight, cft-fp256's docs/SEQUENCER.md) are not
+  in that number. Not measured.
 - **Gathers.** Steps 2 and 3 need a lane to read another lane's
   result. No device-side gather exists; the prototype's host does it.
   The asks are a device-side index-table copy, or a program-model

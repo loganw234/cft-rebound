@@ -28,7 +28,9 @@ systems integrates in one run, each with its own step
 (docs/ENSEMBLE.md).
 
 That is all of it. Everything below is refused, by name, with a
-message - never silently ignored, never approximated:
+message - never silently ignored, never approximated. (Three rows have
+an exception on the drop-in path; the note under the table says which
+and why.)
 
 | refused | |
 |---|---|
@@ -126,11 +128,12 @@ Nothing is vendored by hand.
     src/cft_ias15.h          the DROP-IN's public header: the state struct, the
                              registration, cft_ias15_configure()
     src/reb_integrator_cft.c the struct reb_integrator shim over the engine, and
-                             the refusal list that table above is written from
+                             the DROP-IN's refusal list (supported())
     examples/roundtrip.c     the worked round trip, runnable (`make example`)
     examples/dropin.c        the same from the drop-in side: register,
                              integrate at binary256, checkpoint, reload
-    examples/Makefile        a REBOUND program's makefile with the two added lines
+    examples/Makefile        a REBOUND program's makefile with the added lines,
+                             marked, for each of the two ways in
     src/ias15_cft.c          the port: every floating-point operation is a cft.h call
     src/ias15_engine.h       the same file as a library: the entry points the shim
                              drives (-DIAS15_CFT_LIBRARY, no main)
@@ -143,8 +146,10 @@ Nothing is vendored by hand.
                              CFT_N_BLOBS - the count everything else derives from
     tests/cft_shim_stub.c    a stand-in integrator, for four of the archive gates
     tests/gate_restart.c     gate 1: checkpoint and restart, bit for bit
-    tests/gate_write.c       gate 2a: write a binary128 archive and record the
-    tests/gate_stock.c       gate 2b: binary64 view stock REBOUND must recover
+    tests/gate_write.c       gate 2a: write a binary128 archive, and record the
+                             exact binary64 view a stock reader must recover
+    tests/gate_stock.c       gate 2b: that archive opened by a program linked
+                             against upstream REBOUND and nothing of ours
     tests/gate_promote.c     gate 3: a stock archive promoted, and the refusal
     tests/gate_real.c        the seam: the REAL integrator through an archive
     ref/ias15_ref.c          REBOUND's own IAS15 on the same problems, plain double
