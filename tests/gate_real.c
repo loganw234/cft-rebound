@@ -47,8 +47,8 @@
  * the other 12; at 60 + 120 the difference is broad and the comparison
  * has margin. In software this is still milliseconds; on a card it is
  * about two minutes a format, which is the reason it is not larger. */
-#define STEPS_A   60     /* before the checkpoint */
-#define STEPS_B  120     /* after it */
+static long steps_a = 60;    /* before the checkpoint; --steps-a */
+static long steps_b = 120;   /* after it;            --steps-b */
 #define NBODY      4
 
 static const char *ARCHIVE = "gate_real.bin";
@@ -118,7 +118,7 @@ static void dump(struct reb_simulation *r){
  * because the point is that nothing is shared between the runs. */
 static int phase_straight(int format, double dt){
     struct reb_simulation *r = build(format, dt);
-    reb_simulation_steps(r, STEPS_A + STEPS_B);
+    reb_simulation_steps(r, steps_a + steps_b);
     dump(r);
     reb_simulation_free(r);
     return 0;
@@ -126,12 +126,12 @@ static int phase_straight(int format, double dt){
 
 static int phase_save(int format, double dt, const char *path){
     struct reb_simulation *r = build(format, dt);
-    reb_simulation_steps(r, STEPS_A);
+    reb_simulation_steps(r, steps_a);
     if (cft_archive_bind(r)){ fprintf(stderr, "gate_real: bind failed\n"); return 2; }
     remove(path);
     reb_simulation_save_to_file(r, path);
-    fprintf(stderr, "gate_real: wrote %s at t=%.17g after %d steps\n",
-            path, r->t, STEPS_A);
+    fprintf(stderr, "gate_real: wrote %s at t=%.17g after %ld steps\n",
+            path, r->t, steps_a);
     reb_simulation_free(r);
     return 0;
 }
@@ -145,7 +145,7 @@ static int phase_resume(int format, const char *path){
     }
     fprintf(stderr, "gate_real: loaded %s (%s) at t=%.17g\n",
             path, cft_archive_status_str(st), r->t);
-    reb_simulation_steps(r, STEPS_B);
+    reb_simulation_steps(r, steps_b);
     dump(r);
     reb_simulation_free(r);
     return 0;
@@ -154,16 +154,16 @@ static int phase_resume(int format, const char *path){
 static int one_format(int format, const char *fname, double dt){
     int ok = 1;
 
-    /* ---- the reference: STEPS_A + STEPS_B in one go ---- */
+    /* ---- the reference: steps_a + steps_b in one go ---- */
     struct reb_simulation *ref = build(format, dt);
-    reb_simulation_steps(ref, STEPS_A + STEPS_B);
+    reb_simulation_steps(ref, steps_a + steps_b);
     size_t nref; unsigned char *sref = snap(ref, &nref);
     double tref = ref->t;
     reb_simulation_free(ref);          /* releases the engine for the next owner */
 
-    /* ---- the checkpoint: STEPS_A, save, free ---- */
+    /* ---- the checkpoint: steps_a, save, free ---- */
     struct reb_simulation *a = build(format, dt);
-    reb_simulation_steps(a, STEPS_A);
+    reb_simulation_steps(a, steps_a);
     if (cft_archive_bind(a)){ printf("  %-6s FAIL  cft_archive_bind\n", fname); return 0; }
     remove(ARCHIVE);
     reb_simulation_save_to_file(a, ARCHIVE);
@@ -194,7 +194,7 @@ static int one_format(int format, const char *fname, double dt){
     }
     printf("  %-6s load: %s, t=%.17g (saved %.17g)\n",
            fname, cft_archive_status_str(st), b->t, tsaved);
-    reb_simulation_steps(b, STEPS_B);
+    reb_simulation_steps(b, steps_b);
     size_t nb; unsigned char *sb = snap(b, &nb);
 
     if (nb != nref || memcmp(sb, sref, nb) != 0){
@@ -233,6 +233,8 @@ int main(int argc, char **argv){
         if (!strcmp(argv[i], "--straight")) phase = 1;
         if (!strcmp(argv[i], "--save")   && i + 1 < argc){ phase = 2; path = argv[++i]; }
         if (!strcmp(argv[i], "--resume") && i + 1 < argc){ phase = 3; path = argv[++i]; }
+        if (!strcmp(argv[i], "--steps-a") && i + 1 < argc) steps_a = atol(argv[++i]);
+        if (!strcmp(argv[i], "--steps-b") && i + 1 < argc) steps_b = atol(argv[++i]);
     }
     if (only < 0) only = 0;
 
@@ -245,8 +247,8 @@ int main(int argc, char **argv){
     if (phase == 3) return phase_resume(fmts[only], path);
 
     printf("gate_real: the registered integrator through a Simulationarchive\n");
-    printf("           %d steps, checkpoint, %d more, against %d straight\n",
-           STEPS_A, STEPS_B, STEPS_A + STEPS_B);
+    printf("           %ld steps, checkpoint, %ld more, against %ld straight\n",
+           steps_a, steps_b, steps_a + steps_b);
 
     /* One format per process. The engine opens once and sync_config()
      * refuses a format change, so a loop over all three would fail on
