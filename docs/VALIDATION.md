@@ -1895,3 +1895,212 @@ card: this is parcel work and those belong to integration. The
 binary256 path through the packaging layer was checked by hand (the
 run quoted above) rather than by a committed gate. Nothing touched
 XRT, `--artifact` or `cft://`.
+
+---
+
+## 2026-09-10 - Parcel D: is a custom integrator reachable from REBOUND's Python layer? Yes, for one line of loader
+
+The host note at the top of this file does not hold for this entry.
+The mechanism under test is POSIX dynamic linking, so it was measured
+in the WSL distro (Ubuntu 22.04, gcc 11.4.0, CPython 3.10.12) as well
+as on the Windows host (Miniconda CPython 3.12.9, MSYS2 mingw64 gcc).
+Two REBOUND builds were used: the pinned clone at bdfda4bd, built here
+as a CPython extension module the way `setup.py` does, and - to be sure
+the result is not an artefact of a hand build - the **official PyPI
+wheels** for rebound 5.1.1, which are at githash 33549d1d. Every claim
+below was reproduced on both. No card, no XRT. (The local build reports
+`githash b0c25d43`, setup.py's hard-coded fallback: the sources were
+copied out of the verified clone at bdfda4bd into the WSL filesystem
+without their `.git`, so setup.py's `git rev-parse` had nothing to read.
+The bytes are the pinned ones; only the string is the fallback.)
+
+**The question.** `reb_simulation_set_integrator(r, name)` takes a
+string, so a Python user might reach a registered C integrator with
+nothing but a `ctypes.CDLL`. Parcel A's integrator did not exist while
+this ran, so the experiments used a probe integrator written for the
+purpose: a drift-only `step` (`x += v*dt`), a two-field state
+(`nsteps`, `scale`) with a `field_descriptor_list`, a process-wide step
+counter readable from Python, and registration from the library's
+constructor. It is not IAS15 and is not meant to be; the load-bearing
+question is reachability.
+
+**The Python side does not stand in the way.** `Simulation.__setattr__`
+(rebound/simulation.py) lowercases the string, takes five WHFast/SABA
+shortcuts, and otherwise passes it to
+`clibrebound.reb_simulation_set_integrator` unmodified. There is no
+enum and no list to extend.
+
+**The one obstacle is symbol scope, and only on POSIX.**
+`rebound/__init__.py` loads librebound with `cdll.LoadLibrary`, i.e.
+`RTLD_LOCAL`, so:
+
+    >>> import rebound, ctypes
+    >>> ctypes.CDLL("/tmp/parcelD/libstubint_unlinked.so")
+    OSError: /tmp/parcelD/libstubint_unlinked.so: undefined symbol: reb_integrator_register
+
+Re-opening the same file with `RTLD_GLOBAL` promotes the mapping
+already in the process rather than making a second copy - the address
+of `reb_integrator_configurations_custom` read through the promoted
+handle and through `rebound.clibrebound` was the same, `0x7f9e7f53a090`
+- and the library then loads and registers:
+
+    ctypes.CDLL(rebound.__libpath__, mode=ctypes.RTLD_GLOBAL)
+    ctypes.CDLL(".../libstubint_unlinked.so")      # cftstub_registered = 1
+    sim.integrator = "stub_cft"                    # -> 'stub_cft'
+
+Linking the library directly against the extension module works too and
+needs no promotion, but records an absolute path in `DT_NEEDED` (the
+module carries no SONAME), which ties the build to one install.
+
+**On Windows nothing is needed.** The `.pyd` exports
+`reb_integrator_register` and `reb_simulation_set_integrator`
+(`objdump -p`; the data symbol `reb_integrator_configurations_custom`
+is not exported, and does not need to be, because both the write and
+the lookup happen inside the DLL). A MinGW DLL that links against
+`librebound.cp312-win_amd64.pyd` binds to the module Python has already
+loaded, and a plain `ctypes.CDLL` registers. Full round trip on the
+Windows host against the official wheel: `sim.integrator -> stub_cft`,
+`t = 1.0 y = 1.0` after four drift steps of `dt = 0.25` with `vy = 1`,
+`steps_total = 4`, an archive written (4,869 bytes) and read back with
+`t = 2.0 integrator = stub_cft nsteps = 8`.
+
+**Everything else in REBOUND's Python layer then works untouched**,
+because that layer drives the integrator through the registered
+`struct reb_integrator`. Measured: `sim.integrate()` calls `step` (the
+process counter reached 4 for `integrate(1.0)` at `dt = 0.25`);
+`sim.integrator.nsteps` read 4; `sim.integrator.scale = 2.0` wrote
+through to the C state and the next four steps moved the particle twice
+as far (y = 1.0 -> 3.0, as predicted); `repr(sim.integrator)` printed
+`name=stub_cft, nsteps=4, scale=1.0`; `sim.integrator.__doc__` was
+generated from the C documentation string and the field documentation;
+`sim.status()` reported `Selected integrator: stub_cft`. An
+unregistered name is a clean `RuntimeError: Integrator not found.` and
+leaves the simulation on `ias15`.
+
+**Registration from Python alone also works**, and is worth recording
+because it removes any need for the library to resolve a REBOUND symbol
+at all: `rebound.clibrebound.reb_integrator_register` with
+`argtypes = [rebound.integrator.Integrator, c_char_p]` passes the
+64-byte struct by value correctly (`ctypes.sizeof(Integrator)` is 64,
+as C computes), and `sim.integrator = "stub_py"` then ran the step.
+
+**What the Simulationarchive does.** With the library loaded, a
+five-snapshot archive written by `sim.save_to_file(fn, step=2)` was
+read back with `rebound.Simulation(fn)` and with
+`rebound.Simulationarchive(fn)`: `integrator = stub_cft` in every
+snapshot and `nsteps` 0, 2, 4, 6, 8 across them - the custom
+integrator's own fields, restored through the Python API. The file
+contains the names `integrator.name`, `stub_cft`,
+`integrator.stub_cft.nsteps`, `integrator.stub_cft.scale`.
+
+**A failure, and it contradicts the roadmap's summary.** Reading that
+same archive in a process where the integrator is *not* registered:
+
+    RuntimeWarning: The binary file seems to be corrupted. An attempt has been made
+    to read the uncorrupted parts of it.
+    integrator after load: ias15
+    t = 2.0 N = 2 dt = 0.25   p1 = 1.0 2.0 1.0
+    process_messages(): RuntimeError : Integrator not found.
+
+The binary64 state is recovered correctly, which is what the roadmap
+wants, but not by the "warn and seek past it" path. What happens is
+that `reb_simulation_set_integrator` fails, `r->integrator.name` stays
+`ias15`, and the next field - prefixed `integrator.stub_cft.` - trips
+the prefix check in binarydata.c, which sets
+`REB_BINARYDATA_WARNING_CORRUPTFILE` and does `goto finish_fields`,
+abandoning the rest of the snapshot. The state survives only because
+the integrator's fields are written last. Two consequences worth
+carrying into parcel B: the graceful `REB_FIELD_NOT_FOUND` seek applies
+to simulation-level names, **not** to `integrator.<name>.*` names of an
+integrator the reader does not have; and the `Integrator not found.`
+error is left queued in `r->messages`, because the file-load path in
+simulation.py only decodes the warning bitmask and never drains the
+queue - so it is raised by the *next* call that runs
+`process_messages()`. In this run that was a later
+`sim.integrator = "stub_cft"` which had itself succeeded:
+
+    RuntimeError: Integrator not found.        <- from the load, one statement later
+
+`REB_BINARYDATA_WARNING_CUSTOM_INTEGRATOR` is declared in binarydata.h
+and printed for in `reb_binarydata_process_warnings`, but no line in
+REBOUND sets that bit. The friendly message the roadmap quotes is dead
+code at bdfda4bd.
+
+Its advice - set the integrator after loading - was tried anyway, and
+half works. Draining the stale message and then assigning the name
+succeeds, but `set_integrator` calls `create()`, so the integrator's own
+state is fresh: `nsteps` read 0 where the archive held 8, with
+`t = 2.0` and `p1.y = 2.0` intact. Load the library before opening the
+archive.
+
+**A second failure, upstream, and it hangs.** The first probe run of
+this campaign never returned. `reb_integrator_register` (src/rebound.c)
+scans the existing registrations with
+
+    while(reb_integrator_configurations_custom[N].name){
+        N++;
+        if (strcmp(reb_integrator_configurations_custom[N].name, name)==0){
+
+which increments before testing and so calls `strcmp` on the `{0}`
+terminator's NULL `name`. Reduced to a standalone C program against the
+same library, the second `reb_integrator_register` in a process never
+returns (`timeout 10` -> exit 124), in C as in Python. The loop shape
+compiled on its own says why:
+
+    -O0 : [SIGSEGV -- dereferenced the NULL terminator, as written]
+    -O2 : LOOP DID NOT TERMINATE (N reached 5000001)
+    -O3 : LOOP DID NOT TERMINATE (N reached 5000001)
+
+gcc takes `strcmp`'s `nonnull` attribute to mean the terminator test
+can never be false and deletes the loop's exit. REBOUND's wheels are
+built `-O3`. So: **one custom registration per process**, and a stale
+second copy of the library on `sys.path` is a hang, not an error.
+Registering a name that collides with a built-in is by contrast clean -
+`Error! Integrator name must be unique but name already exists.`, and a
+following `reb_integrator_register(ig, "ias15_cft")` then registered
+and selected normally (`integrator is now: ias15_cft`). Loading the
+same file twice is a no-op, as `dlopen`/`LoadLibrary` refcount without
+re-running the constructor: checked, `sim.integrator -> stub_cft`, no
+hang.
+
+**A third, smaller edge.** `__setattr__` lowercases the name, so a
+registered name with an upper-case letter is unreachable from Python:
+registering `Stub_CFT` and assigning `"Stub_CFT"` gives
+`RuntimeError: Integrator not found.` `ias15_cft` is safe.
+
+**Packaging, which turned out to be the easy part.** The official wheel
+installs `librebound.<abi>.so` (or `.pyd`) and a `src/` directory
+holding REBOUND's headers side by side in site-packages, so a user who
+has run `pip install rebound` already has both halves needed to compile
+a library against the exact REBOUND that will call it. No source
+checkout. `cft_rebound.include_dir()` is
+`os.path.dirname(rebound.__libpath__) + "/src"`, verified present on
+both platforms. Every function such a library needs -
+`reb_integrator_register`, `reb_simulation_set_integrator`,
+`reb_simulation_update_acceleration`, `reb_simulation_error`,
+`reb_simulation_warning`, `reb_integrators_registered` - is `REB_API`,
+so all of them are exported on Windows as well.
+
+**What was shipped, and what it was run against.**
+`python/cft_rebound.py` (the loader: `load`, `registered`,
+`include_dir`, `library_path`, and a `__main__` that prints all three)
+and `python/example_equivalence.py` (the binary64 equivalence gate from
+Python: the same data/problems/kepler.txt initial conditions, the same
+fixed step, REBOUND's `ias15` against the registered integrator,
+printed as exact hex floats). Both were run on Linux and on Windows
+against the official wheel. The example's identical path -
+`--integrator ias15`, 20 steps of dt = 0.05 - gave
+`IDENTICAL: 13 values, bit for bit`, and the same thirteen hex floats
+on both hosts (`p1.vx -0x1.08ae6d431ae13p+0`,
+`p1.vy 0x1.06f58990c416ap-4`). Its differing path, against the
+drift-only probe, gave `DIFFERS: 8 of 13 values, largest absolute
+difference 7.074e-01`, which is what a drift-only integrator should
+give and is the branch working, not a result about arithmetic.
+
+**Not tested, and stated so.** Parcel A's `ias15_cft` (it does not
+exist yet), so the example has never been run against the integrator it
+is written for; macOS; anything on the card; and any archive carrying
+parcel B's wide `cft_` fields. This repository also has no
+shared-library target yet - `src/ias15_cft.c` is a program with a
+`main` - so step 2 of docs/PYTHON.md's install order is owed by
+packaging, not by Python.

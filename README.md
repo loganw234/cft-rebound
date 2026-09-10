@@ -143,6 +143,11 @@ Nothing is vendored by hand.
     docs/HORIZON.md          when binary64 stops being enough, measured
     docs/HARDWARE.md         the resident design, its break-even, what is unverified
     docs/INTEGRATORS.md      which other REBOUND integrators port well, ranked
+    docs/PYTHON.md           reaching the integrator from rebound.Simulation, and
+                             the four sharp edges that come with it
+    python/cft_rebound.py    the loader: puts a registered integrator within reach
+                             of REBOUND's Python package
+    python/example_equivalence.py  the binary64 equivalence gate, from Python
     ROADMAP.md               what is left before this is usable, and the two
                              REBOUND extension points that make it cheap
 
