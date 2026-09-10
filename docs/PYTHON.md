@@ -28,8 +28,9 @@ through untouched:
     clibrebound.reb_simulation_set_integrator(byref(self), c_char_p(value.encode("ascii")))
     self.process_messages()
 
-`reb_simulation_set_integrator` (src/simulation.c) tries the built-ins
-and then walks `reb_integrator_configurations_custom`, the global that
+`reb_simulation_set_integrator` (REBOUND's own src/simulation.c, in the
+pinned clone) tries the built-ins and then walks
+`reb_integrator_configurations_custom`, the global that
 `reb_integrator_register` writes. So the question was never about
 Python. It was whether a separately loaded library's registration lands
 in **that** global - the one belonging to the librebound the Python
@@ -43,8 +44,13 @@ with a probe integrator:
 - `sim.integrator` reads back the registered name;
 - `sim.integrate()` and `sim.steps()` call your `step`;
 - `sim.integrator.<field>` reads and writes your state through your
-  `field_descriptor_list` - `sim.integrator.epsilon = 0.0` is how a
-  Python user turns off adaptive stepping;
+  `field_descriptor_list`, by the name the descriptor gives - so for
+  REBOUND's own ias15, `sim.integrator.epsilon = 0.0` is how a Python
+  user turns off adaptive stepping. **Not for this integrator:** every
+  name in `cft_ias15_field_descriptor_list` is `cft_`-prefixed, so the
+  spelling above raises rather than resolving, and
+  `cft_rebound.configure()` is the supported way in. Whether
+  `sim.integrator.cft_epsilon = 0.0` works has not been run;
 - `repr(sim.integrator)` prints every field, and `sim.integrator.__doc__`
   is generated from your `documentation` string and your field
   documentation;
@@ -73,14 +79,17 @@ handles is the same - and our library then resolves against it:
 
 That is `cft_rebound.load()`, and it is the entire Python-side cost.
 
-**On Windows there is no obstacle at all.** REBOUND ships librebound as
-a `.pyd` whose API is `__declspec(dllexport)`, so a DLL that imports
-`reb_integrator_register` binds to the module already loaded in the
-process, and a plain `ctypes.CDLL(path)` is enough. The price is that
-the DLL's import table names one exact file
-(`librebound.cp312-win_amd64.pyd`), so a Windows build is tied to the
-Python minor version it was linked against. The POSIX library, which
-links against nothing, is not.
+**On Windows this particular obstacle does not arise** - and a
+different one does, which is why there is no Windows build. REBOUND
+ships librebound as a `.pyd` whose API is `__declspec(dllexport)`, so a
+DLL that imports `reb_integrator_register` binds to the module already
+loaded in the process, and a plain `ctypes.CDLL(path)` is enough: no
+`RTLD_GLOBAL` dance. But a DLL may not carry undefined symbols, so it
+has to LINK against `rebound.__libpath__` rather than leave REBOUND's
+symbols to the loader, and its import table then names one exact file
+(`librebound.cp312-win_amd64.pyd`), tying the build to the Python minor
+version. The POSIX library, which links against nothing, is not. See
+"Windows is not done" below.
 
 ## What a user installs, in what order
 
@@ -142,9 +151,11 @@ known ratio.
    `sim.integrator`.
 
 4. **A way to configure it, which did not exist.** Selecting the
-   integrator always worked. The next line did not: REBOUND generates
-   `sim.integrator.epsilon` and its siblings from structs it knows, and
-   it does not know `struct cft_ias15_state`, so Python could reach
+   integrator always worked. The next line did not: `sim.integrator`
+   resolves a field by the name its descriptor gives, and ours are all
+   `cft_`-prefixed, so `sim.integrator.epsilon` - the spelling every
+   REBOUND example uses - does not resolve, and nothing in REBOUND's
+   Python layer knows to try `cft_epsilon`. Python could reach
    binary64 with the default step control and nothing else - the one
    thing this repository is for was unreachable from Python.
    `cft_ias15_configure()` takes format, epsilon and max_iter by value,
@@ -176,8 +187,8 @@ Python: `sim.integrator = "Stub_CFT"` raises
 `RuntimeError: Integrator not found.` `ias15_cft` is safe.
 
 **Only one custom integrator per process.** The scan in
-`reb_integrator_register` (src/rebound.c) increments its index before
-testing, so the second registration in a process calls
+`reb_integrator_register` (REBOUND's own src/rebound.c) increments its
+index before testing, so the second registration in a process calls
 `strcmp(NULL, name)` on the list's `{0}` terminator. At `-O0` that
 segfaults; at `-O2` and above - which is how every REBOUND wheel is
 built - gcc infers from `strcmp`'s `nonnull` attribute that the
