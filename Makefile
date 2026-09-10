@@ -80,6 +80,18 @@ endif
 # XILINX_XRT, so that is the signal. XRT=0 turns it off for a
 # software-only libcft.a in a shell that happens to have XRT sourced;
 # LIBS= still overrides the lot.
+# The shared library for Python. POSIX only: a Windows DLL may not
+# carry undefined symbols, so it would have to link against the
+# wheel's librebound rather than leave REBOUND's symbols to the
+# loader, and that is a different rule - see docs/PYTHON.md.
+ifeq ($(shell uname -s 2>/dev/null),Darwin)
+  SHLIB   := libcft_ias15.dylib
+  SHFLAGS := -dynamiclib -Wl,-install_name,@rpath/libcft_ias15.dylib
+else
+  SHLIB   := libcft_ias15.so
+  SHFLAGS := -shared
+endif
+
 ifneq ($(OS),Windows_NT)
   ifneq ($(XILINX_XRT),)
     XRT ?= 1
@@ -177,6 +189,80 @@ $(B)/cft_archive.o: src/cft_archive.c src/cft_archive.h src/cft_ias15_fields.h s
 # lib directory.
 $(B)/libcft_ias15.a: $(DROPIN_OBJ) $(B)/cft_archive.o
 	ar rcs $@ $^
+
+# ---- the same library as a shared object, for Python ----------------
+# The .a and the .so are not the same objects: -fPIC, and the .so also
+# carries src/cft_ias15_shared.c, whose constructor registers the
+# integrator at dlopen time. A C caller linking the archive calls
+# cft_ias15_register() itself and must not get a constructor doing it
+# behind their back.
+PIC_OBJ := $(B)/pic/ias15_cft_lib.o $(B)/pic/reb_integrator_cft.o \
+           $(B)/pic/cft_ias15_fields.o $(B)/pic/cft_archive.o \
+           $(B)/pic/cft_ias15_shared.o
+PICFLAGS := $(CSTD) $(CFLAGS) $(WARN) -fPIC -Isrc -I$(CFT)/include -I$(REB)
+
+$(B)/pic/ias15_cft_lib.o: src/ias15_cft.c src/ias15_constants.h src/ias15_engine.h
+	@mkdir -p $(B)/pic
+	$(CC) -c $(PICFLAGS) -DIAS15_CFT_LIBRARY -o $@ src/ias15_cft.c
+
+$(B)/pic/reb_integrator_cft.o: src/reb_integrator_cft.c src/cft_ias15.h src/ias15_engine.h
+	@mkdir -p $(B)/pic
+	$(CC) -c $(PICFLAGS) -o $@ src/reb_integrator_cft.c
+
+$(B)/pic/cft_ias15_fields.o: src/cft_ias15_fields.c src/cft_ias15_fields.h src/cft_ias15.h
+	@mkdir -p $(B)/pic
+	$(CC) -c $(PICFLAGS) -o $@ src/cft_ias15_fields.c
+
+$(B)/pic/cft_archive.o: src/cft_archive.c src/cft_archive.h src/cft_ias15_fields.h src/cft_ias15_state.h src/cft_ias15.h
+	@mkdir -p $(B)/pic
+	$(CC) -c $(PICFLAGS) -o $@ src/cft_archive.c
+
+$(B)/pic/cft_ias15_shared.o: src/cft_ias15_shared.c src/cft_ias15.h
+	@mkdir -p $(B)/pic
+	$(CC) -c $(PICFLAGS) -o $@ src/cft_ias15_shared.c
+
+# REBOUND's symbols are deliberately NOT linked: the caller's process
+# already has librebound loaded and python/cft_rebound.py promotes it
+# to RTLD_GLOBAL before opening this. Linking a second copy would give
+# a second integrator list and a name that can never be selected.
+$(B)/$(SHLIB): $(PIC_OBJ) $(CFTLIB)
+	$(CC) $(SHFLAGS) -o $@ $(PIC_OBJ) $(CFTLIB) $(LIBS)
+
+.PHONY: python-lib check-python
+python-lib: $(B)/$(SHLIB) check-rebound-match
+	@echo
+	@echo "built $(B)/$(SHLIB). From Python:"
+	@echo "    import cft_rebound"
+	@echo "    cft_rebound.load('$(CURDIR)/$(B)/$(SHLIB)')"
+
+# The library is compiled against the pinned REBOUND headers and is
+# loaded into a process running the WHEEL's REBOUND, so the two must be
+# the same source or struct reb_simulation is laid out differently on
+# each side of the call and nothing says so. They are identical for
+# rebound 5.1.1 and the pinned bdfda4bd; this refuses to build a
+# library that would be quietly wrong if that ever stops being true.
+.PHONY: check-rebound-match
+check-rebound-match:
+	@w=`$(PYTHON) -c 'import rebound,os;print(os.path.dirname(rebound.__libpath__))' 2>/dev/null`; \
+	if [ -z "$$w" ]; then \
+	    echo "check-rebound-match: no rebound wheel importable by $(PYTHON); skipping the comparison"; \
+	elif [ ! -f "$$w/src/rebound.h" ]; then \
+	    echo "check-rebound-match: the wheel at $$w ships no src/rebound.h; cannot compare"; \
+	elif cmp -s $(REB)/rebound.h "$$w/src/rebound.h"; then \
+	    echo "check-rebound-match: the pinned REBOUND and the installed wheel are the same headers"; \
+	else \
+	    echo "check-rebound-match: REFUSING - $(REB)/rebound.h differs from the wheel's"; \
+	    echo "  $$w/src/rebound.h"; \
+	    echo "  A library built against one and loaded into the other shares a struct"; \
+	    echo "  layout it may not have. Re-pin third_party/MANIFEST to the wheel's"; \
+	    echo "  REBOUND, or install the wheel matching the pin."; \
+	    exit 1; \
+	fi
+
+# The Python gate: REBOUND's own ias15 against the registered one,
+# from Python, on the same problem and the same fixed step.
+check-python: $(B)/$(SHLIB)
+	$(PYTHON) python/example_equivalence.py --library $(CURDIR)/$(B)/$(SHLIB)
 
 .PHONY: dropin
 dropin: $(B)/libcft_ias15.a $(B)/check_dropin$(EXE)
