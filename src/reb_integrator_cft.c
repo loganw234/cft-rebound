@@ -1,0 +1,452 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later
+ * Copyright 2026 the cft-rebound contributors.
+ *
+ * The REBOUND integrator shim: struct reb_integrator over the IAS15
+ * engine of src/ias15_cft.c.
+ *
+ * One step is
+ *
+ *   1. promote r->particles into the wide format - exact, because
+ *      binary64 is a subset of every wider one - but only where they
+ *      changed under us, so that a wide run is not truncated back to
+ *      binary64 once a step;
+ *   2. one IAS15 step through the engine, which is REBOUND's
+ *      reb_integrator_ias15_step_try repeated until a step is accepted;
+ *   3. round the wide result back into r->particles and advance r->t,
+ *      r->dt and r->dt_last_done the way REBOUND does.
+ *
+ * Nothing here performs an arithmetic operation on a coordinate. The
+ * only floating-point work is 754-2019 5.4.2 convertFormat, inside the
+ * engine; the comparisons below are memcmp on bit patterns, which is
+ * why a signalling value or a -0 cannot be misread as "unchanged".
+ *
+ * THE ENGINE IS ONE GLOBAL INSTANCE. Every buffer in ias15_cft.c is a
+ * file-scope static. Two simulations therefore cannot use this
+ * integrator at the same time, and a second one is refused with a
+ * message that says so. A simulation that has been freed releases the
+ * engine, and the next one may adopt it if its format, epsilon,
+ * max_iter and arithmetic agree and its N fits the reserved capacity.
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdarg.h>
+
+#include "rebound.h"
+#include "cft.h"
+#include "cft_ias15.h"
+#include "ias15_engine.h"
+
+/* ------------------------------------------------------------------ */
+/* Refusals                                                            */
+/* ------------------------------------------------------------------ */
+/* A refusal is a REBOUND error message plus REB_STATUS_GENERIC_ERROR,
+ * which stops reb_simulation_steps() and reb_simulation_integrate()
+ * at the top of their loops. The user's process is not killed and the
+ * simulation is left exactly as it was: nothing was computed. */
+static void refuse(struct reb_simulation *r, const char *fmt, ...){
+    char buf[512];
+    va_list ap; va_start(ap, fmt);
+    vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    reb_simulation_error(r, buf);
+    if (r) r->status = REB_STATUS_GENERIC_ERROR;
+}
+
+/* ------------------------------------------------------------------ */
+/* Process-wide settings and the binary64 view                         */
+/* ------------------------------------------------------------------ */
+static size_t      reserve_N;          /* cft_ias15_reserve(); 0 = the N of the first step */
+static const char *artifact_path;
+static int         pc_tol_shift = -1;
+
+static struct cft_ias15_state *engine_owner;   /* the state the engine is bound to */
+static int    engine_ready;                    /* the engine has been allocated */
+static int    engine_fmt;
+static double engine_eps;
+static int    engine_max_iter;
+static int    engine_arith_fma;
+
+/* the binary64 view we last wrote into r->particles, r->t and r->dt.
+ * If REBOUND or the user has changed one of them since, that value is
+ * theirs and is promoted back in; if not, the wide state is the truth
+ * and is left alone. At CFT_FP64 both branches are the same bits. */
+static double *view_x, *view_v;
+static size_t  view_N_allocated;
+static size_t  view_N;
+static double  view_t, view_dt, view_dt_last;
+static int     view_valid;
+
+static int same_bits(const double *a, const double *b, size_t n){
+    return memcmp(a, b, n * sizeof(double)) == 0;
+}
+
+static void view_alloc(size_t n){
+    if (n <= view_N_allocated && view_x) return;
+    free(view_x); free(view_v);
+    view_x = malloc(3 * n * sizeof(double));
+    view_v = malloc(3 * n * sizeof(double));
+    if (!view_x || !view_v){ fprintf(stderr, "ias15_cft: out of memory\n"); exit(1); }
+    view_N_allocated = n;
+}
+
+/* ------------------------------------------------------------------ */
+/* What this integrator does not do                                    */
+/* ------------------------------------------------------------------ */
+static int supported(struct reb_simulation *r, struct cft_ias15_state *st){
+    if (!st){ refuse(r, "ias15_cft: no integrator state (was reb_simulation_set_integrator called?)"); return 0; }
+
+    /* The simulation */
+    if (r->N_var || r->particles_var){
+        refuse(r, "ias15_cft: variational particles are not supported (r->N_var = %zu). "
+                  "The wide state carries the real particles only.", r->N_var); return 0; }
+    if (r->additional_forces){
+        refuse(r, "ias15_cft: r->additional_forces is not supported. The engine issues "
+                  "REBOUND's basic pairwise gravity and nothing else."); return 0; }
+    if (r->force_is_velocity_dependent){
+        refuse(r, "ias15_cft: velocity-dependent forces are not supported "
+                  "(r->force_is_velocity_dependent = 1)."); return 0; }
+    if (r->gravity != REB_GRAVITY_BASIC){
+        refuse(r, "ias15_cft: only REB_GRAVITY_BASIC is supported, r->gravity is %d "
+                  "(the tree code, the compensated and the Jacobi modules and a custom "
+                  "gravity routine all are not).", (int)r->gravity); return 0; }
+    if (r->softening != 0.0){
+        refuse(r, "ias15_cft: non-zero softening is not supported (r->softening = %g). "
+                  "The engine's pair term adds a softening of exactly +0.", r->softening); return 0; }
+    if (r->collision != REB_COLLISION_NONE){
+        refuse(r, "ias15_cft: collision detection is not supported (r->collision = %d). "
+                  "A collision removes a particle mid-run, which the wide state cannot "
+                  "follow in this build.", (int)r->collision); return 0; }
+    if (r->N_ghost_x || r->N_ghost_y || r->N_ghost_z){
+        refuse(r, "ias15_cft: ghost boxes are not supported (N_ghost = %d, %d, %d). "
+                  "The engine's pair term uses a ghost-box offset of exactly +0.",
+                  r->N_ghost_x, r->N_ghost_y, r->N_ghost_z); return 0; }
+    if (r->boundary != REB_BOUNDARY_NONE){
+        refuse(r, "ias15_cft: only REB_BOUNDARY_NONE is supported, r->boundary is %d.",
+               (int)r->boundary); return 0; }
+    if (r->map){
+        refuse(r, "ias15_cft: r->map (integrating a subset of the particles) is not "
+                  "supported."); return 0; }
+    if (r->N_active != (size_t)-1 && r->N_active != r->N){
+        refuse(r, "ias15_cft: test particles are not supported (r->N_active = %zu of "
+                  "%zu). Every particle in the engine's pair list is active.",
+               r->N_active, r->N); return 0; }
+    if (r->calculate_megno){
+        refuse(r, "ias15_cft: MEGNO is not supported; it needs variational particles."); return 0; }
+
+    /* The integrator's own settings */
+    if (st->E != 1){
+        refuse(r, "ias15_cft: state->E is %zu. An ensemble is E independent systems in "
+                  "one run and a reb_simulation is one system; use the standalone "
+                  "ias15_cft program for ensembles (docs/ENSEMBLE.md).", st->E); return 0; }
+    if (st->adaptive_mode != 2){
+        refuse(r, "ias15_cft: adaptive_mode %d is not implemented; only PRS23 (2), "
+                  "REBOUND's default since January 2024, is.", st->adaptive_mode); return 0; }
+    if (st->min_dt != 0.0){
+        refuse(r, "ias15_cft: min_dt is not implemented (min_dt = %g). The engine's step "
+                  "control issues the comparison against a min_dt of exactly 0, which is "
+                  "REBOUND's default; a floor would change the arithmetic.", st->min_dt); return 0; }
+    if (st->format != CFT_FP64 && st->format != CFT_FP128 && st->format != CFT_FP256){
+        refuse(r, "ias15_cft: format %d is not one of CFT_FP64 (%d), CFT_FP128 (%d) or "
+                  "CFT_FP256 (%d).", st->format, CFT_FP64, CFT_FP128, CFT_FP256); return 0; }
+    if (st->max_iter < 1){
+        refuse(r, "ias15_cft: max_iter = %d; REBOUND uses 12 and binary256 needs about "
+                  "22.", st->max_iter); return 0; }
+    return 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Binding the one engine to this simulation                           */
+/* ------------------------------------------------------------------ */
+static void publish_state(struct cft_ias15_state *st){
+    struct ias15_engine_view w;
+    ias15_engine_view(&w);
+    st->x0 = w.x0; st->v0 = w.v0; st->a0 = w.a0;
+    st->csx = w.csx; st->csv = w.csv; st->csa0 = w.csa0;
+    for (int m = 0; m < 7; m++){
+        st->g[m] = w.g[m]; st->b[m] = w.b[m]; st->e[m] = w.e[m];
+        st->br[m] = w.br[m]; st->er[m] = w.er[m]; st->csb[m] = w.csb[m];
+    }
+    st->n_elem = w.n_elem;
+    st->E = 1;
+    st->constants_digest = ias15_engine_constants_digest();
+}
+
+/* epsilon, max_iter and the arithmetic form may change between steps -
+ * the format may not. Applied on every step, so a user who edits the
+ * state gets what they asked for rather than what the first step saw. */
+static int sync_config(struct reb_simulation *r, struct cft_ias15_state *st){
+    if (st->format != engine_fmt){
+        refuse(r, "ias15_cft: this process opened the engine at %s and the format cannot "
+                  "be changed afterwards (the Gauss-Radau constants are derived at that "
+                  "format and every buffer is sized for its element width). Requested %s.",
+               cft_format_name((cft_format)engine_fmt), cft_format_name((cft_format)st->format));
+        return 0;
+    }
+    if (memcmp(&st->epsilon, &engine_eps, sizeof(double)) != 0){
+        if (ias15_engine_set_epsilon_f64(st->epsilon) != 0){
+            refuse(r, "ias15_cft: epsilon could not be set."); return 0; }
+        engine_eps = st->epsilon;
+    }
+    if (st->max_iter != engine_max_iter){ ias15_engine_set_max_iter(st->max_iter); engine_max_iter = st->max_iter; }
+    if (st->arith_fma != engine_arith_fma){ ias15_engine_set_arith_fma(st->arith_fma); engine_arith_fma = st->arith_fma; }
+    return 1;
+}
+
+static int bind_engine(struct reb_simulation *r, struct cft_ias15_state *st){
+    if (engine_owner == st) return sync_config(r, st);
+    if (engine_owner){
+        refuse(r, "ias15_cft: another simulation is already using this integrator. The "
+                  "engine in src/ias15_cft.c is one global instance (every buffer in it "
+                  "is a file-scope static), so one simulation may use ias15_cft at a "
+                  "time; free the other simulation first.");
+        return 0;
+    }
+    if (!engine_ready){
+        size_t cap = reserve_N > r->N ? reserve_N : r->N;
+        if (ias15_engine_open(st->format, artifact_path) != 0){
+            refuse(r, "ias15_cft: cft_open(%s) failed: %s",
+                   artifact_path ? artifact_path : "software backend", cft_last_error());
+            return 0;
+        }
+        int shift = pc_tol_shift;
+        if (shift < 0){
+            shift = (st->format == CFT_FP128) ? 113 - 53
+                  : (st->format == CFT_FP256) ? 237 - 53 : 0;
+        }
+        if (ias15_engine_alloc(cap, st->max_iter, st->arith_fma, 0, shift, 1) != 0){
+            refuse(r, "ias15_cft: the engine could not be allocated for %zu bodies.", cap);
+            return 0;
+        }
+        if (ias15_engine_set_epsilon_f64(st->epsilon) != 0){
+            refuse(r, "ias15_cft: epsilon could not be set."); return 0;
+        }
+        engine_ready = 1;
+        engine_fmt = st->format; engine_eps = st->epsilon;
+        engine_max_iter = st->max_iter; engine_arith_fma = st->arith_fma;
+    }else{
+        /* The engine outlives the simulation that opened it; a later one
+         * adopts it. sync_config decides what may still change. */
+        if (!sync_config(r, st)) return 0;
+    }
+    if (r->N > ias15_engine_capacity()){
+        refuse(r, "ias15_cft: %zu particles, but the engine was allocated for %zu. "
+                  "Several of the step's scratch vectors are sized at their first use, "
+                  "so call cft_ias15_reserve(N) before the first step.",
+               r->N, ias15_engine_capacity());
+        return 0;
+    }
+    if (ias15_engine_set_bodies(r->N) != 0){
+        refuse(r, "ias15_cft: the engine refused %zu bodies.", r->N); return 0; }
+    ias15_engine_reset_state();
+    view_alloc(ias15_engine_capacity());
+    view_N = r->N;
+    view_valid = 0;
+    engine_owner = st;
+    publish_state(st);
+    return 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* The step                                                            */
+/* ------------------------------------------------------------------ */
+static void cft_ias15_step(struct reb_simulation *r, void *p){
+    struct cft_ias15_state *st = p;
+
+    r->gravity_ignore_terms = REB_GRAVITY_IGNORE_TERMS_NONE;   /* as REBOUND's ias15 step does */
+
+    if (!supported(r, st)) return;
+
+    if (r->N == 0){                 /* REBOUND's own empty branch, verbatim */
+        r->t += r->dt;
+        r->dt_last_done = r->dt;
+        return;
+    }
+    if (!bind_engine(r, st)) return;
+
+    /* the body count changed under us: did_add_particle /
+     * will_remove_particle set view_valid to 0 and the state was
+     * invalidated there. Re-size and start the polynomial again. */
+    if (view_N != r->N){
+        if (r->N > ias15_engine_capacity()){
+            refuse(r, "ias15_cft: the simulation grew to %zu particles and the engine was "
+                      "allocated for %zu. Call cft_ias15_reserve(N) before the first step.",
+                   r->N, ias15_engine_capacity());
+            return;
+        }
+        if (ias15_engine_set_bodies(r->N) != 0){
+            refuse(r, "ias15_cft: the engine refused %zu bodies.", r->N); return; }
+        ias15_engine_reset_state();
+        view_N = r->N;
+        view_valid = 0;
+        publish_state(st);
+    }
+
+    const size_t N = r->N, N3 = 3 * N;
+
+    /* --- masses and G, every step: cheap, and a user may change them - */
+    {
+        double *m = malloc(N * sizeof(double));
+        if (!m){ refuse(r, "ias15_cft: out of memory"); return; }
+        for (size_t i = 0; i < N; i++) m[i] = r->particles[i].m;
+        ias15_engine_set_masses_f64(m);
+        free(m);
+        ias15_engine_set_G_f64(r->G);
+    }
+
+    /* --- the particles ------------------------------------------------
+     * The wide state is the truth. r->particles are re-promoted only if
+     * they differ, bit for bit, from the view this integrator last wrote
+     * into them - which happens on the first step, after a particle was
+     * added or removed, and whenever the user or a
+     * pre_timestep_modifications callback edited a coordinate. At
+     * CFT_FP64 the two paths are the same bits, so the equivalence gate
+     * cannot tell them apart; at CFT_FP128 and above, re-reading a view
+     * that nobody touched would truncate the run to binary64 once a
+     * step, which is exactly the mistake this guard exists to avoid. */
+    {
+        double *xs = malloc(N3 * sizeof(double));
+        double *vs = malloc(N3 * sizeof(double));
+        if (!xs || !vs){ free(xs); free(vs); refuse(r, "ias15_cft: out of memory"); return; }
+        for (size_t i = 0; i < N; i++){
+            xs[3*i] = r->particles[i].x; xs[3*i+1] = r->particles[i].y; xs[3*i+2] = r->particles[i].z;
+            vs[3*i] = r->particles[i].vx; vs[3*i+1] = r->particles[i].vy; vs[3*i+2] = r->particles[i].vz;
+        }
+        if (!view_valid || !same_bits(xs, view_x, N3) || !same_bits(vs, view_v, N3))
+            ias15_engine_put_xv_f64(xs, vs);
+        free(xs); free(vs);
+    }
+
+    /* --- the clock and the step ---------------------------------------
+     * r->dt is REBOUND's, and the driver rewrites it to land exactly on
+     * tmax when exact_finish_time is 1; r->dt_last_done is reset to 0 at
+     * the top of every reb_simulation_integrate(), which is what tells
+     * step_try not to predict e and b after a first-attempt rejection.
+     * Both are adopted whenever they differ from what we last wrote. */
+    if (!view_valid || memcmp(&r->t, &view_t, sizeof(double)) != 0)
+        ias15_engine_put_t_f64(r->t);
+    if (!view_valid || memcmp(&r->dt, &view_dt, sizeof(double)) != 0)
+        ias15_engine_put_dt_f64(r->dt);
+    if (!view_valid || memcmp(&r->dt_last_done, &view_dt_last, sizeof(double)) != 0)
+        ias15_engine_put_dt_last_f64(r->dt_last_done);
+
+    /* --- one accepted step -------------------------------------------- */
+    double dt_done = 0;
+    ias15_engine_step(&dt_done);
+
+    /* --- the binary64 view -------------------------------------------- */
+    {
+        double *as = malloc(N3 * sizeof(double));
+        if (!as){ refuse(r, "ias15_cft: out of memory"); return; }
+        ias15_engine_get_xv_f64(view_x, view_v);
+        ias15_engine_get_a_f64(as);
+        for (size_t i = 0; i < N; i++){
+            r->particles[i].x = view_x[3*i]; r->particles[i].y = view_x[3*i+1]; r->particles[i].z = view_x[3*i+2];
+            r->particles[i].vx = view_v[3*i]; r->particles[i].vy = view_v[3*i+1]; r->particles[i].vz = view_v[3*i+2];
+            r->particles[i].ax = as[3*i]; r->particles[i].ay = as[3*i+1]; r->particles[i].az = as[3*i+2];
+        }
+        free(as);
+    }
+    r->t = ias15_engine_get_t_f64();
+    r->dt = ias15_engine_get_dt_f64();
+    r->dt_last_done = dt_done;
+    view_t = r->t; view_dt = r->dt; view_dt_last = r->dt_last_done;
+    view_valid = 1;
+    publish_state(st);
+}
+
+/* ------------------------------------------------------------------ */
+/* create / free / the particle hooks                                  */
+/* ------------------------------------------------------------------ */
+/* REBOUND's create() takes no arguments - it cannot see r, and so it
+ * cannot see r->N. Everything that depends on the body count is
+ * therefore allocated at the first step, which is the first moment the
+ * particle count is knowable. */
+static void *cft_ias15_create(void){
+    struct cft_ias15_state *st = calloc(1, sizeof *st);
+    if (!st) return NULL;
+    st->epsilon = 1e-9;              /* REBOUND's default */
+    st->min_dt = 0.0;
+    st->adaptive_mode = 2;           /* PRS23 */
+    st->format = CFT_FP64;
+    st->max_iter = 12;               /* REBOUND's hard-coded 12 */
+    st->arith_fma = 0;               /* REBOUND's sequence of roundings */
+    st->E = 1;
+    snprintf(st->cft_abi, sizeof st->cft_abi, "%u.%u",
+             (unsigned)(cft_abi_version() >> 16), (unsigned)(cft_abi_version() & 0xffff));
+    return st;
+}
+
+static void cft_ias15_free(void *p){
+    struct cft_ias15_state *st = p;
+    if (!st) return;
+    if (engine_owner == st){
+        /* The engine's buffers are the process's and stay allocated;
+         * releasing ownership is what lets the next simulation adopt
+         * them. The state's blobs point into them and must not be
+         * freed here. */
+        engine_owner = NULL;
+        view_valid = 0;
+        view_N = 0;
+    }
+    free(st);
+}
+
+static void cft_ias15_did_add_particle(struct reb_simulation *r){
+    (void)r;
+    view_valid = 0;      /* the next step re-promotes and, if N changed, resizes */
+}
+
+static void cft_ias15_will_remove_particle(struct reb_simulation *r, size_t index){
+    (void)r; (void)index;
+    view_valid = 0;
+}
+
+const struct reb_integrator cft_ias15_integrator = {
+    .documentation =
+        "IAS15 with every floating-point operation issued through libcft, the "
+        "IEEE 754-2019 binary32/64/128/256 library of the cft-fp256 project, so "
+        "that the same integrator runs at binary64, binary128 and binary256 with "
+        "the same bits everywhere.\n\n"
+        "At binary64 it is REBOUND's own IAS15 bit for bit: the sequence of "
+        "roundings is integrator_ias15.c's, operation by operation. The wide "
+        "state lives in struct cft_ias15_state; r->particles are the binary64 "
+        "view of it, correctly rounded after every step, so every REBOUND "
+        "output, callback and visualisation works unchanged.\n\n"
+        "Set state->format to CFT_FP128 or CFT_FP256 for a wide run. Additional "
+        "forces, velocity-dependent forces, collisions, ghost boxes, boundaries, "
+        "gravity modules other than REB_GRAVITY_BASIC, non-zero softening, test "
+        "particles, r->map and variational particles are refused rather than "
+        "approximated.",
+    .step = cft_ias15_step,
+    .synchronize = NULL,       /* IAS15 is not a DKD scheme; REBOUND's own is NULL too */
+    .create = cft_ias15_create,
+    .free = cft_ias15_free,
+    .did_add_particle = cft_ias15_did_add_particle,
+    .will_remove_particle = cft_ias15_will_remove_particle,
+    .field_descriptor_list = cft_ias15_field_descriptor_list,
+};
+
+/* ------------------------------------------------------------------ */
+/* The registration and the process-wide settings                      */
+/* ------------------------------------------------------------------ */
+static char registered_name[64];
+
+void cft_ias15_register(const char *name){
+    if (!name) name = "ias15_cft";
+    if (registered_name[0] && strcmp(registered_name, name) == 0) return;   /* already done */
+    reb_integrator_register(cft_ias15_integrator, name);
+    if (!registered_name[0]) snprintf(registered_name, sizeof registered_name, "%s", name);
+}
+
+struct cft_ias15_state *cft_ias15_get_state(struct reb_simulation *r){
+    if (!r || !r->integrator.name) return NULL;
+    if (r->integrator.callbacks.step != cft_ias15_step) return NULL;
+    return r->integrator.state;
+}
+
+void cft_ias15_reserve(size_t n){ reserve_N = n; }
+void cft_ias15_set_artifact(const char *path){ artifact_path = path; }
+void cft_ias15_set_pc_tol_shift(int shift){ pc_tol_shift = shift; }
+uint32_t cft_ias15_flags_seen(void){ return ias15_engine_is_open() ? ias15_engine_flags() : 0; }
+unsigned long long cft_ias15_library_calls(void){ return ias15_engine_is_open() ? ias15_engine_calls() : 0; }
