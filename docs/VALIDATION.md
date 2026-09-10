@@ -2216,3 +2216,83 @@ newly reachable and has not been run through a gate yet; macOS; and a
 checkpoint written by one process and read by another, which is a
 stronger test than `gate_real`'s single process and is what a real long
 run does.
+
+
+---
+
+## 26. `make install` shipped the slow path and not the fast one
+
+**2026-09-10, the same integration pass. Windows, mingw64, staged into
+a temporary prefix.**
+
+**What was wrong.** `make install` put `cft_rebound.h` and
+`libcft_rebound.a` on the system: the subprocess API, where
+`cft_rebound_steps()` writes a problem file, runs the `ias15_cft`
+program and reads a record back. The registered integrator - what the
+README calls the drop-in, what `check_dropin` and every archive gate
+exercise, and the only path that keeps the engine in the caller's own
+process - was built as `build/libcftrebound.a`, referenced by nothing
+but a `dropin` convenience target, installed nowhere and named in no
+document. Its headers were not installable either. A user following the
+README could install the slow path and had no way to install the fast
+one.
+
+The two names also differed by one underscore, which in a single `lib`
+directory is a trap rather than a distinction.
+
+**What was done.** The drop-in library is `libcft_ias15.a`, named for
+the integrator it registers. It carries `cft_archive.o` as well, so the
+installed library can take a checkpoint - previously the archive was
+compiled per-gate and existed nowhere a user could link it. `install`
+ships it with `cft_ias15.h`, `cft_ias15_state.h` and `cft_archive.h`;
+`uninstall` removes them.
+
+**How it was checked, which is the point.** `examples/dropin.c` is a
+program written from outside: it includes only headers from the install
+prefix, links only `-lcft_ias15 -lcft` from it plus the caller's own
+REBOUND, and mentions no path inside the source tree. It registers the
+integrator, runs 40 fixed steps at binary256, binds the archive
+descriptors, saves, frees the simulation, reloads and continues. Run
+through the repository's own `make example`:
+
+```
+40 binary256 steps: t = 0.40000000000000002
+  p1.x = 0x1.d7975ec563c7fp-1
+reloaded (restored exactly): t = 0.40000000000000002,
+  p1.x = 0x1.d7975ec563c7fp-1  -> the same bits it was saved with
+ten more: t = 0.5
+```
+
+`examples/roundtrip.c` still covers the subprocess API, so `make
+example` now builds and runs both ways in, and a change that breaks
+either is a build failure rather than something a user finds.
+
+**One thing measured and not fixed.** `make install PREFIX=` with a
+Windows path written in backslashes fails to compile:
+`CFT_REBOUND_IAS15_DEFAULT` is a `-D` string literal and `C:\Users\...`
+becomes `\U`, an incomplete universal character name. Forward slashes
+work, which is what the README's Windows section already tells a reader
+to use for `TMP` and `TEMP`. Recorded rather than fixed because the fix
+is a quoting change in a path that reaches a preprocessor definition
+and it deserves its own test, not a fix bundled into an integration
+pass.
+
+**Also recorded here: the cross-process checkpoint.** Entry 25's "not
+tested" list named a checkpoint written by one process and read by
+another. It is `tools/check_checkpoint.py` now - three separate
+processes per format, exact hex floats compared by the checker - and it
+passes at fp64, fp128 and fp256. It carries its own control: a fourth
+process runs the resume with `CFT_REBOUND_NO_ADOPT` set, which discards
+the loaded state instead of carrying it, and the checker requires that
+run to DIFFER. Without the control the comparison would not be
+evidence: at 60 + 120 steps of this problem only 2 of the 14 dumped
+lines differ between fp64 and fp256, so agreement on the other 12 says
+nothing about whether the wide state was carried at all.
+
+**Still not tested.** macOS. Any of this on a card at the time of
+writing - the artifact path is newly reachable and a run is in progress.
+The Python shared library, whose requirements are now specified in
+docs/PYTHON.md rather than described: two of the three unknowns are
+answered there, and the third is that neither host has the `rebound`
+wheel installed, so the gate that would prove it cannot run as things
+stand.
