@@ -128,23 +128,42 @@ The floors at e = 0.99, measured as the format differences on one
 replayed step sequence, are in docs/VALIDATION.md.
 
 **Chaos.** Past its Lyapunov time a system forgets its initial
-condition at the rate e^(t/T_L), and the round-off floor is the
-perturbation it forgets from. Two runs of the same chaotic system
-that differ only in their arithmetic diverge from the floor as
-epsilon e^(t/T_L), so a wider format buys exactly ln(2^(p2-p1)) more
-Lyapunov times before the divergence reaches order unity: 41.6 for
-binary64 to binary128, another 127.5 to binary256 - *provided the
-truncation error is also below the wider floor*, which at REBOUND's
-default tolerance it is not (it sits four orders above binary64's
-floor in the sweep, worth nine Lyapunov times at most). The
-measurement on Burrau's Pythagorean problem, three formats on one
-step sequence and an ensemble of members one ulp apart, is in
+condition exponentially, and the round-off floor is the perturbation
+it forgets from. Two runs of the same chaotic system that differ only
+in their arithmetic diverge from the floor at the system's own rate,
+so a wider format buys exactly its extra bits of divergence before
+the solution is lost. Measured on Burrau's Pythagorean problem
+(masses 3, 4, 5 at rest on a 3-4-5 triangle; close encounters, a step
+spanning four orders of magnitude, a binary that ejects the third
+body near t = 60-70) with three formats on literally the same 6,000
+steps, the binary64 solution differs from the binary256 one by 1e-12
+at t = 6.9, 1e-9 at t = 23, 1e-6 at t = 46, 1e-3 at t = 60 and is
+unrelated to it from t = 66, before the ejection that is the whole
+point of the problem; the binary128 solution differs from binary256
+by 1e-30, 1e-27, 1e-24 and 1e-21 at t = 6.9, 23, 46 and 61 - the
+same curve, eighteen decades (2^60) lower, crossing each threshold at
+the same time to within one sample - and ends the evolution at t = 73
+three parts in 1e21 from binary256. The curve is a staircase, flat
+between encounters and a jump at each, averaging a decade every four
+time units; one close passage costs binary64 three orders of
+magnitude of energy (4e-14 to 7e-11 in a step) and costs binary128 an
+energy error that is binary256's to every digit, i.e. the method's.
+
+The caveat is the method's. The truncation seed at REBOUND's default
+tolerance is common to all three and does not appear in any of those
+differences; at about 1e-19 it sits three decades under binary64's
+floor and would, at the staircase's rate, be lost some twelve time
+units after binary64 is. The eighteen decades binary128 has in hand
+are therefore for sale only against a tighter step control (epsilon
+1e-16 is ten times the steps), exactly as for the regular orbit; the
+direct measurement of the truncation-seeded error at one time is in
 docs/VALIDATION.md.
 
-**Close encounters** are where chaos does its amplifying, in bursts:
-the Pythagorean problem's step spans 4 orders of magnitude and its
-divergence curve is a staircase, flat between encounters and a jump at
-each. **Long secular runs** are where the t^1.5 law gets its time.
+**Close encounters** are where the amplifying is done, in bursts, and
+they are what a wide format is *for* in a chaotic system: not a longer
+Lyapunov horizon in itself, but the encounter passed with the energy
+still the method's. **Long secular runs** are where the t^1.5 law gets
+its time.
 
 ## Where binary64 is entirely sufficient
 

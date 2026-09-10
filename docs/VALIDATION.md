@@ -858,3 +858,118 @@ again. No closed form, so no phase; the sweep's binary128 record at
 the same step gives 3.97e-31 over 1,200 years, a t^1.00 ruler, so at
 40 days the two formats are 16 orders apart in energy at 1,200 years
 and, on their laws, 15 orders at 1e7 years.
+
+
+## 2026-09-10 - the chaotic horizon: Burrau's Pythagorean problem at three formats on one step sequence
+
+Burrau's problem (masses 3, 4, 5 at rest at the vertices of a 3-4-5
+triangle, G = 1; `data/problems/pythagorean.txt`, every value an
+integer and exact in every format) is the classic sensitive three-body
+system: repeated close encounters, an adaptive step spanning four
+orders of magnitude, and near t = 60-70 the formation of a 4-5 binary
+that ejects body 3. The port takes it in its stride - a binary256
+adaptive run at REBOUND's default epsilon 1e-9 from dt0 = 0.01 did
+6,000 steps to t = 73.4 in 29.6 minutes on a loaded box, 16.94
+corrector passes a step (22 at worst), no step rejected, inexact the
+only flag, its step falling to 5e-6 at the closest passage - but the
+question is what its arithmetic is worth against the dynamics, and
+that needs three formats on *literally the same steps*: that run's
+sequence, rounded to binary64 (`--dt-out`, tools, then `--dt-file`),
+replayed at binary64, binary128 and binary256, sampled every 20
+steps. Every replay then has the same 301 sample times to the bit and
+the difference between two of them is the narrower format's round-off,
+amplified by the dynamics, and nothing else.
+
+**The two divergence curves are one curve, 18 decades apart.** The
+largest relative coordinate difference (`|dx|/L`, tools/
+compare_formats.py) first exceeds
+
+    threshold  binary64 - binary256   |  threshold  binary128 - binary256
+    1e-12      t = 6.89  (step 360)   |  1e-30      t = 6.89  (step 360)
+    1e-9       t = 22.96 (step 1340)  |  1e-27      t = 22.96 (step 1360)
+    1e-6       t = 46.00 (step 2480)  |  1e-24      t = 46.01 (step 2500)
+    1e-3       t = 59.78 (step 3560)  |  1e-21      t = 60.63 (step 3700)
+    1e-2       t = 63.21 (step 4220)  |
+    1          t = 66.03 (step 4740)  |  (3.1e-21 at t = 73.4, the end; 3.5e-20 at most)
+
+The binary128 curve crosses each threshold 1e-18 = 2^-59.8 lower at
+the same time as the binary64 curve, to within one sample: the seed
+is the format's floor, 2^-53 against 2^-113, and the amplification is
+the problem's and the same for both. It is a staircase - flat between
+encounters, a jump at each: 1e-12 at t = 7, 2e-11 at t = 16 after the
+first close passage (where the step is 7e-6), 7e-10 at t = 20, 4e-9
+at t = 28-34, 7e-8 at t = 42, 6e-5 at t = 50, 1e-3 at t = 60 - which
+averages a decade of divergence every four time units, an e-folding
+time of about 1.7. **The binary64 solution of this problem is wrong at
+the 1e-6 level by t = 46, at the 1e-3 level by t = 60, and is unrelated
+to the true trajectory from t = 66, before the ejection that is the
+problem's whole point; the binary128 solution reaches the end 3e-21
+from binary256's**, with 18 decades of the same staircase still to
+climb - about 70 more time units at the measured rate, if the
+dynamics stayed chaotic that long, which they do not once the binary
+has formed and body 3 has gone.
+
+**The replay artefact, and why it is not the integrator.** From
+t = 66 the binary64 replay's energy error is 698 (yes, 698: the
+relative error, not its logarithm) and its distance from binary256 is
+124 length units. That is the replay, not binary64 IAS15: the
+prescribed sequence was chosen for the binary256 trajectory, and once
+the binary64 trajectory has left it by 1e-2 (t = 63) an encounter
+arrives where the sequence has a large step, and a fifteenth-order
+method through a close passage at a step meant for free flight is
+destroyed. REBOUND's own adaptive binary64 run of the same problem
+(`ias15_ref`, 200,000 steps to t = 1,142, 0.9 s) keeps its energy to
+3.0e-9 throughout. The honest reading is the row above it: the
+binary64 solution is worthless from t = 60, whichever way the steps
+are chosen.
+
+**What an encounter costs each format.** The energy error of the
+replays against the exact initial energy (tools/oracle.py, which now
+reports the angular momentum as an absolute error when the initial
+one is exactly zero, as it is for a system started at rest):
+
+    t        binary64      binary128      binary256
+    3.8      4.05e-14      1.73e-20       1.73e-20
+    11.9     3.17e-13      1.91e-20       1.91e-20
+    15.8     3.50e-11      3.62e-20       3.62e-20      <- the first close passage
+    19.8     7.15e-11      4.06e-20       4.06e-20
+    41.9     7.19e-11      5.36e-20       5.36e-20
+    59.8     7.17e-11      1.50e-19       1.50e-19
+    73.4     (replay lost) 6.23e-19       6.23e-19
+
+One close passage costs binary64 three orders of magnitude of energy
+(4e-14 to 7e-11 in one step); the same passage costs binary128 2e-20
+to 4e-20, and the binary128 column is the binary256 column to every
+digit printed - the round-off difference between them is 3e-29 - so
+at binary128 the energy error of this problem is entirely the
+method's truncation at epsilon 1e-9, and the wider format's
+arithmetic is invisible in it. The binary256 adaptive run's own
+energy history (its unrounded steps) is the same to four digits at
+every common step: rounding the sequence to binary64 changed nothing
+that matters.
+
+**What this does not measure.** The truncation seed is common to all
+three replays and cancels in every difference above. At epsilon 1e-9
+it is about 1e-19 in energy, three decades below the binary64
+round-off floor, so by the staircase's rate it should be lost about
+twelve time units after binary64 is - the horizon of *any* format at
+this tolerance would then be near t = 78, and the eighteen decades
+binary128 has in hand are only for sale against a tighter step
+control (the sweep: epsilon 1e-16 is ten times the steps). A direct
+measurement of the truncation-seeded error at one time is in the
+entry below.
+
+**The ensemble as the instrument.** tools/make_ensemble.py wrote eight
+copies of the problem with body 3's x displaced by 1, 2, 4, ... 64
+binary64 ulps (`--geometric m3 x 0x1p-52`; member 0 untouched) and
+they were integrated in one run on the same replayed sequence, at
+binary64 and at binary256, tools/divergence.py measuring each member
+against member 0 at every sample. At binary64 the members reach
+1e-12 by t = 7 in no order - m6 (32 ulps) below m1 (1 ulp) at t = 20,
+and all seven within a factor of four of each other from t = 7 on:
+the perturbation is the size of the round-off noise and the ensemble
+measures the noise. The binary256 run of the same file, where the
+same perturbations are 2^184 times the round-off, is the measurement
+that ensemble was made for; it is recorded in the entry below when it
+completes (a 72-lane binary256 run on the software backend is
+element-bound and takes hours).
