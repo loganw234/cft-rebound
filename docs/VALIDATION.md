@@ -2431,9 +2431,10 @@ the Phase 2 precision entry says should happen at a step this size.
 
 **Four things it needed. One of them was a correction to this file.**
 
-Earlier today, entry 26 and docs/PYTHON.md both recorded that `libcft.a`
-links into a shared object as it is, on the evidence that its `device.o`
-carries no absolute relocations. **That was wrong, and wrong in a way
+Earlier today docs/PYTHON.md recorded that `libcft.a` links into a
+shared object as it is, on the evidence that its `device.o` carries no
+absolute relocations, and entry 26 pointed a reader at that section as
+one of the answered unknowns. **That was wrong, and wrong in a way
 worth naming: I sampled one member of an archive and generalised.**
 `backend_xrt.o` is C++ and the link stops on `R_X86_64_PC32 against
 symbol _ZSt7nothrow@@GLIBCXX_3.4`. The fix needed no new code -
