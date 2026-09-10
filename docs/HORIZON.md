@@ -119,13 +119,22 @@ system's own age is 4.5e9 Earth orbits.
 **Eccentricity.** The energy of an e = 0.99 orbit is a small
 difference of a kinetic and a potential term each 200 times larger
 than it at pericentre ((1+e)/(1-e)), and the step control spends 159
-steps an orbit there against 51 at e = 1/2. One binary64 run at
-REBOUND's default settings (single realisation, the caveat above):
-a phase error of 1.9e-6 of an orbit after 6.3e5 orbits, where the
-e = 1/2 ensemble's p90 law gives 1.3e-7 - ten to fifteen times worse
-at the same orbit count, and each orbit three times more expensive.
-The floors at e = 0.99, measured as the format differences on one
-replayed step sequence, are in docs/VALIDATION.md.
+steps an orbit there against 51 at e = 1/2. Both laws are worse for
+it. The round-off floor, measured as the binary64-minus-binary128
+difference on one replayed sequence of 20,000 steps, is 1.7e-13 in
+energy and 1.7e-11 orbits of phase after 126 orbits at e = 0.99,
+against 3e-15 and a few 1e-13 at e = 1/2: about fifty times, for
+three times the steps an orbit. The method's truncation ruler at
+REBOUND's default tolerance is 1.57e-20 orbits^2 at e = 0.99 against
+1.72e-21 at e = 1/2, nine times. One long binary64 run at the default
+settings (a single draw, the caveat above) had a phase error of
+1.9e-6 of an orbit after 6.3e5 orbits, where the e = 1/2 ensemble's
+p90 law gives 1.3e-7. So a highly eccentric orbit reaches every
+threshold ten to fifty times sooner and costs three times more per
+orbit to get there, at either format - the binary128 floor at
+e = 0.99 is 9.7e-32 in energy against 2.3e-33 at e = 1/2, the same
+factor of fifty, and 2^60 under binary64's at either eccentricity.
+The eccentricity is the orbit's amplifier, not the format's.
 
 **Chaos.** Past its Lyapunov time a system forgets its initial
 condition exponentially, and the round-off floor is the perturbation

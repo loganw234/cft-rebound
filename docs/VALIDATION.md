@@ -1032,3 +1032,50 @@ come free. Tightening the step control buys the rest, if the science
 needs a trajectory past that point. docs/HORIZON.md is corrected
 accordingly, and the entry above stands as written with this entry
 beside it.
+
+
+## 2026-09-10 - high eccentricity: the floors of every format at e = 0.99, on one step sequence
+
+The sweep measured the round-off floors on the e = 1/2 orbit with
+fixed dyadic steps. A highly eccentric orbit cannot take a fixed step
+(its pericentre passage is 200 times faster than its apocentre), so
+the replay mechanism was used instead: an fp256 adaptive run at
+REBOUND's default epsilon 1e-9 records its sequence, the sequence is
+rounded to binary64, and all three formats take literally the same
+steps. Two seeds of 20,000 steps each, `data/problems/kepler_e099.txt`
+(e = 0.99, dt0 = 0.001; 17.24 corrector passes a step, 42 at worst at
+the pericentre, one step rejected - the first - in 71 minutes) and
+the e = 1/2 problem (19.72 passes, none rejected), then six replays.
+
+    e = 0.99, 20,000 steps = 125.8 orbits, 159 steps an orbit:
+      fp64  - fp256   max |dE/E| 1.694e-13 (last 1.671e-13)   max |dx|/L 1.228e-7 (last 7.441e-9)
+      fp128 - fp256   max |dE/E| 9.719e-32 (last 8.110e-32)   max |dx|/L 3.337e-26 (last 2.318e-27)
+      against the closed form: fp64 phase error 1.71e-11 orbits; fp128 and fp256 2.535e-16, identical to every digit,
+      energy 2.690e-18 at both, |dx|/a 1.828e-14 at both
+    e = 1/2, 20,000 steps = 390.7 orbits, 51.2 steps an orbit:
+      fp64  - fp256   max |dE/E| 3.748e-15 (last 2.950e-15)   max |dx|/L 4.407e-12 (last 1.280e-12)
+      fp128 - fp256   max |dE/E| 2.325e-33 (last 1.068e-33)   max |dx|/L 9.464e-30 (last 4.356e-30)
+      against the closed form: fp64 phase error 1.39e-13 orbits; fp128 and fp256 2.694e-16, identical, energy 9.201e-19
+
+Three things to read off. **The floors scale as the format says at
+either eccentricity**: binary64 over binary128 is 1.7e18 = 2^60.6 in
+energy and 3.7e18 = 2^61.7 in position at e = 0.99, 1.6e18 = 2^60.4
+and 4.7e17 = 2^58.7 at e = 1/2. **Eccentricity multiplies both floors
+by the same factor**, about fifty in energy (1.69e-13 against
+3.75e-15 at binary64, 9.7e-32 against 2.3e-33 at binary128) with
+three times fewer orbits in the eccentric run - the amplification is
+the orbit's ((1+e)/(1-e) = 199 between the kinetic and potential
+terms at pericentre and the total), not the format's. And **the
+method's own error grows with eccentricity as well**: the truncation
+ruler of the fp256 seeds is `phase = 1.57e-20 orbits^2` at e = 0.99
+against `1.72e-21 orbits^2` at e = 1/2, both t^2.00 to 0.00 dex,
+nine times, at three times the steps an orbit. The e = 1/2 seed's
+coefficient reproduces the sweep's 1.71e-21 from a different run.
+
+The binary64 phase error of the e = 1/2 replay, 1.39e-13 at 391
+orbits, sits seven times under the 64-member ensemble's median law
+(9.7e-13 at that count): one draw, on the low side, as the 1e7-orbit
+run was. The position floor at e = 0.99 peaks at 1.2e-7 at samples
+that land near pericentre and reads 7e-9 at the last, which is the
+oracle's reason for reporting the along-track phase error instead of
+`|dx|/a` (the 2026-09-10 horizon entry).
