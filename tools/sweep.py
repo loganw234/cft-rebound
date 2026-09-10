@@ -30,6 +30,25 @@ T_KEPLER = 6.2800460687587205   # from the oracle, for step counts only
 FORMATS = ["fp64", "fp128", "fp256"]
 
 
+def followup_jobs():
+    """Where the first sweep left the question: the wider formats were
+    truncation-limited at every step size it used. Smaller steps over
+    shorter horizons, to find the binary128 floor and see whether
+    binary256 goes under it."""
+    J = []
+    for dt, orbits, fmts in ((0.0125, 20, FORMATS), (0.00625, 10, ("fp128", "fp256"))):
+        steps = int(round(orbits * T_KEPLER / dt))
+        for f in fmts:
+            J.append(("kepler_fixed_dt%g_%s" % (dt, f), KEPLER, f,
+                      ["--dt", str(dt), "--epsilon", "0", "--steps", str(steps), "--sample", str(steps // 20)]))
+    for dt, fmts in ((20, ("fp256",)), (10, ("fp128", "fp256"))):
+        steps = int(round(300 * 365.25 / dt))
+        for f in fmts:
+            J.append(("outer_fixed_dt%d_%s_300y" % (dt, f), OUTER, f,
+                      ["--dt", str(dt), "--epsilon", "0", "--steps", str(steps), "--sample", str(steps // 15)]))
+    return J
+
+
 def jobs():
     J = []
     # Kepler, fixed step, 200 orbits at three step sizes
@@ -95,8 +114,13 @@ def main():
     ap.add_argument("--only", default=None)
     ap.add_argument("--out", default=os.path.join(root, "results"))
     ap.add_argument("--list", action="store_true")
+    ap.add_argument("--set", default="main", choices=["main", "followup"])
+    ap.add_argument("--exe", default=None, help="binary to run (default build/ias15_cft)")
     args = ap.parse_args()
-    J = jobs()
+    global CFT
+    if args.exe:
+        CFT = args.exe
+    J = jobs() if args.set == "main" else followup_jobs()
     if args.only:
         J = [j for j in J if args.only in j[0]]
     J.sort(key=cost)

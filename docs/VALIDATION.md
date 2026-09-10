@@ -145,11 +145,25 @@ rational:
 1,264 values - time, next and last step, energy, and 6 coordinates of
 every body - identical on the first run of the full gate; the only
 earlier failure was a compile error (a missing `n` argument in the
-predictor, caught by the compiler). What the gate does NOT exercise:
-the rejected-step path (`dt_new/dt_done < 0.25`) and the `ratio > 20`
-branch of `predict_next_step`, because neither occurred in 1,000 steps
-of these two problems. They are written to mirror REBOUND and are
-untested.
+predictor, caught by the compiler). Those four cases do not exercise
+the rejected-step path (`dt_new/dt_done < 0.25`) or REBOUND's cap of
+12 corrector passes, because neither occurs in 1,000 steps of these
+problems at a sane first step. Two more cases were added to force
+them - a first step of 1.0 on the Kepler problem and of 2,000 days on
+the outer solar system, each of which REBOUND rejects once and, on the
+retry from the far too large step, runs the corrector to its cap
+once (`steps_rejected=1, iterations_max_exceeded=1` in both
+programs):
+
+    kepler adaptive from dt0=1.0:   7 samples, 112 values identical
+    outer adaptive from dt0=2000:   5 samples, 200 values identical
+
+so the rejection path, the restore of the particles, the predictor
+re-run with `ratio = dt/dt_last_done`, and the unconverged-step exit
+are REBOUND's bit for bit as well. What remains unexercised is the
+`ratio > 20` branch of `predict_next_step`, which the 4x growth clamp
+makes unreachable in REBOUND's own flow; it is written to mirror
+REBOUND and is untested.
 
 Throughput at binary64 on the Kepler problem: 1,868 library calls a
 step (255 of them div or sqrt), 120 steps a second on an idle host,

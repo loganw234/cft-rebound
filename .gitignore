@@ -21,3 +21,4 @@ results/raw/
 # Assembled program images are rebuilt by `make programs` from programs/*.cfta
 programs/out/
 results/sweep.log
+results/sweep_followup.log

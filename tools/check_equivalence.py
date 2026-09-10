@@ -127,6 +127,10 @@ def main():
         ("kepler adaptive eps=1e-9", kepler, 2, ["--dt", "0.01", "--epsilon", "1e-9", "--steps", str(800 // scale),  "--sample", "50"]),
         ("outer fixed dt=40",        outer,  6, ["--dt", "40",   "--epsilon", "0",    "--steps", str(200 // scale),  "--sample", "25"]),
         ("outer adaptive eps=1e-9",  outer,  6, ["--dt", "40",   "--epsilon", "1e-9", "--steps", str(200 // scale),  "--sample", "25"]),
+        # a far too large first step forces the rejected-step path and
+        # REBOUND's cap of 12 corrector passes, once each
+        ("kepler adaptive from dt0=1.0 (rejection)",  kepler, 2, ["--dt", "1.0",  "--epsilon", "1e-9", "--steps", str(300 // scale),  "--sample", "50"]),
+        ("outer adaptive from dt0=2000 (rejection)",  outer,  6, ["--dt", "2000", "--epsilon", "1e-9", "--steps", str(100 // scale),  "--sample", "25"]),
     ]
     allok = True
     print("check_equivalence: ias15_cft --format fp64 --cs %s against REBOUND's IAS15" % args.cs)
