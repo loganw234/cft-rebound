@@ -88,9 +88,23 @@ $(B)/ias15_cft$(EXE): src/ias15_cft.c src/ias15_constants.h src/hexfloat.h $(CFT
 constants:
 	$(PYTHON) tools/gen_constants.py
 
-check: all
+# The sequencer programs: generated as text, assembled by the pinned
+# clone's own assembler (built here from its sources).
+ASM := $(CFT)/cft-asm$(EXE)
+$(ASM):
+	$(MAKE) -C $(CFT) CC=$(CC) PYTHON=$(PYTHON) $(CFT_MAKEVARS) cft-asm$(EXE)
+
+.PHONY: programs
+programs: $(ASM)
+	$(PYTHON) tools/gen_programs.py
+	@mkdir -p programs/out
+	@for f in programs/*.cfta; do b=$$(basename $$f .cfta); $(ASM) $$f -o programs/out/$$b.cftp || exit 1; done
+	@echo "assembled $$(ls programs/out/*.cftp | wc -l) programs"
+
+check: all programs
 	$(PYTHON) tools/gen_constants.py --no-write
 	$(PYTHON) tools/check_equivalence.py --build $(B)
+	$(PYTHON) tools/check_program_engine.py --build $(B)
 
 clean:
 	rm -rf $(B)
