@@ -36,6 +36,10 @@ Nothing is vendored by hand.
     src/ias15_cft.c          the port: every floating-point operation is a cft.h call
     src/ias15_constants.h    GENERATED: the Gauss-Radau constants at every format
     src/hexfloat.h           exact hex-float text for binary64, libc-independent
+    src/cft_ias15_state.h    the state the integrator shim and the archive share
+    src/cft_archive.c        Simulationarchive: the cft_ fields, the probe, the load
+    tests/cft_shim_stub.c    a stand-in integrator, for the archive gates only
+    tests/gate_*.c           those gates: restart, stock reader, promotion, refusal
     ref/ias15_ref.c          REBOUND's own IAS15 on the same problems, plain double
     ref/whfast512_stub.c     why REBOUND's WHFast512 is not built here (MinGW)
     tools/gen_constants.py   derives and CHECKS the constants (mpmath, 130 digits)
@@ -46,6 +50,7 @@ Nothing is vendored by hand.
     tools/check_program_engine.py  the gate: programs == host loop, bit for bit
     tools/check_ensemble.py        the gate: ensemble == its members run alone, bit for bit
     tools/check_records.py         the gate: the committed records, recomputed, bit for bit
+    tools/check_archive.py         the gates: an archive round trip, and both readers
     tools/oracle.py          scores a record from its exact bits (mpmath)
     tools/compare_formats.py the round-off floor: one run at two formats, differenced
     tools/horizon.py         percentiles of an ensemble's error against time, and crossings

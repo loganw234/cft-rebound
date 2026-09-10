@@ -1420,3 +1420,283 @@ and they are not equivalent:
 
 The first is the one that fits the struct as it stands. Neither is
 implemented here; it is written down rather than guessed at.
+
+## 2026-09-10 - the Simulationarchive: the wide state as `cft_` fields, and what a reader really does with a name it does not know
+
+Parcel B of four, written against ROADMAP.md's shared state struct.
+What was added: `src/cft_ias15_state.h` (that struct, verbatim, until
+the integrator shim brings its own), `src/cft_archive.c` and its
+header - the field descriptor lists, a probe that reads an archive's
+own account of itself from the file, and a load that restores exactly,
+promotes, or refuses - and four gate programs in `tests/`, run by
+`tools/check_archive.py`. `make check-archive` runs them; `make check`
+and `make check-quick` now end with them.
+
+**The fields: 59, every one `cft_`-prefixed.** On disk they are
+`integrator.ias15_cft.cft_<name>`, because REBOUND builds an
+integrator field's name as `"integrator." + r->integrator.name + "." +
+descriptor name` and nothing else is possible. The names mirror
+REBOUND's own IAS15 descriptor list in `integrator_ias15.c` so the
+mapping can be read line by line:
+
+    48 wide blobs, REB_POINTER, element_size = W (8, 16 or 32):
+      cft_x0  cft_v0  cft_a0  cft_csx  cft_csv  cft_csa0
+      cft_g0..cft_g6    cft_b0..cft_b6    cft_csb0..cft_csb6
+      cft_e0..cft_e6    cft_br0..cft_br6  cft_er0..cft_er6
+    11 scalars:
+      cft_epsilon (REB_DOUBLE)  cft_min_dt (REB_DOUBLE)
+      cft_adaptive_mode  cft_format  cft_max_iter  cft_arith_fma (REB_INT)
+      cft_E (REB_SIZE_T)  cft_abi_0  cft_abi_1  cft_constants_digest
+      (REB_UINT64)  cft_n_elem (REB_SIZE_T, and it must be last)
+
+Three lists exist, identical but for `element_size`, one per format;
+`cft_archive_bind()` points `r->integrator.callbacks.field_descriptor_list`
+at the one matching the run. A `cft_archive_selftest()` checks their
+shape - 48 blobs, 11 scalars, every name prefixed and unique, every
+blob's `element_size` the format's width and its `offset_N` the one
+member the reader is allowed to overwrite, `cft_n_elem` last - because
+a list that has drifted writes wrong bytes silently.
+
+Three of ROADMAP.md's decisions did not survive contact with
+`binarydata.c`. They are the useful part of this entry.
+
+### 1. An unknown field does not "warn and seek past it". It stops the snapshot.
+
+The roadmap quotes the right three lines and the wrong control flow.
+The case ends:
+
+    case REB_FIELD_NOT_FOUND:
+        *warnings |= REB_BINARYDATA_WARNING_FIELD_UNKNOWN;
+        int err = fseek(inf, field.size_data, SEEK_CUR);
+        ...
+        goto finish_fields;
+
+`finish_fields`, not `next_field`: the reader abandons the rest of the
+snapshot. Extra fields are safe for a stock reader only because
+REBOUND writes every simulation field - particles, `t`, `dt`, `N`, `G`
+- before any integrator field, so everything a stock reader needs has
+already arrived by the time it meets the first `cft_` one. What it
+loses is what follows: the `functionpointers` flag, written after the
+integrator's fields. An archive that put a `cft_` field anywhere in
+the main list's namespace would truncate a stock read; none does, and
+none can, because the prefix is forced.
+
+### 2. A stock reader does not even reach that path. It says the file is corrupt.
+
+Integrator fields are gated on the integrator NAME before the
+descriptor lookup happens:
+
+    if (strncmp("integrator.", name, 11)==0 && (name_sub = strchr(name+11,'.'))){
+        if (!r->integrator.name[0] || strncmp(name+11, r->integrator.name, name_sub - name -11)){
+            *warnings |= REB_BINARYDATA_WARNING_CORRUPTFILE;
+            goto finish_fields;
+
+So a reader without `ias15_cft` registered first prints
+`Error! Integrator not found.` when it reads `integrator.name` (from
+`reb_simulation_set_integrator`, which leaves the reader's own
+integrator in place), and then raises CORRUPTFILE - not FIELD_UNKNOWN
+- at the first `integrator.ias15_cft.cft_*` field. `gate_stock`,
+which links the pinned upstream `librebound.a` and nothing of
+cft-rebound's, said exactly that, on a one-snapshot archive and on the
+last snapshot of a three-snapshot one:
+
+    Error! Integrator not found.
+    gate 2: a cft archive opened by a stock REBOUND reader
+      one snapshot: 1 snapshots indexed; warnings = 0x200: WARNING_CORRUPTFILE
+        integrator.name in this reader after the load: "ias15"
+        binary64 state recovered: bit for bit as written (3 particles, t = 0x1.1eb851eb851ecp-4)
+      last of three: 3 snapshots indexed; warnings = 0x200: WARNING_CORRUPTFILE
+        integrator.name in this reader after the load: "ias15"
+        binary64 state recovered: bit for bit as written (3 particles, t = 0x1.3333333333333p-3)
+    gate 2: PASS
+
+The claim the roadmap makes is still true where it matters: the file
+opens, the archive indexes (the blob scan seeks by `size_data` and
+never consults a descriptor, so unknown fields cost it nothing), and
+the binary64 state comes back bit for bit - every particle
+coordinate, mass, `t` and `dt` identical to what the writer recorded.
+What is not true is the tone. A collaborator without cft is told
+`Error! Integrator not found.` and
+`The binary file seems to be corrupted. An attempt has been made to
+read the uncorrupted parts of it.` for a file that is neither
+erroneous nor corrupt. That is structural: any custom integrator name
+produces it, and there is no writer-side choice that avoids it short
+of patching REBOUND, which this project does not do. It belongs in the
+README next to the compatibility claim, not discovered by a
+collaborator.
+
+A second consequence, worth stating plainly: what a stock reader
+restarts from is the particles and the time, with REBOUND's own IAS15
+series cold (`b`, `e` zero), because the archive's `integrator.ias15.*`
+fields do not exist. That is a correct restart - it is what REBOUND
+does for a new simulation - but it is not a bit-identical
+continuation. Only a reader that knows `cft_` gets one.
+
+### 3. `element_size = W` cannot survive a load, and gate 1 caught it
+
+The roadmap says to archive the wide arrays "as `REB_POINTER` with
+`element_size` set to the wide width". That is right for writing:
+`size_data = pointer_N * element_size` needs `element_size = W` to
+produce the correct byte count. It is wrong for reading, and the
+reason is that `element_size` is fixed in the descriptor at compile
+time while W is a property of the run. On load the list in force is
+whichever one the integrator was REGISTERED with - `set_integrator`
+installs it when `integrator.name` is read and nothing re-points it
+before the blobs arrive - so `binarydata.c`'s
+
+    if (fd.offset_N!=SIZE_MAX){ *pointer_N = (size_t)field.size_data/fd.element_size; }
+
+writes `size_data/8` into `n_elem` 48 times over.
+
+Putting `cft_n_elem` last in the list repairs that for a whole
+snapshot: it is written last and read last, so the true count
+overwrites the wrong ones. It does NOT repair an appended snapshot,
+because REBOUND stores those as a diff against the first
+(`reb_binarydata_diff` in the append path of `reb_simulation_save_to_file`)
+and the diff omits `cft_n_elem` precisely because it did not change.
+The first run of gate 1 said so:
+
+    gate 1: mid-run archive, restart, bit-identical continuation
+      fp64      PASS  ... one-snapshot identical, appended-diff identical
+      fp128     FAIL  load(-1): refused: element count mismatch
+      fp256     FAIL  load(-1): refused: element count mismatch
+    gate 1: FAIL
+
+with, from the refusal message,
+`cft_n_elem is 9 and cft_E is 1, but the archive holds 48 of 48 wide
+blobs and each is 144 bytes, against 3 N particles at 16 bytes an
+element` - 9 x 16 = 144, so the file was consistent and the loaded
+state was not. binary64 passed only because 72/8 happens to be 9.
+
+The fix is to stop leaning on the mechanism. `cft_archive_probe`
+reads `cft_n_elem`, `cft_format`, `cft_E` and the blob lengths from
+the file, checks they agree with each other and with 3N (or 3NE), and
+`cft_archive_finish_load` then writes the true count into the state.
+The blob CONTENTS were never at risk: the read path `fread`s exactly
+`size_data` bytes into a buffer it reallocates to that size, so only
+the derived count was ever wrong. The lists keep `element_size = W`,
+because the write side needs it, and `cft_n_elem` stays last so a
+whole-snapshot load is self-consistent even before the repair runs.
+The cost is an API rule: an archive loaded with plain
+`reb_simulation_create_from_file` and never handed to
+`cft_archive_finish_load` holds a state whose `n_elem` is wrong, and
+the next save would write blobs of the wrong length. Both entry
+points here do the repair.
+
+### Three smaller collisions with the struct
+
+- ROADMAP.md's mirror list names `at`; the struct it defines has no
+  `at` member, so there is no descriptor for it. REBOUND archives its
+  own `at`. `at` is written before it is read in every substep of
+  `reb_integrator_ias15_step_try`, so a restart does not need it; if
+  the integrator shim's state grows one, it is one more line.
+- REBOUND keeps each seven-level array as ONE allocation of `7*N3`
+  doubles and archives it as one field with `element_size = 7*8`
+  (`dpcast()` slices it level-major). The roadmap's struct keeps seven
+  separate pointers, which cannot be one `REB_POINTER` field, so each
+  level gets its own name: `cft_g0..cft_g6` against REBOUND's `g`.
+  The bytes on disk are the same in the same order; only the field
+  boundaries differ.
+- `char cft_abi[16]` cannot be archived by any REBOUND dtype.
+  `REB_STRING` and `REB_POINTER` both dereference the field as a
+  pointer, and no simple dtype is 16 bytes wide. It goes out as
+  `cft_abi_0` and `cft_abi_1`, two `REB_UINT64` at their own offsets;
+  the bytes on disk are the string's bytes in order, so it round-trips
+  exactly. There is also no member in which to record "this run began
+  from a promoted binary64 state" - the load returns it, and nothing
+  persists it. A one-word `provenance` member would be worth having.
+
+### The gates
+
+Quick tests only, seconds each. **They do not run IAS15.** Parcel A
+owns the integrator shim and it is being written in parallel, so the
+gates drive a stand-in (`tests/cft_shim_stub.c`): a deterministic
+mixing over the wide state at a real libcft format, arranged so that
+every one of the 48 blobs feeds the next step, which is what an
+archive gate needs - a blob missing from the list, or written at the
+wrong width, breaks the continuation. Gate 1 also asserts that all 48
+blobs hold a non-zero byte, so it cannot pass by comparing zeros.
+When the shim lands, the gates should be re-pointed at it; the archive
+module does not change.
+
+**Gate 1 - write mid-run, restart, continue bit-identically.** Three
+particles, `n_elem = 9`, 20 steps against 10 + archive + 10, at every
+format, from a fresh single-snapshot file and from the second snapshot
+of a two-snapshot one:
+
+    gate 1: mid-run archive, restart, bit-identical continuation
+      descriptor lists: 48 blobs + 11 scalars at each of fp64/fp128/fp256, every name cft_-prefixed and unique, cft_n_elem last
+      fp64      PASS  3840 state bytes, 48/48 blobs non-zero, 107 cft_ fields, n_elem 9, 72 B a blob, 2 snapshots; one-snapshot identical, appended-diff identical (restored exactly, restored exactly)
+      fp128     PASS  7296 state bytes, 48/48 blobs non-zero, 107 cft_ fields, n_elem 9, 144 B a blob, 2 snapshots; one-snapshot identical, appended-diff identical (restored exactly, restored exactly)
+      fp256     PASS  14208 state bytes, 48/48 blobs non-zero, 107 cft_ fields, n_elem 9, 288 B a blob, 2 snapshots; one-snapshot identical, appended-diff identical (restored exactly, restored exactly)
+    gate 1: PASS
+
+The compared bytes are all 48 blobs, the particles (with the `ap`,
+`sim` and `name` pointers zeroed, which are not state), `t`, `dt`,
+`n_elem`, `E`, `format`, `max_iter`, `arith_fma` and `adaptive_mode`.
+107 `cft_` fields in the two-snapshot file is 59 + 48: the diff
+carried every blob and not one scalar, which is the same fact as the
+failure above seen from the other side.
+
+**Gate 2 - stock REBOUND opens it.** Quoted above.
+
+**Gate 3 - a stock archive opens here, and is promoted.** REBOUND's
+own IAS15, twelve real steps on a three-body problem, saved; then
+loaded through `cft_archive_load` at binary128. The promotion is
+checked value by value against the same archive loaded plainly, by
+rounding the wide bytes back to binary64:
+
+    gate 3: stock archive integrator "ias15", has_cft = 0, cft_ fields = 0
+      load said: promoted from binary64 (1)
+      promotion of REBOUND's binary64 IAS15 state into fp128: exact, every value round-trips (epsilon 1e-09, adaptive_mode 2, abi "0.11")
+
+That covers `x0` and `v0` (from the particles, which are the authority
+at a snapshot - REBOUND's `ias15->x0` holds the start of the last
+completed step), `a0`, `csx`, `csv`, `csa0`, and all seven levels of
+`g`, `b`, `csb`, `e`, `br`, `er`: 6 x 9 + 6 x 7 x 9 = 432 values, each
+identical after the round trip, as widening must be. `epsilon` and
+`adaptive_mode` come across from REBOUND's IAS15 state.
+
+**The refusal.** Same gate. A binary256 archive offered to a binary64
+run is refused before anything is loaded, with a NULL simulation and,
+on stderr:
+
+    cft-rebound: refusing to load ".../gate3_fp256.bin" snapshot 0: it was written at a different precision
+      the archive's cft_format is fp256 (32 bytes an element); this run is configured for fp64 (8 bytes an element).
+      The wide state is not reinterpretable across this difference and
+      will not be silently narrowed or reshaped. Load the archive with
+      the settings it was written with, or start a new run.
+
+and the same file at its own format loads `restored exactly`. The
+count mismatch has the same shape and its message names `cft_n_elem`,
+`cft_E`, the blob count, the blob length, N and the element width, so
+the arithmetic that failed is on the screen. `want_format = -1` adopts
+whatever the archive says, for a caller who wants the file to decide.
+
+**`make check-quick`**, the whole of it, on this host: PASS, including
+`check_equivalence` (6 cases, 528 values), `check_program_engine`
+(3 cases, 320), `check_records` (4 cases, 264), `check_ensemble`
+(9 cases, 1,728) and the four archive gates.
+
+### Two upstream notes, in passing
+
+Neither is this project's to fix and neither is triggered by anything
+here, but both would bite the next parcel.
+
+- **`reb_integrator_register` cannot register a second custom
+  integrator.** `rebound.c`'s duplicate-name loop does `N++` and then
+  `strcmp(reb_integrator_configurations_custom[N].name, name)`, which
+  on the last pass reads the `{0}` terminator's NULL. Exercised: a
+  program that registers two printed `registering first...`,
+  `first ok`, `registering second...` and never returned; killed by
+  PID. (The same loop never compares entry 0, so it would not detect
+  a duplicate of the first name either.) Registering exactly one -
+  which is all `ias15_cft` needs - is fine, and is what the gates do.
+- **`offset_N = SIZE_MAX` is broken by the address fixup.**
+  `reb_binarydata_field_descriptor_for_name` adds the base address to
+  `offset_N` unconditionally, so the sentinel becomes `base - 1` and
+  the read path's `if (fd.offset_N!=SIZE_MAX)` is true, writing eight
+  bytes just below the object. REBOUND's own `display_settings`
+  descriptor uses that sentinel. Nothing here does, and the archive's
+  blobs deliberately do not, which is why the count is repaired from
+  the file instead.
