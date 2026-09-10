@@ -1206,3 +1206,198 @@ that is 21x, not the 100x the projection quoted against the E = 1
 software rate, because the software backend gains 3.5x from width
 too. That is the honest number to put beside the card's, when it is
 measured.
+
+## 2026-09-10 - packaging: the body-count cap raised to 1024, the scope stated, a worked round trip, and `make install`
+
+ROADMAP parcel C. Four things, and two bugs that only appeared because
+the example was made to run.
+
+### The cap, and what the ROADMAP got wrong about it
+
+`ias15_cft` refused `N > 64`. The ROADMAP said the reason was
+`body_names[64][32]`, "the only fixed object". **That is no longer
+true of the code**: `body_names` is already `static char (*)[32]`,
+`calloc`d from `NB` in `read_problem`, and so is `sys_names`. There
+was nothing behind the 64 at all - `valloc` is `calloc`, every array
+is sized from N at run time, and the check was a bare literal.
+
+What does constrain N is the shape of the port. Gravity is an explicit
+pair list, `P = E*N(N-1)/2`, with 23 vectors of that length; and
+`NMAX = max(3NB, P)`, which above N = 7 is P, is also the length of
+about 270 broadcast constant vectors (`KRR[28]`, `KC[21]`, `KD[21]`,
+`KRINV[28]`, `KHF[7][7]`, and the rest). Both grow as N^2 and both
+carry the format's element size. Peak working set, one system,
+allocation plus one energy evaluation (`--steps 0`), measured:
+
+    N       binary64    binary128    binary256
+    64        8.3 MB       8.5 MB      23.2 MB
+    256      79.1 MB     154.2 MB     283.2 MB
+    512     283.4 MB     559.9 MB   1,113.4 MB
+    1024  1,117.6 MB   2,222.6 MB   4,432.7 MB
+    2048  4,454.3 MB   8,872.0 MB  17,707.3 MB
+
+**The cap is now 1024** (`CFT_MAX_BODIES`, src/ias15_cft.c), chosen as
+the largest power of two whose worst case - binary256, 4.4 GB - still
+fits an ordinary workstation. 2048 would want 17.7 GB at binary256 and
+is not a limit anybody could use.
+
+Time reaches further than memory does and is the real constraint. One
+fixed binary64 step, the program's own clock, so setup excluded:
+
+    N = 64    1.130 s
+    N = 256  13.598 s
+    N = 512  51.067 s
+    N = 1024 195.546 s
+
+The diff to src/ias15_cft.c is the `#define`, the one changed check
+and its message, and nothing else - parcels A and B are editing that
+file. `ref/ias15_ref.c` had its own `struct body bodies[64]` and it
+grows by `realloc` now, because a program that is diffed against the
+port must not impose a smaller limit than the port has.
+
+### The gate at a few hundred bodies
+
+tools/check_bodycount.py, added to `make check` and `make check-quick`.
+It reruns the equivalence gate where it could plausibly break and
+nowhere else: `gravity()` sums each particle's partners in ascending
+partner order to match REBOUND's `(i, j<i)` loop, and a drift in that
+order would show as a last-bit difference at large N only. The
+problems come from a new tools/make_nbody.py - a star and N-1 circular
+test bodies at golden-angle longitudes, barycentric, deterministic
+from N alone - so nothing large is committed.
+
+    check_bodycount: cap = 1024, equivalence at N = 256, 1 step(s)
+      ok   nbody256 fixed dt=0.005: 2 samples, 3080 values identical
+      ok   nbody256 adaptive eps=1e-9: 2 samples, 3080 values identical
+      ok   N = 1024 (the cap): allocated and evaluated
+      ok   N = 1025 refused: ias15_cft: N = 1025 bodies per system is
+           outside 1..1024; memory and time here grow as E*N^2
+    RESULT: PASS
+
+and at the size the ROADMAP claimed had been exercised:
+
+    check_bodycount: cap = 1024, equivalence at N = 512, 1 step(s)
+      ok   nbody512 fixed dt=0.005: 2 samples, 6152 values identical
+      ok   nbody512 adaptive eps=1e-9: 2 samples, 6152 values identical
+    RESULT: PASS
+
+The default is N = 256 and two steps, about a minute; `--quick` is one
+step; `--n 512` costs about 50 s a step and is therefore not the
+default. The cap is read out of the C source by the test, so the two
+cannot drift apart.
+
+`make check-quick` passes whole with the new gate in it: equivalence
+528 values, program engine 320, records 264, ensemble 9 cases 1,728
+values, body count as above.
+
+### The packaging layer
+
+`include/cft_rebound.h` and `src/cft_rebound_run.c`, built into
+`build/libcft_rebound.a`. `make install` puts the header, the library,
+the `ias15_cft` program and (because `-lcft` has to resolve) libcft
+and its headers under `$(PREFIX)`, with `DESTDIR` honoured; PREFIX is
+compiled in as the program's location, DESTDIR is not, so a
+distribution can build once and stage anywhere. `BINDIR` is a
+prerequisite through a stamp file, so `make install PREFIX=X` after a
+build for another prefix rebuilds rather than installing a library
+pointing at the old one. The two lines a user adds are echoed by the
+install itself and marked in examples/Makefile.
+
+The public surface is `cft_rebound_check()` - the refusal list, which
+is README "Scope" in code - and `cft_rebound_steps(r, nsteps, opt,
+res)`, the analogue of `reb_simulation_steps()`. Today its inside
+writes the particles out as an exact binary64 problem file, runs
+`ias15_cft`, and converts the record back with libcft's own
+`cft_from_hex_char` at `CFT_FP64` - one correctly rounded conversion
+per value, which is ROADMAP's "binary64 view" done by the library that
+defines the bits rather than by a second parser. The wide state does
+not survive a call, so a run is one call rather than a loop of them.
+When parcel A's registration lands, that middle is replaced and the
+signature does not move.
+
+### The worked round trip
+
+examples/roundtrip.c: Sun, Jupiter and Saturn from orbital elements,
+300 fixed steps of dt = 0.5, at binary64 and binary128 on identical
+steps. `make example` stage-installs into `build/stage`, builds the
+example against that with examples/Makefile, and runs it, so the
+example is also the install's test. Verbatim:
+
+      format     steps        |dE/E|        seconds
+      fp64         300       5.073e-16       3.23
+      fp128        300       0.000e+00      10.40
+
+        fp128 start -0x1.c0343a985a8e5377b710aab7e36ap-14
+        fp128 end   -0x1.c0343a985a8e5377b710aab7e368p-14
+        fp64  start -0x1.c0343a985a8e4p-14
+        fp64  end   -0x1.c0343a985a8e8p-14
+
+      the two runs took the same steps and ended 8.937e-15 AU apart.
+
+binary128's `|dE/E|` prints as exactly zero because `result.energy` is
+a `double` and the drift is under its last bit; that is why
+`result.energy_hex` carries the run's own unrounded digits as well,
+and they show the drift in the last hex digit. binary64's own initial
+energy is already half an ulp off the same initial condition's true
+value. The example ends by printing five refusals with their messages,
+so a reader meets the limits there rather than mid-run.
+
+### Two bugs the example found, which nothing else would have
+
+**`r->OMEGAZ` is -1, not 0.** The first refusal list tested
+`r->OMEGA != 0 || r->OMEGAZ != 0` for the shearing sheet, and
+`reb_simulation_create()` sets `OMEGAZ = -1.0` as a sentinel meaning
+"use OMEGA". Every default simulation was refused. The check is gone
+rather than corrected: OMEGA reaches the dynamics only through the
+SHEAR boundary or the SEI integrator, and both are already refused.
+
+**Binary256 was silently running a truncated corrector.**
+`ias15_cft`'s `max_iter` defaults to 12 - REBOUND's, and correct at
+binary64, where it is part of what makes that run REBOUND's own - at
+every format. Twenty binary256 steps of a two-body problem through the
+packaging layer with that default: `mean_pc = 12.000, max_pc = 12`,
+i.e. the cap on every step. The layer now picks the cap by format when
+the caller leaves it at 0: binary64 unchanged at 12, binary128 24,
+binary256 60, clear of the 2-3 / 4-9 / 10-20 passes measured in this
+ledger. The same run then converges at `mean_pc = 14.450, max_pc = 18`
+and the energy differs from the truncated one in the last 12 hex
+digits. A converged step exits early, so a cap only costs when it is
+reached, and `result.iterations_max_exceeded` reports when it was.
+
+### One call, not a loop of calls - measured
+
+The subprocess form rebuilds the wide state per call, and IAS15 takes
+the previous step's b coefficients as the next step's predictor, so a
+split run is not the same run. Kepler, binary64, fixed dt = 0.05:
+twenty steps in one go against ten steps, the recorded state fed back
+through tools/state_to_problem.py (exact at binary64), and ten more.
+The final states differ:
+
+    one call of 20   ... 0x1.0f08a10952d22p-10  -0x1.0d452883db3a6p-14
+                         -0x1.b654664b664cep-2   0x1.06f58990c416ap-4
+    two calls of 10  ... 0x1.0f08a10952d21p-10  -0x1.0d452883db3ap-14
+                         -0x1.b654664b664cfp-2   0x1.06f58990c4166p-4
+
+one to six ulps, in four of the twelve coordinates. Neither is wrong -
+the second is simply a run that threw its predictor away halfway - but
+they are not the same answer, so the header, the example and the
+README all now say to ask for a whole run in one call. The
+registration form does not have the problem: there the state persists.
+
+### The cost, stated in the README because it decides the question
+
+Outer solar system, N = 6, fixed dt = 40. REBOUND's own IAS15, native
+doubles: 20,000 steps in 0.22 s, 10.8 us a step, 92,400 steps a
+second. The port on the same problem: 40.2 steps a second at binary64,
+11.3 at binary128, 3.6 at binary256. **The first factor of 2,300 is
+the software library and buys no accuracy at all** - it buys only the
+ability to change format. That number was nowhere in the README and it
+is the first thing a reader deciding whether to use this needs.
+
+### Not run here
+
+`make check` at every format, the census replays and anything on the
+card: this is parcel work and those belong to integration. The
+binary256 path through the packaging layer was checked by hand (the
+run quoted above) rather than by a committed gate. Nothing touched
+XRT, `--artifact` or `cft://`.

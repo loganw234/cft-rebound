@@ -12,6 +12,74 @@ Does a wider format push that floor down and extend the usable
 integration horizon, and at what cost? docs/VALIDATION.md has the
 numbers; the short answer is in "What was found" below.
 
+## Scope: what it integrates, and what it refuses
+
+Read this first; it decides in about a minute whether this is any use
+to you.
+
+**What it does.** REBOUND's IAS15, unchanged as an algorithm, with
+every floating-point operation carried out at binary64, binary128 or
+binary256. The force model is **basic pairwise Newtonian gravity** -
+REBOUND's `REB_GRAVITY_BASIC`, every pair, nothing approximated -
+with IAS15's PRS23 adaptive step or a fixed one, up to **1024 bodies**
+per system. At binary64 it is REBOUND's own IAS15 bit for bit, which
+is a gate the port passes on every build. An ensemble of independent
+systems integrates in one run, each with its own step
+(docs/ENSEMBLE.md).
+
+That is all of it. Everything below is refused, by name, with a
+message - never silently ignored, never approximated:
+
+| refused | |
+|---|---|
+| additional forces, `pre_`/`post_timestep_modifications` (REBOUNDx) | only gravity is ported |
+| collision detection and resolution | not ported |
+| ghost boxes, periodic or shear boundaries | not ported |
+| the tree code (`REB_GRAVITY_TREE`) | this is direct summation. `REB_GRAVITY_COMPENSATED` is refused too: a different summation from the one ported |
+| non-zero `softening` | not ported |
+| test particles (`N_active`), `gravity_ignore_terms`, particle maps | they change which pairs are computed |
+| variational particles | not ported |
+| velocity-dependent forces | not ported |
+| every integrator except IAS15 | WHFast is ranked first to follow (docs/INTEGRATORS.md) and has not been done |
+| IAS15's `min_dt`, and adaptive modes other than PRS23 | not ported |
+
+`cft_rebound_check()` is that table in code, and `cft_rebound_steps()`
+calls it before doing anything, so a refusal arrives at the start of
+your run rather than in the middle of it.
+
+**What it costs, and this is the part to weigh.** The arithmetic is a
+software library, not the hardware's doubles. On the outer solar
+system (N = 6, fixed step) REBOUND's own IAS15 does 92,000 steps a
+second on this host and the port does **40** at binary64, 11 at
+binary128 and 3.6 at binary256. The first factor of 2,300 buys you
+nothing but the ability to change format; only the rest buys accuracy.
+
+Gravity is an explicit pair list, so time and memory then grow as
+N^2 - per system, and an ensemble of E systems multiplies both by E:
+
+| one system | N = 64 | N = 256 | N = 512 | N = 1024 |
+|---|---|---|---|---|
+| memory, binary64 | 8 MB | 79 MB | 283 MB | 1.1 GB |
+| memory, binary256 | 23 MB | 283 MB | 1.1 GB | 4.4 GB |
+| one fixed binary64 step | 1.1 s | 14 s | 51 s | 196 s |
+
+The 1024-body cap is set where the worst case, binary256, still fits
+an ordinary workstation: 2048 would want 17.7 GB. Time stops you well
+before memory does, so a few hundred bodies is a demonstration rather
+than a survey. What this is for is a *small* system integrated
+*accurately*; docs/HORIZON.md measures where that is worth doing, and
+is equally clear about the many cases where binary64 is entirely
+sufficient.
+
+**What you get back.** REBOUND's `struct reb_particle` holds `double`
+and will keep doing so, so `r->particles` is the binary64 **view** of
+the run, correctly rounded from the wide state, and every REBOUND
+output, callback and tool works on it unchanged. The wide state is the
+integrator's own. `struct cft_rebound_result` reports the run's energy
+both as a rounded `double` and as exact hexadecimal text, because at
+binary128 and above the digits that moved are past binary64's last
+bit.
+
 ## Licence and provenance
 
 This repository is **GPL-3.0-or-later** (LICENSE, NOTICE). REBOUND is
@@ -33,6 +101,10 @@ Nothing is vendored by hand.
 
 ## Layout
 
+    include/cft_rebound.h    the public surface: what a REBOUND program includes
+    src/cft_rebound_run.c    and what it links: the refusal list and the run call
+    examples/roundtrip.c     the worked round trip, runnable (`make example`)
+    examples/Makefile        a REBOUND program's makefile with the two added lines
     src/ias15_cft.c          the port: every floating-point operation is a cft.h call
     src/ias15_constants.h    GENERATED: the Gauss-Radau constants at every format
     src/hexfloat.h           exact hex-float text for binary64, libc-independent
@@ -42,10 +114,12 @@ Nothing is vendored by hand.
     tools/gen_programs.py    the predictor and corrector as sequencer programs
     tools/make_problems.py   the problems as exact binary64 bit patterns
     tools/make_ensemble.py   E perturbed copies of a problem as one ensemble file
+    tools/make_nbody.py      a deterministic N-body problem of any size
     tools/check_equivalence.py     the gate: binary64 port == REBOUND, bit for bit
     tools/check_program_engine.py  the gate: programs == host loop, bit for bit
     tools/check_ensemble.py        the gate: ensemble == its members run alone, bit for bit
     tools/check_records.py         the gate: the committed records, recomputed, bit for bit
+    tools/check_bodycount.py       the gate: the port == REBOUND at a few hundred bodies
     tools/oracle.py          scores a record from its exact bits (mpmath)
     tools/compare_formats.py the round-off floor: one run at two formats, differenced
     tools/horizon.py         percentiles of an ensemble's error against time, and crossings
@@ -93,6 +167,46 @@ whose private `__m512d` typedef collides with the one mingw's
 not touch WHFast512. `-std=c99` pins `-ffp-contract=off`, so no FMA
 contraction changes REBOUND's doubles.
 
+## Using it from your own REBOUND program
+
+    make install PREFIX=/usr/local        # DESTDIR=... also honoured
+
+installs `cft_rebound.h` and `libcft_rebound.a` (plus libcft and the
+`ias15_cft` program the library runs) under that prefix. Two lines go
+into your own build:
+
+    CFLAGS  += -I/usr/local/include
+    LDLIBS  += -L/usr/local/lib -lcft_rebound -lcft
+
+Then include `cft_rebound.h` instead of `rebound.h`, build your
+simulation exactly as you do now, and call `cft_rebound_steps()` where
+you would have called `reb_simulation_steps()`:
+
+    struct cft_rebound_options opt = {0};
+    opt.format  = CFT_REBOUND_FP128;
+    opt.epsilon = 1e-9;                   /* 0 is REBOUND's fixed step */
+    struct cft_rebound_result res;
+    cft_rebound_steps(r, 1000, &opt, &res);
+    /* r->particles are now the binary64 view of a binary128 run */
+
+`examples/roundtrip.c` is that in full - the same system at binary64
+and binary128 on identical steps, differenced - and
+`examples/Makefile` is an ordinary REBOUND program's makefile with the
+two lines above marked. `make example` stage-installs into
+`build/stage`, builds it against that, and runs it, so the example
+also tests the install.
+
+Today `cft_rebound_steps()` runs the `ias15_cft` program in a
+subprocess and the wide state does not survive the call, so **ask for a
+whole run in one call**: IAS15 starts each step's corrector from the
+previous step's b coefficients, and a call that begins with them zeroed
+lands on different bits - one to six ulps over twenty Kepler steps,
+measured in docs/VALIDATION.md. ROADMAP parcel A replaces that
+middle with `reb_integrator_register()`; the call above does not
+change when it does, which is why the example is written against it.
+Both `include/cft_rebound.h` and `examples/roundtrip.c` say which form
+they are and what replaces it.
+
 ## Running
 
     build/ias15_ref --problem data/problems/kepler.txt --dt 0.05 --epsilon 0 --steps 2520 --sample 252
@@ -129,7 +243,11 @@ convention for a fixed step.
   or an exact hex float.
 
 `make check` runs every gate at every format (about half an hour);
-`make check-quick` runs them at binary64 in a few minutes.
+`make check-quick` runs them at binary64 in a few minutes. Both
+include `tools/check_bodycount.py`, which re-runs the equivalence gate
+at a few hundred bodies - where the per-particle summation order could
+drift from REBOUND's and nowhere else - and checks that the 1024-body
+cap is reachable and that 1025 is refused.
 
 ## What was found
 

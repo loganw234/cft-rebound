@@ -300,6 +300,27 @@ static void make_constants(int tol_shift, int quiet){
 /* ------------------------------------------------------------------ */
 /* The problem: E independent systems of N bodies each                 */
 /* ------------------------------------------------------------------ */
+/* The largest N this program accepts, per system.
+ *
+ * It was 64, and nothing in the code required that: valloc is calloc,
+ * every array is sized from N at run time, and body_names is allocated
+ * with the rest. What actually limits N is that gravity here is an
+ * explicit pair list, so both the memory and the time grow as E*N^2.
+ * Measured on one Windows host (peak working set, allocation plus one
+ * energy evaluation, E = 1):
+ *
+ *        N     binary64   binary128   binary256
+ *      512      283 MB      560 MB     1,113 MB
+ *     1024    1,118 MB    2,223 MB     4,433 MB
+ *     2048    4,454 MB    8,872 MB    17,707 MB
+ *
+ * 1024 is the largest power of two whose worst case still fits an
+ * ordinary workstation. Time is the tighter constraint in practice:
+ * one fixed binary64 step on that host, the program's own clock, was
+ * 1.130 s at N = 64, 13.598 s at 256, 51.067 s at 512 and 195.546 s
+ * at 1024. README "Scope" states both. */
+#define CFT_MAX_BODIES 1024
+
 static size_t E = 1;       /* systems in this run */
 static size_t N, NB, N3;   /* bodies per system, bodies in all, coordinates in all */
 static size_t L;           /* lanes per system, 3N */
@@ -327,7 +348,9 @@ static void read_problem(const char *path){
     size_t Efile = ns ? (size_t)ns : 1;
     if (nline < 0){ if (Efile > 1) die("an ensemble file needs an N line (bodies per system)"); nline = nb; }
     N = (size_t)nline;
-    if (N < 1 || N > 64) die("N = %zu bodies per system is outside 1..64", N);
+    if (N < 1 || N > CFT_MAX_BODIES)
+        die("N = %zu bodies per system is outside 1..%d; memory and time here grow as E*N^2 (README, \"Scope\")",
+            N, CFT_MAX_BODIES);
     if ((size_t)nb != Efile * N) die("%ld body lines for %zu system(s) of %zu bodies in %s", nb, Efile, N, path);
     if (member >= 0){
         if ((size_t)member >= Efile) die("--member %d, but %s has %zu system(s)", member, path, Efile);

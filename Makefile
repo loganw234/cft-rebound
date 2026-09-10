@@ -9,6 +9,9 @@
 #   make constants        re-derive and re-check the IAS15 constants
 #   make check            the gates: constants, and the port at binary64
 #                         against REBOUND's own IAS15, bit for bit
+#   make example          build the worked round trip and run it
+#   make install          a header and a library where a REBOUND build
+#                         can find them; PREFIX and DESTDIR as usual
 #
 # On Windows (MSYS2 mingw64 gcc from Git Bash) the same traps as
 # cft-fp256's host/Makefile apply, and they are passed through here:
@@ -26,6 +29,18 @@ PYTHON  ?= python3
 CFLAGS  ?= -O2
 CSTD    := -std=c99
 WARN    := -Wall -Wextra
+
+# make install: the usual conventions. PREFIX is where the package
+# belongs on the running system and is compiled into the library (it is
+# how libcft_rebound finds the ias15_cft program); DESTDIR is a staging
+# root prepended at copy time and is NOT compiled in, so a distribution
+# can build once with PREFIX=/usr and install into DESTDIR=/tmp/pkg.
+PREFIX     ?= /usr/local
+DESTDIR    ?=
+BINDIR     ?= $(PREFIX)/bin
+LIBDIR     ?= $(PREFIX)/lib
+INCLUDEDIR ?= $(PREFIX)/include
+INSTALL    ?= install
 
 REB     := third_party/rebound/src
 CFT     := third_party/cft-fp256/host
@@ -56,7 +71,7 @@ else
   CFT_MAKEVARS :=
 endif
 
-all: $(B)/ias15_ref$(EXE) $(B)/ias15_cft$(EXE)
+all: $(B)/ias15_ref$(EXE) $(B)/ias15_cft$(EXE) $(B)/libcft_rebound.a
 
 .PHONY: all third-party libcft librebound constants check clean
 
@@ -81,6 +96,24 @@ librebound: $(B)/librebound.a
 
 $(B)/ias15_ref$(EXE): ref/ias15_ref.c src/hexfloat.h $(B)/librebound.a
 	$(CC) $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -I$(REB) -o $@ ref/ias15_ref.c $(B)/librebound.a $(LIBS)
+
+# The packaging layer: what a REBOUND program links against. It runs
+# the ias15_cft program, so it is told where `make install` will put it;
+# if that file is not there at run time the search falls through to
+# $CFT_REBOUND_IAS15 and then to PATH (src/cft_rebound_run.c).
+$(B)/bindir.stamp: FORCE
+	@mkdir -p $(B)
+	@echo '$(BINDIR)' | cmp -s - $@ || echo '$(BINDIR)' > $@
+.PHONY: FORCE
+FORCE:
+
+$(B)/cft_rebound_run.o: src/cft_rebound_run.c include/cft_rebound.h src/hexfloat.h $(B)/bindir.stamp
+	@mkdir -p $(B)
+	$(CC) -c $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -Iinclude -Isrc -I$(REB) -I$(CFT)/include \
+	    -DCFT_REBOUND_IAS15_DEFAULT='"$(BINDIR)/ias15_cft$(EXE)"' -o $@ src/cft_rebound_run.c
+
+$(B)/libcft_rebound.a: $(B)/cft_rebound_run.o
+	ar rcs $@ $^
 
 $(B)/ias15_cft$(EXE): src/ias15_cft.c src/ias15_constants.h src/hexfloat.h $(CFTLIB)
 	$(CC) $(CSTD) $(CFLAGS) $(WARN) -I$(CFT)/include -o $@ src/ias15_cft.c $(CFTLIB) $(LIBS)
@@ -107,6 +140,7 @@ check: all programs
 	$(PYTHON) tools/check_program_engine.py --build $(B)
 	$(PYTHON) tools/check_records.py --build $(B)
 	$(PYTHON) tools/check_ensemble.py --build $(B)
+	$(PYTHON) tools/check_bodycount.py --build $(B)
 
 # the same gates at binary64 only, in a few minutes
 .PHONY: check-quick
@@ -116,6 +150,41 @@ check-quick: all programs
 	$(PYTHON) tools/check_program_engine.py --build $(B) --formats fp64
 	$(PYTHON) tools/check_records.py --build $(B) --quick
 	$(PYTHON) tools/check_ensemble.py --build $(B) --quick
+	$(PYTHON) tools/check_bodycount.py --build $(B) --quick
+
+# The worked round trip, built in the tree and run against the
+# programs here rather than an installed copy.
+.PHONY: example
+example: $(B)/librebound.a
+	$(MAKE) install PREFIX=$(CURDIR)/$(B)/stage
+	$(MAKE) -C examples clean
+	$(MAKE) -C examples PREFIX=$(CURDIR)/$(B)/stage \
+	    REBOUND_INCLUDE=../$(REB) REBOUND_LIB=../$(B)/librebound.a
+	examples/roundtrip$(EXE)
+
+# A header and a library where a REBOUND build can find them, plus the
+# ias15_cft program the library runs. libcft is installed too (it is
+# Apache-2.0; see NOTICE) because libcft_rebound has undefined
+# references into it and `-lcft` has to resolve.
+.PHONY: install uninstall
+install: all $(CFTLIB)
+	$(INSTALL) -d $(DESTDIR)$(INCLUDEDIR) $(DESTDIR)$(LIBDIR) $(DESTDIR)$(BINDIR)
+	$(INSTALL) -m 644 include/cft_rebound.h $(DESTDIR)$(INCLUDEDIR)/
+	$(INSTALL) -m 644 $(B)/libcft_rebound.a $(DESTDIR)$(LIBDIR)/
+	$(INSTALL) -m 755 $(B)/ias15_cft$(EXE) $(DESTDIR)$(BINDIR)/
+	$(INSTALL) -m 644 $(CFT)/include/cft.h $(CFT)/include/cft_config.h $(CFT)/include/cft.hpp $(DESTDIR)$(INCLUDEDIR)/
+	$(INSTALL) -m 644 $(CFTLIB) $(DESTDIR)$(LIBDIR)/
+	@echo
+	@echo "installed into $(DESTDIR)$(PREFIX). Two lines in your own build:"
+	@echo "    CFLAGS  += -I$(INCLUDEDIR)"
+	@echo "    LDLIBS  += -L$(LIBDIR) -lcft_rebound -lcft"
+
+uninstall:
+	rm -f $(DESTDIR)$(INCLUDEDIR)/cft_rebound.h
+	rm -f $(DESTDIR)$(INCLUDEDIR)/cft.h $(DESTDIR)$(INCLUDEDIR)/cft_config.h $(DESTDIR)$(INCLUDEDIR)/cft.hpp
+	rm -f $(DESTDIR)$(LIBDIR)/libcft_rebound.a $(DESTDIR)$(LIBDIR)/libcft.a
+	rm -f $(DESTDIR)$(BINDIR)/ias15_cft$(EXE)
 
 clean:
 	rm -rf $(B)
+	$(MAKE) -C examples clean
