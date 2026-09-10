@@ -199,10 +199,18 @@ right binary64 state; open a stock archive here and confirm promotion.
 
 ### C. Scope, limits and packaging
 
-- Raise the 64-body cap. It is arbitrary: `valloc` is `calloc`, every
-  array is sized from N at run time, and the only fixed object is
-  `body_names[64][32]`, which is display text. It has been exercised to
-  512 bodies on a scratch clone with no trouble.
+- Raise the 64-body cap. **CORRECTED after parcel C built it:** the
+  reason given here was wrong. `body_names` is already
+  `static char (*body_names)[32]`, `calloc`'d from the body count, and
+  so is `sys_names`. Nothing needed resizing - the cap was a bare
+  literal with nothing behind it. What actually bounds N is that
+  gravity is an explicit pair list, so memory and time both grow as
+  `E*N^2`: at binary256 one system needs 1.1 GB at N=512 and 4.4 GB at
+  N=1024, and one fixed binary64 step takes 51 s at N=512 and 196 s at
+  N=1024. "Exercised to 512 with no trouble" was true and incomplete.
+  Set at 1024. `ref/ias15_ref.c` had its own `struct body bodies[64]`
+  and had to grow too, or the equivalence gate cannot reach the sizes
+  the port now allows.
 - A README section stating what is supported and what is refused,
   above the fold, so nobody discovers the limits by hitting them.
 - A worked round trip: a REBOUND C program, run at binary128, result
@@ -279,6 +287,35 @@ suspicions.
 - **Integrator names must be lowercase.** The Python layer lowercases
   on assignment. `ias15_cft` is safe.
 
+## The cost, which was nowhere in this repository
+
+Parcel C measured it and it belongs at the top of any expectation.
+**The software library is about 2,300x slower than REBOUND's own IAS15
+at the same binary64** - 40.2 steps a second against 92,400 on the
+outer solar system. The tile's best measured ensemble speedup is 13.3x,
+so on hardware this is still roughly two orders of magnitude slower
+than stock REBOUND at binary64.
+
+That is not a defect and it does not want fixing. It is the same
+statement cft-fp256's own README makes: this is not for binary64
+throughput. What it is for is the precision commodity hardware does not
+offer and the guarantee that the answer does not move. Anyone choosing
+this over REBOUND for a binary64 run has chosen wrong, and the README
+now says so in those terms.
+
+## A footgun found by building on it
+
+`ias15_cft --max-iter` defaults to REBOUND's 12 **at every format**, so
+a binary256 run silently truncates its corrector: 20 steps measured
+`mean_pc = 12.000, max_pc = 12` - the cap on every single step. Given a
+format-appropriate limit the same run converges at `mean_pc = 14.450,
+max_pc = 18`, and the energy differs in the last twelve hex digits.
+
+Nothing is wrong with the bits it produced; they are the correct answer
+to a truncated iteration. But it is silent, and anything wrapping this
+program must set the limit by format. Parcel C's packaging layer picks
+12/24/60. **The shim in parcel A must do the same.**
+
 ## Corrections to the state struct above
 
 From building against it: there is no `at` member though the mirror
@@ -288,3 +325,29 @@ archives as seven; `char cft_abi[16]` cannot be archived by any dtype
 and goes out as two `uint64`; and nothing records that a state was
 PROMOTED rather than restored exactly, which wants a one-word
 `provenance` member.
+
+Two members are **aspirational, not ports of existing behaviour**:
+`adaptive_mode` (the port has no mode switch - PRS23 only) and
+`min_dt` (no such option exists). Implement them or drop them
+deliberately; do not assume there is behaviour to wrap.
+
+## Two REBOUND defaults that will bite the refusal checks
+
+Parcel C's first refusal list rejected every default simulation.
+`r->OMEGAZ` is initialised to **-1.0** as a sentinel, not 0, and
+`r->N_active` defaults to **SIZE_MAX**, not -1. Any check for "the user
+set this" must test against those, and parcel A is writing the same
+checks.
+
+## Splitting a run changes the answer, measured
+
+IAS15 starts each step's corrector from the previous step's `b`
+coefficients. One call of 20 Kepler steps against two calls of 10, with
+the state fed back exactly, differ by **1 to 6 ulps in four of twelve
+coordinates**.
+
+That is the empirical case for everything above: a restart that does
+not carry `b` and `e` is not the same run, it is a nearby one. It is
+why the state struct lists them, why the archive has to persist them,
+and why parcel B's restart gate compares all 48 blobs rather than just
+the particles.
