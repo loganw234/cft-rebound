@@ -85,11 +85,13 @@ endif
 # wheel's librebound rather than leave REBOUND's symbols to the
 # loader, and that is a different rule - see docs/PYTHON.md.
 ifeq ($(shell uname -s 2>/dev/null),Darwin)
-  SHLIB   := libcft_ias15.dylib
-  SHFLAGS := -dynamiclib -Wl,-install_name,@rpath/libcft_ias15.dylib
+  SHLIB     := libcft_ias15.dylib
+  SHFLAGS   := -dynamiclib -Wl,-install_name,@rpath/libcft_ias15.dylib
+  CFT_SHLIB := $(CFT)/libcft.dylib
 else
-  SHLIB   := libcft_ias15.so
-  SHFLAGS := -shared
+  SHLIB     := libcft_ias15.so
+  SHFLAGS   := -shared
+  CFT_SHLIB := $(CFT)/libcft.so
 endif
 
 ifneq ($(OS),Windows_NT)
@@ -99,6 +101,10 @@ ifneq ($(OS),Windows_NT)
   XRT ?= 0
   ifeq ($(XRT),1)
     LIBS += -L$(XILINX_XRT)/lib -lxrt_coreutil -lstdc++ -lpthread -luuid
+    # and libcft itself must be built with the backend, which it is not
+    # by default. Every hardware run this project has done used an
+    # archive built with XRT=1 by hand; this is that, from the signal.
+    CFT_MAKEVARS += XRT=1 XRT_ROOT=$(XILINX_XRT)
   endif
 endif
 
@@ -225,8 +231,18 @@ $(B)/pic/cft_ias15_shared.o: src/cft_ias15_shared.c src/cft_ias15.h
 # already has librebound loaded and python/cft_rebound.py promotes it
 # to RTLD_GLOBAL before opening this. Linking a second copy would give
 # a second integrator list and a name that can never be selected.
-$(B)/$(SHLIB): $(PIC_OBJ) $(CFTLIB)
-	$(CC) $(SHFLAGS) -o $@ $(PIC_OBJ) $(CFTLIB) $(LIBS)
+# libcft.a will NOT go into a shared object: backend_xrt.o is C++ and
+# carries relocations a shared object cannot use (R_X86_64_PC32 against
+# a GLIBCXX symbol). cft-fp256 builds a proper shared libcft from its
+# own PIC objects, so use that. Two rpaths: $$ORIGIN for an installed
+# layout where the two sit together, and the tree for running it in
+# place without an install.
+$(CFT_SHLIB):
+	$(MAKE) -C $(CFT) CC=$(CC) PYTHON=$(PYTHON) $(CFT_MAKEVARS) $(notdir $(CFT_SHLIB))
+
+$(B)/$(SHLIB): $(PIC_OBJ) $(CFT_SHLIB)
+	$(CC) $(SHFLAGS) -o $@ $(PIC_OBJ) -L$(CFT) -lcft \
+	    -Wl,-rpath,'$$ORIGIN' -Wl,-rpath,$(abspath $(CFT)) $(LIBS)
 
 .PHONY: python-lib check-python
 python-lib: $(B)/$(SHLIB) check-rebound-match
