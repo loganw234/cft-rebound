@@ -24,8 +24,12 @@
  * file-scope static. Two simulations therefore cannot use this
  * integrator at the same time, and a second one is refused with a
  * message that says so. A simulation that has been freed releases the
- * engine, and the next one may adopt it if its format, epsilon,
- * max_iter and arithmetic agree and its N fits the reserved capacity.
+ * engine and the next one adopts it, at the same format - the Gauss-
+ * Radau constants are derived at that format and every buffer is sized
+ * for its element width - and within the reserved capacity. epsilon,
+ * max_iter and the arithmetic form are reconciled on every step, so a
+ * program may run one simulation after another at different tolerances,
+ * and a user who edits the state mid-run gets what they asked for.
  */
 #include <stdio.h>
 #include <stdlib.h>

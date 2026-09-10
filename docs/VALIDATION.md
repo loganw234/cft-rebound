@@ -1399,9 +1399,24 @@ REBOUND archive. REBOUND prefixes the names itself
 
 The one thing that needs a decision and cannot be taken here:
 `element_size` is a plain field of every REBOUND descriptor and every
-built-in list fills it with a compile-time `sizeof`. W is 8, 16 or 32
-according to `state->format`, so either the list is built at run time
-(REBOUND stores the pointer, so a per-state list is possible) or the
-blob is declared as bytes with `element_size = 1` and `n_elem` scaled.
-Both work; neither is obviously right; it is written down rather than
-guessed at.
+built-in list fills it with a compile-time `sizeof`, while W is 8, 16 or
+32 according to `state->format`. The writer computes
+`size_data = *(size_t*)(base + offset_N) * element_size`
+(binarydata.c, `case REB_POINTER`), so there are two shapes that work
+and they are not equivalent:
+
+- **three lists, one per format, chosen per simulation.**
+  `set_integrator` copies the whole `struct reb_integrator` into
+  `r->integrator.callbacks` (simulation.c:205), so
+  `r->integrator.callbacks.field_descriptor_list` is a per-simulation
+  pointer and may be repointed after
+  `reb_simulation_set_integrator`. `n_elem` stays 3N, which is what
+  ROADMAP.md says it is, and the archived `size_data` is right.
+- **one list, `element_size = 1`, the blob declared as bytes.** Then
+  `offset_N` must name a member holding 3N*W and `n_elem` is no longer
+  3N. The struct has no spare size_t for it (`E` is the ensemble count),
+  so this shape costs a field, and the field cannot be added without
+  moving the offsets parcel B is writing against.
+
+The first is the one that fits the struct as it stands. Neither is
+implemented here; it is written down rather than guessed at.
