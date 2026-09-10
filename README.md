@@ -170,6 +170,19 @@ as make variables:
         TMP=C:/Users/you/AppData/Local/Temp TEMP=C:/Users/you/AppData/Local/Temp \
         PYTHON=C:/path/to/python.exe
 
+If libcft was built with the XRT backend - the one that talks to a
+card - its objects are C++ and need the XRT runtime at link time.
+Sourcing XRT's own setup script is enough:
+
+    . /opt/xilinx/xrt/setup.sh    # sets XILINX_XRT
+    make                          # the link flags follow from it
+
+`XRT=0` turns that off for a software-only libcft in a shell that
+happens to have XRT sourced, and `LIBS=` overrides the lot. Without
+it a plain `make` against such a library stops on a page of
+undefined references to `xrt::bo`, which names neither the cause nor
+the fix.
+
 REBOUND's own build assumes MSVC on Windows; here its library is
 compiled with gcc from its sources minus `integrator_whfast512.c`,
 whose private `__m512d` typedef collides with the one mingw's
@@ -252,9 +265,37 @@ convention for a fixed step.
   `--dt-out FILE` records one; `--dt` and `--epsilon` take a decimal
   or an exact hex float.
 
+### Running the gates on a card
+
+    export CFT_REBOUND_ARTIFACT=/path/to/cft_hw_quad.xclbin
+    make check
+
+One variable, and every gate that opens the engine opens the tile
+instead - no gate takes a flag for it. The same variable is the
+fallback for all three ways into this library, so they cannot
+disagree about which device a run used:
+
+- the registered integrator, after `cft_ias15_set_artifact()`;
+- `cft_rebound_steps()`, after `opt.artifact`;
+- the `ias15_cft` program, after `--artifact`.
+
+An explicit setting always wins; unset or empty means the software
+backend. Whichever is used, the bits are the same - that is what
+the gates check - so the card is a speed choice, not a numerical
+one.
+
+Note that a gate is not a benchmark. The python checkers spawn a
+fresh `ias15_cft` per case and would pay a device open every time;
+`build/check_dropin` and `build/gate_real` open the engine once for
+the whole program and are the ones worth pointing at a card.
+
 `make check` runs every gate at every format (about half an hour);
+
 `make check-quick` runs them at binary64 in a few minutes. Both
-include `tools/check_bodycount.py`, which re-runs the equivalence gate
+include `tests/gate_real.c`, which takes a checkpoint through the
+registered integrator and requires the restarted run to be bit
+identical to an uninterrupted one, and `tools/check_bodycount.py`,
+which re-runs the equivalence gate
 at a few hundred bodies - where the per-particle summation order could
 drift from REBOUND's and nowhere else - and checks that the 1024-body
 cap is reachable and that 1025 is refused.
