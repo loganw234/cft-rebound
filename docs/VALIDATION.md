@@ -2314,3 +2314,80 @@ binary256, three separate processes:
 Bit for bit, so nothing about the restore degrades with run length -
 which is the property that makes the archive useful for the workloads
 this card exists for, and it had not been measured.
+
+
+---
+
+## 27. The first hardware run of any gate in this repository
+
+**2026-09-10, amd-arc-box, Alveo U50C, `cft_hw_quad.xclbin` (four
+tiles), XRT 2022.2. Reached with `CFT_REBOUND_ARTIFACT`, which did not
+exist before entry 25.**
+
+Every hardware number in docs/HARDWARE.md until today came from the
+standalone `ias15_cft` program, because nothing in the gate suite could
+open an artifact: the drop-in had a setter no gate called, the
+subprocess API had no field for one, and the Makefile could not even
+link against an XRT build of libcft. All three are fixed, so these are
+the gates themselves, unmodified, run on the tile.
+
+| gate | what it establishes | card |
+|---|---|---|
+| `check_dropin` | the registered integrator is REBOUND's own IAS15 at binary64, bit for bit - every case and every refusal | 2,030 s |
+| `check_dropin --wide` | the same shim at binary128 | 2,195 s |
+| `gate_real --fp64` | a Simulationarchive checkpoint written and restored on the tile, 30 values identical across it | 27 s |
+| `gate_real --fp128` | the same at binary128 | 48 s |
+| `gate_real --fp256` | the same at binary256 | 157 s |
+
+And the comparison that matters most, run last: the same gate in
+software and on the card, output diffed.
+
+```
+fp64:  software and card report identical output
+fp128: software and card report identical output
+fp256: software and card report identical output
+```
+
+**What is and is not new here.** The cost is not new. 2,030 s against a
+few seconds in software is the per-call cost at N = 2 and N = 5 that
+docs/HARDWARE.md predicted from the start, and the ensembles are where
+the card earns its keep. What is new is that the *answer* does not
+depend on the backend, measured through the gates rather than through
+one program, and that a checkpoint round-trips through the tile - the
+archive was written by a run on the card, read back, and the
+continuation was identical to an uninterrupted card run.
+
+**One number worth reading.** `gate_real` on the same 30 steps took
+27 s, 48 s and 157 s at binary64, binary128 and binary256. The ratio
+157/27 is 5.8. The corrector's measured pass counts are about 2.4, 6
+and 18-22, a ratio of 9.2. So the tile recovers roughly a third of what
+the extra passes cost, which is what a format-independent per-call cost
+and format-dependent per-pass work predict together. It is a
+consistency check on the model, not a new result.
+
+**Two things the box itself revealed.**
+
+`make check` had **never once run on this Linux host**. It dies two
+seconds in: `tools/gen_constants.py` imports mpmath and the system
+python has never had it, because every hardware session here built
+`build/ias15_cft` directly and none ran the suite. Installed into
+`~/.local` (PEP 668 refuses a plain `--user`; `python3.12-venv` is not
+installed either, so `--break-system-packages --user` was the option
+that needed no sudo). The full software suite on Linux is therefore
+still owed and is the one leg of this pass that did not run.
+
+And the link flags. Every hardware run this project has ever done
+passed `LIBS="-lm -L/opt/xilinx/xrt/lib -lxrt_coreutil -lstdc++
+-lpthread -luuid"` on the make command line, and that string existed
+only in a scratch script on the Windows host. A plain `make` against an
+XRT libcft stopped on a page of undefined references to `xrt::bo`
+naming neither the cause nor the fix. The Makefile derives them from
+`XILINX_XRT` now, and the log of this run shows them appearing in every
+link line without a script's help.
+
+**Still not run.** The full software `make check` on Linux (above); the
+cross-process `tools/check_checkpoint.py` on the card, which is a
+stronger test than `gate_real` and is what a long run actually needs;
+macOS; the Python shared library, whose requirements are specified in
+docs/PYTHON.md and whose gate cannot run until a `rebound` wheel is
+installed on one of these hosts.
