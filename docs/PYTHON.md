@@ -103,48 +103,69 @@ links against nothing, is not.
    binary64 they must be identical, which is parcel A's gate seen from
    Python.
 
-Step 2 is the part this repository still owes, and it is the only
-thing between here and a working Python path. Not started, because
-it is packaging rather than a Python question and it is not the
-"cheap addition" the parcel was scoped as. What it needs, with the
-parts that are already answered marked:
+Step 2 is done. `make python-lib` builds
+`build/libcft_ias15.so` (`.dylib` on macOS) and `make check-python`
+runs the equivalence example against it. Measured on Linux,
+2026-09-10, against the rebound 5.1.1 wheel:
 
-1. **PIC objects of the four drop-in sources** - `ias15_cft.c` built
-   `-DIAS15_CFT_LIBRARY` (no `main`), `reb_integrator_cft.c`,
-   `cft_ias15_fields.c`, `cft_archive.c`. The first three are
-   already compiled as a group (`DROPIN_OBJ` in the Makefile); this
-   is the same list with `-fPIC` and the archive added.
+```
+IDENTICAL: 13 values, bit for bit.
+```
 
-2. **libcft in the same shared object.** *Answered:* the objects in
-   `libcft.a` as built on this project's Linux host carry **no
-   absolute relocations** (`readelf -r` finds zero `R_X86_64_32`
-   or `R_X86_64_32S`), so the existing static archive links into a
-   shared object on x86-64 without rebuilding it. cft-fp256 also
-   builds a real `libcft.so`/`.dylib`/`.dll` from its own `.lo`
-   objects if a shared dependency is preferred to a static one -
-   that is a packaging choice, not a blocker.
+That is REBOUND's own `ias15` against `ias15_cft` selected by name from
+Python, same problem, same fixed step, at binary64. The wide formats
+run too, and the format reaches the arithmetic rather than being
+accepted and ignored - 252 steps take 5.2 s at binary64, 15.3 s at
+binary128 and 49.4 s at binary256, which is the software backend's
+known ratio.
 
-3. **REBOUND's symbols.** On POSIX, leave them undefined: the
-   process that calls `ctypes.CDLL` has already loaded REBOUND's
-   own shared library and resolves them. On Windows a DLL may not
-   have undefined symbols, so it must link against
-   `rebound.__libpath__`, which is what step 2's second sentence
-   above says. Both are stated in REBOUND's own terms and neither
-   has been tried here.
+**Four things it needed, and one of them was a correction.**
 
-4. **A verification that means something.** *Not possible on either
-   host as they stand:* the `rebound` wheel is not installed in any
-   Python reachable from this project's Windows or Linux machine
-   (parcel D installed its own). The gate is
-   `python/example_equivalence.py` against the built library, and
-   it must run on both platforms before the target is claimed -
-   a shared object that builds and does not load is worse than no
-   target, because the failure appears in a user's Python session
-   rather than in a build log.
+1. **PIC objects of the four drop-in sources**, which is `PIC_OBJ` in
+   the Makefile - the same list as `DROPIN_OBJ` with `-fPIC`, the
+   archive added, and `src/cft_ias15_shared.c`.
 
-Note that item 3 is why this cannot be one rule with an `ifeq`: the
-two platforms disagree about whether an unresolved symbol is an
-error, and that difference decides what the library links against.
+2. **libcft as a shared object, not the archive.** *This is a
+   correction.* An earlier version of this section said `libcft.a`
+   links into a shared object as it is, on the evidence that `device.o`
+   carries no absolute relocations. One member is not the archive:
+   `backend_xrt.o` is C++ and the link stops on `R_X86_64_PC32 against
+   symbol _ZSt7nothrow@@GLIBCXX_3.4`. cft-fp256 builds a proper
+   `libcft.so` from its own PIC objects, with the card backend when
+   `XRT=1`, so the Makefile builds and links that.
+
+3. **REBOUND's symbols left undefined**, resolved because
+   `cft_rebound.load()` promotes the wheel's librebound to
+   `RTLD_GLOBAL` first. The library registers itself in a constructor
+   (`src/cft_ias15_shared.c`); there is nowhere else it could happen,
+   because a Python caller's first contact is assigning a string to
+   `sim.integrator`.
+
+4. **A way to configure it, which did not exist.** Selecting the
+   integrator always worked. The next line did not: REBOUND generates
+   `sim.integrator.epsilon` and its siblings from structs it knows, and
+   it does not know `struct cft_ias15_state`, so Python could reach
+   binary64 with the default step control and nothing else - the one
+   thing this repository is for was unreachable from Python.
+   `cft_ias15_configure()` takes format, epsilon and max_iter by value,
+   which is what a ctypes caller can call, and
+   `cft_rebound.configure(lib, sim, format="fp256", epsilon=0.0)` is the
+   Python side.
+
+**One guard.** The library is compiled against the pinned REBOUND
+headers and loaded into a process running the wheel's REBOUND, so the
+two must be the same source or `struct reb_simulation` is laid out
+differently on each side of the call and nothing says so. They are
+identical today - the rebound 5.1.1 wheel ships a `rebound.h` byte for
+byte the same as the pinned bdfda4bd - and that is luck rather than
+design, so `make python-lib` runs `check-rebound-match` first and
+refuses if they ever diverge.
+
+**Windows is not done.** A DLL may not carry undefined symbols, so it
+must link against `rebound.__libpath__` rather than leave REBOUND's
+symbols to the loader. That is a different rule, and it deserves its own
+change and its own test rather than an `ifeq` bolted onto a target that
+works.
 
 ## Four sharp edges, all measured
 

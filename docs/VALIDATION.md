@@ -2391,3 +2391,98 @@ stronger test than `gate_real` and is what a long run actually needs;
 macOS; the Python shared library, whose requirements are specified in
 docs/PYTHON.md and whose gate cannot run until a `rebound` wheel is
 installed on one of these hosts.
+
+
+---
+
+## 28. Python, closed
+
+**2026-09-10, amd-arc-box, Ubuntu 24.04, gcc 13, the rebound 5.1.1
+wheel from PyPI.**
+
+docs/PYTHON.md's step 2 had been owing since parcel D: the loader and
+the example existed and there was no library for them to load. It is
+built and it passes.
+
+```
+loaded build/libcft_ias15.so; registered integrators:
+  ias15 whfast sei leapfrog janus mercurius saba eos bs whfast512 trace none ias15_cft
+problem kepler.txt: N = 2, G = 0x1.0000000000000p+0, dt = 0x1.999999999999ap-5, 252 steps
+  configured through the library: fp64, fixed step
+IDENTICAL: 13 values, bit for bit.
+```
+
+REBOUND's own `ias15` against `ias15_cft` selected by name from Python,
+same problem, same fixed step, at binary64.
+
+**That the format reaches the arithmetic, and is not merely accepted.**
+The same 252 steps:
+
+| format | wall |
+|---|---|
+| fp64 | 5.2 s |
+| fp128 | 15.3 s |
+| fp256 | 49.4 s |
+
+which is the software backend's known ratio (120, 39 and about 10 steps
+a second). At fp128 and fp256 the run differs from REBOUND's by
+4.263e-14, and the two wide formats agree with each other, which is what
+the Phase 2 precision entry says should happen at a step this size.
+
+**Four things it needed. One of them was a correction to this file.**
+
+Earlier today, entry 26 and docs/PYTHON.md both recorded that `libcft.a`
+links into a shared object as it is, on the evidence that its `device.o`
+carries no absolute relocations. **That was wrong, and wrong in a way
+worth naming: I sampled one member of an archive and generalised.**
+`backend_xrt.o` is C++ and the link stops on `R_X86_64_PC32 against
+symbol _ZSt7nothrow@@GLIBCXX_3.4`. The fix needed no new code -
+cft-fp256 already builds a real `libcft.so` from its own PIC objects,
+and with `XRT=1` it carries the card backend too (329 KB without,
+393 KB with).
+
+The other three: PIC objects of the four drop-in sources; REBOUND's
+symbols left undefined and resolved because `cft_rebound.load()`
+promotes the wheel's librebound to `RTLD_GLOBAL` first, with
+registration in a constructor because a Python caller's first contact
+is an assignment to `sim.integrator`; and a way to configure it.
+
+**The last of those did not exist and is the interesting one.**
+Selecting the integrator by name always worked. Configuring it never
+did: REBOUND generates `sim.integrator.epsilon` and its siblings from
+structs it knows, and it does not know `struct cft_ias15_state`. So a
+Python caller could select `ias15_cft` and then reach binary64 with the
+default step control and nothing else - the wide formats, the whole
+point, were unreachable from Python and nothing said so.
+
+The example had been showing it all along and it read as an arithmetic
+failure: it sets `epsilon = 0` for a fixed reference, could not for
+ours, printed a note, and compared a fixed-step run against an adaptive
+one. 9 of 13 values differed, t was 31.2 against 12.6, and the
+arithmetic was never involved. `cft_ias15_configure()` takes format,
+epsilon and max_iter by value - which is what a ctypes caller can call -
+and `cft_ias15_format_code()` spells the format so Python need not
+hard-code an enumerator belonging to libcft.
+
+**One guard, because the agreement is luck.** The library is compiled
+against the pinned REBOUND headers and loaded into a process running the
+wheel's REBOUND. If those differ, `struct reb_simulation` is laid out
+differently on each side of the call and nothing says so. Today the
+5.1.1 wheel ships a `rebound.h` byte for byte identical to the pinned
+bdfda4bd; `make python-lib` runs `check-rebound-match` first and refuses
+rather than build a library that would be quietly wrong.
+
+**Two more things this pass fixed, both found by trying to compile.**
+`CFT_IAS15_INTEGRATOR_NAME` was defined in `src/cft_archive.h` - the
+integrator's own name, in the archive's header, because parcel B needed
+it and parcel A's header did not have it. And `src/cft_ias15.h` declared
+an array of `struct reb_binarydata_field_descriptor` without including
+the header that defines it, so it compiled only after whatever had
+included `binarydata.h` first. A caller following the header's own usage
+comment got an incomplete element type. Both are the same shape as
+entry 25: a header that is not self-contained is a fact stated
+somewhere else.
+
+**Not done: Windows.** A DLL may not carry undefined symbols, so it must
+link against `rebound.__libpath__` rather than leave REBOUND's symbols to
+the loader. Different rule, its own change, its own test.
