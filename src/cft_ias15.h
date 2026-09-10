@@ -40,6 +40,10 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "binarydata.h"    /* struct reb_binarydata_field_descriptor, which
+                            * the field list below is an array of - so this
+                            * header compiles on its own rather than only
+                            * after whatever included it first */
 #include "cft.h"
 
 struct reb_simulation;
