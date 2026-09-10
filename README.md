@@ -43,9 +43,29 @@ message - never silently ignored, never approximated:
 | every integrator except IAS15 | WHFast is ranked first to follow (docs/INTEGRATORS.md) and has not been done |
 | IAS15's `min_dt`, and adaptive modes other than PRS23 | not ported |
 
-`cft_rebound_check()` is that table in code, and `cft_rebound_steps()`
-calls it before doing anything, so a refusal arrives at the start of
-your run rather than in the middle of it.
+`cft_rebound_check()` (src/cft_rebound_run.c) is that table in code for
+the **subprocess API**, and `cft_rebound_steps()` calls it before doing
+anything, so a refusal arrives at the start of your run rather than in
+the middle of it.
+
+The **drop-in** has its own list, `supported()` in
+src/reb_integrator_cft.c, checked at the top of every step. The two
+overlap but are not identical, and the differences are worth knowing
+before you pick a path:
+
+- the drop-in additionally refuses **MEGNO** (`r->calculate_megno`), a
+  `format` or `max_iter` outside its range, and a state whose `E` is
+  not 1 (an ensemble is E independent systems and a `reb_simulation`
+  is one; use the standalone program, docs/ENSEMBLE.md);
+- the drop-in does **not** check
+  `pre_`/`post_timestep_modifications`, `r->gravity_custom`, or
+  `r->N_odes`, all of which `cft_rebound_check()` refuses. The
+  timestep hooks are not an oversight - the step re-promotes any
+  coordinate that changed under it, which is how a callback that edits
+  a particle is meant to work - but a REBOUNDx force or an attached
+  ODE set reaches the drop-in without a refusal and without being
+  integrated, so do not rely on the row above for that path. It is
+  recorded as an open item rather than papered over.
 
 **What it costs, and this is the part to weigh.** The arithmetic is a
 software library, not the hardware's doubles. On the outer solar
@@ -439,9 +459,11 @@ See docs/VALIDATION.md for every number. In brief:
   Replacing Kahan's `add_cs` with 9.5's exact augmentedAddition lowers
   the binary64 floor 3-4x on the one run tried and changes nothing at
   binary256.
-- **The programs.** The predictor and corrector run as 24
-  orbit-sequencer programs with the state in the per-lane scratch
-  block, bit-identical to the host loop at every format.
+- **The programs.** The predictor and corrector run as orbit-sequencer
+  programs with the state in the per-lane scratch block, bit-identical
+  to the host loop at every format: one predictor and seven correctors
+  at each of three formats, plus a per-lane-`dt` predictor for an
+  adaptive ensemble, which is the 27 files in `programs/`.
 - **The hardware.** docs/HARDWARE.md: the design keeps 47 values per
   coordinate resident; the projection is that a single system on the
   tile is 2-3x the software backend and an ensemble of a thousand is

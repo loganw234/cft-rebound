@@ -22,6 +22,14 @@
 # floats (%a), so the comparison is over bits rather than over a decimal
 # rendering of them: a last-bit difference shows as a different line.
 #
+# THE NEGATIVE CONTROL IS NOT OPTIONAL, and is the fourth process. It
+# runs the resume again with CFT_REBOUND_NO_ADOPT set, which makes the
+# shim discard the loaded state instead of carrying it, and this gate
+# requires that run to DIFFER. Without it the comparison is not
+# evidence: at the default step counts only a few of the dumped lines
+# differ between binary64 and binary256, so agreement on the rest would
+# say nothing about whether the wide state was carried at all.
+#
 #   python tools/check_checkpoint.py [--build build] [--quick]
 #
 # --quick is binary64 only. An artifact in CFT_REBOUND_ARTIFACT is

@@ -11,6 +11,7 @@
 # changes shape (the ensemble rewrite, for one).
 #
 #   python tools/check_records.py [--build build] [--quick]
+#                                 [--exe ias15_cft] [--samples N]
 
 import argparse
 import os

@@ -12,6 +12,8 @@
 # sequence - but only at the round-off level.
 #
 #   python tools/check_program_engine.py [--build build] [--exe ias15_cft]
+#                                        [--formats fp64,fp128,fp256]
+#   (`make check-quick` passes --formats fp64)
 
 import argparse
 import os
