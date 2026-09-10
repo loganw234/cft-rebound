@@ -97,26 +97,26 @@ static V valloc(size_t n){
 /* Elementwise operations. d may alias any input (cft_run's rule).      */
 /* ------------------------------------------------------------------ */
 static void vfma(V d, const V a, const V b, const V c, size_t n){
-    uint32_t fl = 0; note(cft_run(dev, CFT_FMA, F, CFT_RNE, a, b, c, d, n, &fl, NULL), fl, "fma"); }
+    uint32_t fl = 0; cft_status st = cft_run(dev, CFT_FMA, F, CFT_RNE, a, b, c, d, n, &fl, NULL); note(st, fl, "fma"); }
 static void vadd(V d, const V a, const V c, size_t n){
-    uint32_t fl = 0; note(cft_run(dev, CFT_ADD, F, CFT_RNE, a, NULL, c, d, n, &fl, NULL), fl, "add"); }
+    uint32_t fl = 0; cft_status st = cft_run(dev, CFT_ADD, F, CFT_RNE, a, NULL, c, d, n, &fl, NULL); note(st, fl, "add"); }
 static void vsub(V d, const V a, const V c, size_t n){
-    uint32_t fl = 0; note(cft_run(dev, CFT_SUB, F, CFT_RNE, a, NULL, c, d, n, &fl, NULL), fl, "sub"); }
+    uint32_t fl = 0; cft_status st = cft_run(dev, CFT_SUB, F, CFT_RNE, a, NULL, c, d, n, &fl, NULL); note(st, fl, "sub"); }
 static void vmul(V d, const V a, const V b, size_t n){
-    uint32_t fl = 0; note(cft_run(dev, CFT_MUL, F, CFT_RNE, a, b, NULL, d, n, &fl, NULL), fl, "mul"); }
+    uint32_t fl = 0; cft_status st = cft_run(dev, CFT_MUL, F, CFT_RNE, a, b, NULL, d, n, &fl, NULL); note(st, fl, "mul"); }
 static void vneg(V d, const V a, size_t n){
-    uint32_t fl = 0; note(cft_run(dev, CFT_NEG, F, CFT_RNE, a, NULL, NULL, d, n, &fl, NULL), fl, "neg"); }
+    uint32_t fl = 0; cft_status st = cft_run(dev, CFT_NEG, F, CFT_RNE, a, NULL, NULL, d, n, &fl, NULL); note(st, fl, "neg"); }
 static void vabs(V d, const V a, size_t n){
-    uint32_t fl = 0; note(cft_run(dev, CFT_ABS, F, CFT_RNE, a, NULL, NULL, d, n, &fl, NULL), fl, "abs"); }
+    uint32_t fl = 0; cft_status st = cft_run(dev, CFT_ABS, F, CFT_RNE, a, NULL, NULL, d, n, &fl, NULL); note(st, fl, "abs"); }
 static void vdiv(V d, const V a, const V b, size_t n){
-    uint32_t fl = 0; ncalls_divsqrt++; note(cft_div(dev, F, CFT_RNE, a, b, d, n, &fl, NULL), fl, "div"); }
+    uint32_t fl = 0; ncalls_divsqrt++; cft_status st = cft_div(dev, F, CFT_RNE, a, b, d, n, &fl, NULL); note(st, fl, "div"); }
 static void vsqrt(V d, const V a, size_t n){
-    uint32_t fl = 0; ncalls_divsqrt++; note(cft_sqrt(dev, F, CFT_RNE, a, d, n, &fl, NULL), fl, "sqrt"); }
+    uint32_t fl = 0; ncalls_divsqrt++; cft_status st = cft_sqrt(dev, F, CFT_RNE, a, d, n, &fl, NULL); note(st, fl, "sqrt"); }
 static void vclass(uint8_t *cls, const V a, size_t n){
     ncalls++; cft_status st = cft_class(dev, F, a, cls, n);
     if (st != CFT_OK) die("class: %s", cft_strerror(st)); }
 static void vaugadd(V r, V e, const V a, const V b, size_t n){
-    uint32_t fl = 0; note(cft_augmented_add(dev, F, a, b, r, e, n, &fl), fl, "augmented_add"); }
+    uint32_t fl = 0; cft_status st = cft_augmented_add(dev, F, a, b, r, e, n, &fl); note(st, fl, "augmented_add"); }
 
 /* Scalars are vectors of one element. A predicate result is 1.0 or
  * +0.0; "nonzero bits" reads it without arithmetic. */

@@ -114,10 +114,11 @@ def main():
     ap.add_argument("--build", default=os.path.join(root, "build"))
     ap.add_argument("--quick", action="store_true")
     ap.add_argument("--cs", default="kahan")
+    ap.add_argument("--exe", default="ias15_cft")
     args = ap.parse_args()
     exe = ".exe" if os.name == "nt" else ""
     ref = os.path.join(args.build, "ias15_ref" + exe)
-    cft = os.path.join(args.build, "ias15_cft" + exe)
+    cft = os.path.join(args.build, args.exe + exe)
     kepler = os.path.join(root, "data", "problems", "kepler.txt")
     outer = os.path.join(root, "data", "problems", "outer.txt")
     scale = 1 if not args.quick else 4
