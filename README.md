@@ -120,11 +120,23 @@ See docs/VALIDATION.md for every number. In brief:
 - **The port.** At binary64, `ias15_cft` is bit-for-bit REBOUND's IAS15
   on both problems, with fixed and adaptive steps: tools/
   check_equivalence.py, 1,264 recorded values identical.
-- **Precision.** The tables in docs/VALIDATION.md. The wider formats
-  lower the round-off floor by exactly the format's precision, but
-  IAS15 collects that only where its own truncation error is already
-  below it, which costs a smaller step and, at binary256, about seven
-  times the corrector passes per step.
+- **Precision.** Measured on 41 runs (results/, tools/sweep.py):
+  **binary128 is worth having and binary256 mostly is not.** At
+  REBOUND's default epsilon the binary64 Kepler run is round-off
+  limited by four orders of magnitude (5.3e-15 against the 4.6e-19 the
+  method delivers), so binary128 buys those four orders at once, ten at
+  epsilon 1e-12, and eighteen at 1e-16 (8.6e-34 against 4.7e-16 over
+  195 orbits, its own floor). binary256 is identical to binary128 at
+  every step size a user would choose, because a fifteenth-order
+  method's truncation error - which scales as dt^15, measured - sits
+  far above the binary128 floor until 800 steps an orbit (Kepler) or
+  10-20 day steps (outer solar system, where it is then worth one to
+  six orders more). The cost is the corrector: 2-3 passes a step at
+  binary64, 4-9 at binary128, 10-20 at binary256. The wide-format
+  error grows linearly in time - a ruler, not a random walk.
+  Replacing Kahan's `add_cs` with 9.5's exact augmentedAddition lowers
+  the binary64 floor 3-4x on the one run tried and changes nothing at
+  binary256.
 - **The programs.** The predictor and corrector run as 24
   orbit-sequencer programs with the state in the per-lane scratch
   block, bit-identical to the host loop at every format.
