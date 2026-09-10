@@ -1,0 +1,10 @@
+# cft-rebound ias15 record v1
+# program=cft impl=libcft-0.11 format=fp256 backend=software problem=pythagorean N=3 steps=3650 sample=3650 cs=kahan arith=rebound engine=loop pc_tol_shift=184 max_iter=60 dt_file=C:/Users/logan/AppData/Local/Temp/claude/C--Users-logan-source-repos/ee78a62e-821f-4dd3-a7cd-6d09b5670eed/scratchpad/rebound2/pyth/dt64_eps1e-9_T60.txt
+# dt0= 0x1.47ae147ae147bp-7 epsilon= 0x0p+0 G= 0x1p+0 pc_tol= 0x1.cd2b297d889bc2b6985d7cd0f31353677ee2d835ba4fe10a4799a6909b7p-238
+# body 0 m3 m= 0x1.8p+1
+# body 1 m4 m= 0x1p+2
+# body 2 m5 m= 0x1.4p+2
+# columns: sample step t dt_next dt_last E then per body x y z vx vy vz ; then exact-time pair t_hi t_lo
+sample 0 0 0x0p+0 0x1.47ae147ae147bp-7 0x0p+0 -0x1.9a222222222222222222222222222222222222222222222222222222222p+3 0x1p+0 0x1.8p+1 0x0p+0 0x0p+0 0x0p+0 0x0p+0 -0x1p+1 -0x1p+0 0x0p+0 0x0p+0 0x0p+0 0x0p+0 0x1p+0 -0x1p+0 0x0p+0 0x0p+0 0x0p+0 0x0p+0 | 0x0p+0 0x0p+0
+sample 1 3650 0x1.dfffffffffffffffe68ep+5 0x1.01296bb3e2aefp-5 0x1.771098ac28881p-7 -0x1.9a222222222222269536d2d7d8b2ad23d23f988b6ca5a6eb207f0958e7ap+3 0x1.7cd4562f0d72a5dd82065aca98a4a2c05dede3f104c872c9052cb189031p-1 0x1.f0a06dcde4beaf6b1cbfeaddffa619f1508406fbd8b5d3444d9f15bee3fp+0 0x0p+0 0x1.c6e4c27c99add4c55d5294385cec35ae58314572b8d90477eb96ffa0e3bp-1 0x1.4a423032199d923b510904a4e460fa13f39bf358c6a49bb203cd1cbfa86p+1 0x0p+0 0x1.0e58b9a5222474566c63b2d53f0dcc848c531ae961f9d4376024069a357p-2 -0x1.76977901d7f5bf182ff64fe288806d32f0d13164f01603f11d4fa950cf2p-1 0x0p+0 0x1.30adf6fa96a80418d7086f4c749ffe160c51f8f73a932e7244fe7409badp-1 -0x1.385ea6d3c1276c66d8942a41a5e8d07a7d27e33cfb2bb901c11007aa63cp+0 0x0p+0 -0x1.50a2e45e48ecf874462bb135419b80420a1660545d4299c1f65c6d29762p-1 -0x1.28475628cc2039a06287a6bb926094926cc3e0dd772efa5ddf4bf90af57p-1 0x0p+0 -0x1.025703899d90f4ab8b9c25c91753a8f05295f86bb548c71e7bdfe180f54p+0 -0x1.24d4358bd53b17e9ce5bc7891aa771058069a9404adeb40ed4390588289p-1 0x0p+0 | 0x1.dfffffffffffffffe68ep+5 0x0p+0
+# steps_done=3650 iterations_max_exceeded=0 steps_rejected=0 mean_pc_iterations=16.994 max_pc_iterations=22 flags_seen=0x10 calls=43736064 divsqrt_calls=6206594 seconds=796.005 steps_per_s=4.59

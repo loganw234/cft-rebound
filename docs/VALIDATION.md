@@ -1122,3 +1122,87 @@ the dynamics.** That is the scientific case for a wide format in a
 chaotic system in one table, and it is the ensemble mode's case for
 existing: 72 lanes in one run, every member bit for bit its solo run
 (the gate), a perturbation 2^184 above the floor instead of at it.
+
+
+## 2026-09-10 - the ensemble's throughput on the software backend, and the scalar control made independent of E
+
+The same Kepler integration the tile ran (binary256, `--arith fma
+--engine program`, fixed dt = 0.05, 20 steps) at E = 1, 4, 16, 64,
+256 and 1,024 members two ulps apart, on the software backend, one
+job at a time on an otherwise idle box (the binary256 ulp-ensemble
+run of the entry above was still on one core during the first scan):
+
+**The first ensemble build.** Program engine, system-steps a second:
+18.3 at E = 1, 22.9 at 4, 29.1 at 16, 45.2 at 64, 54.6 at 256, 55.0 at
+1,024. Loop engine: 53.5, 58.4, 58.7, 65.0 (E = 64), flat. Binary64,
+program engine: 76.6 at E = 1, 259 at 64, 368 at 1,024. The software
+backend is element-bound at binary256 from E = 1 - its loop engine
+gains nothing from width - and its program engine gains 3x, which is
+its per-run overhead amortising; at binary64 the program engine gains
+4.8x. Its asymptote, about 60 binary256 system-steps a second on one
+core, is the element rate: 84,000 operations a system-step at 5
+million operations a second.
+
+The scan also showed something the design document had predicted and
+that the card would have paid for: the library-call count grew with
+E, from 73,947 calls for the 20 steps at E = 1 to 4,171,889 at
+E = 1,024 - 204 calls per system-step, the divides among them from
+5,513 to 399,811. A fixed-step run has no step control, so this was
+the corrector's convergence test: two scalar compares per lane per
+pass for REBOUND's `max` over the coordinates, kept scalar so that the
+maximum was the library's, and one divide per system per pass. On the
+software backend that was 3 percent of the time. On the tile it would
+have been 220,000 round trips of 35 us per step at E = 1,000 - about
+eight seconds - against 0.8 s of element work.
+
+**The change, in two steps, each gated at every format.** The maximum
+over a system's lanes and the minimum over its particles became
+selections by bit pattern on the host (for non-negative IEEE
+encodings, neither NaN, the unsigned order is the numeric order; the
+element chosen is the one `CFT_CMPLT` would choose, and it is a
+selection, not an arithmetic operation), the convergence quotient and
+the two exit tests became one E-wide divide and two E-wide compares
+per pass, and the step control became a dozen E-wide calls per step:
+the particle timescales in one call with the inputs of the particles
+REBOUND skips replaced by 1 (their lanes raise nothing and are never
+read), both branches of `dt_new` computed for every system and each
+keeping its own, the reject and clamp decisions as E-wide predicates.
+Then the exact-time update and the prediction ratio, which were three
+adds and a divide per accepted system, became E-wide as well, a
+system that did not accept adding +0 (exact, never -0 here). Every
+element is still the operation the system would issue alone, and the
+four gates said so on each build: check_equivalence 1,576 values,
+check_program_engine 960, check_records 576, check_ensemble 27 cases
+and 11,124 values, all identical, at every format, twice.
+
+**The scans after each step:**
+
+    E       calls, first build   after step 1   after step 2   system-steps/s (fp256 program): first / final
+    1       73,947               71,213         71,213         18.3 / 17.7
+    4       87,370               72,969         72,669         22.9 / 24.0
+    16      135,583              74,351         72,851         29.1 / 33.2
+    64      328,130              79,697         73,397         45.2 / 51.3
+    256     1,097,051            99,443         73,943         54.6 / 59.9
+    1,024   4,171,889            176,971        74,671         55.0 / 62.3
+    fp64, E = 1,024              794,128        123,463        21,163         368 / 405 system-steps/s
+
+The call count of a step is now independent of E to within 0.2 calls
+a system-step (the remainder is the sample's energy, E-wide already,
+and the per-system copies that are not calls), and the tile's
+round-trip count per step - about 3,560 for the element work, plus
+five per corrector pass, a dozen for the step control and four for
+the time and the prediction - is the E = 1 count. The software
+backend's rate hardly moved, as it should not have: the calls it
+shed were cheap there. What remains E-proportional on the card is the
+convergence test's read-back of 3NE deposits per pass, one bulk
+transfer, for which the `CFT_MAX` ask of docs/HARDWARE.md stands.
+
+**What the software backend's curve is for.** It is the baseline the
+card must beat, measured: 62 binary256 system-steps a second at
+E = 1,024 on one core of this host, 405 at binary64. The card's
+projection at E = 1,000 (docs/HARDWARE.md) is 1,300 binary256
+system-steps a second per tile, engine-bound; against this baseline
+that is 21x, not the 100x the projection quoted against the E = 1
+software rate, because the software backend gains 3.5x from width
+too. That is the honest number to put beside the card's, when it is
+measured.

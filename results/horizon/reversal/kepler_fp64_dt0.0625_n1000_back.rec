@@ -1,0 +1,9 @@
+# cft-rebound ias15 record v1
+# program=cft impl=libcft-0.11 format=fp64 backend=software problem=kepler_at1000 N=2 steps=1000 sample=1000 cs=kahan arith=rebound engine=loop pc_tol_shift=0 max_iter=60
+# dt0= -0x1p-4 epsilon= 0x0p+0 G= 0x1p+0 pc_tol= 0x1.cd2b297d889bcp-54
+# body 0 star m= 0x1p+0
+# body 1 planet m= 0x1.0624dd2f1a9fcp-10
+# columns: sample step t dt_next dt_last E then per body x y z vx vy vz ; then exact-time pair t_hi t_lo
+sample 0 0 0x0p+0 -0x1p-4 0x0p+0 -0x1.0624dd2f1a9f2p-11 -0x1.65bbecfbbc779p-12 0x1.ea1c11398095dp-12 0x0p+0 -0x1.e8bf692c1046ap-11 -0x1.49a4aea14dbafp-10 0x0p+0 0x1.5d59856dd609bp-2 -0x1.de9f68d2279bap-2 0x0p+0 0x1.dd4aecb507e4dp-1 0x1.41ead28985e88p+0 0x0p+0 | 0x0p+0 0x0p+0
+sample 1 1000 -0x1.f4p+5 -0x1p-4 -0x1p-4 -0x1.0624dd2f1a9f6p-11 -0x1.05e1d27a3ee5cp-11 -0x1.f9cp-55 0x0p+0 0x1.496p-53 -0x1.c5d1e33d839bfp-10 0x0p+0 0x1.ff7d0f16c2e0fp-2 0x1.17bp-44 0x0p+0 -0x1.41cp-43 0x1.bb2ef7ea12862p+0 0x0p+0 | -0x1.f4p+5 0x0p+0
+# steps_done=1000 iterations_max_exceeded=0 steps_rejected=0 mean_pc_iterations=2.657 max_pc_iterations=6 flags_seen=0x10 calls=2048171 divsqrt_calls=281066 seconds=29.570 steps_per_s=33.82

@@ -147,18 +147,33 @@ static int s_lt(const V a, const V b){ /* a < b */
     uint32_t fl = 0; note(cft_run(dev, CFT_CMPLT, F, CFT_RNE, a, b, NULL, t, 1, &fl, NULL), fl, "cmplt");
     return is_nonzero_bits(t);
 }
-static int s_le(const V a, const V b){
-    static V t; if (!t) t = valloc(1);
-    uint32_t fl = 0; note(cft_run(dev, CFT_CMPLE, F, CFT_RNE, a, b, NULL, t, 1, &fl, NULL), fl, "cmple");
-    return is_nonzero_bits(t);
-}
 static int s_eq(const V a, const V b){
     static V t; if (!t) t = valloc(1);
     uint32_t fl = 0; note(cft_run(dev, CFT_CMPEQ, F, CFT_RNE, a, b, NULL, t, 1, &fl, NULL), fl, "cmpeq");
     return is_nonzero_bits(t);
 }
+/* Vector predicates: 1.0 or +0.0 per element, read by their bits. */
+static void vcmplt(V d, const V a, const V b, size_t n){
+    uint32_t fl = 0; cft_status st = cft_run(dev, CFT_CMPLT, F, CFT_RNE, a, b, NULL, d, n, &fl, NULL); note(st, fl, "cmplt"); }
+static void vcmple(V d, const V a, const V b, size_t n){
+    uint32_t fl = 0; cft_status st = cft_run(dev, CFT_CMPLE, F, CFT_RNE, a, b, NULL, d, n, &fl, NULL); note(st, fl, "cmple"); }
+static int pred_at(const V p, size_t i){ return is_nonzero_bits(E(p, i)); }
+
 static int is_normal_class(uint8_t c){
     return c == CFT_CLASS_NEG_NORM || c == CFT_CLASS_POS_NORM;
+}
+
+/* a > b for two NON-NEGATIVE values of the format, neither NaN, decided by
+ * their bit patterns: with the sign bit clear, the order of IEEE binary
+ * interchange encodings as unsigned integers is the numeric order, so
+ * this is a selection - the element CFT_CMPLT would select, and the
+ * same bits - not an arithmetic operation. The buffers are little-
+ * endian, so the top byte is the last. Used for REBOUND's max over the
+ * coordinates and min over the particles, which were two scalar compare
+ * round trips per lane per pass and are now none. */
+static int bits_gt(const unsigned char *a, const unsigned char *b){
+    for (size_t i = ESZ; i-- > 0;) if (a[i] != b[i]) return a[i] > b[i];
+    return 0;
 }
 static int s_isnormal(const V a){
     uint8_t c; vclass(&c, a, 1); return is_normal_class(c);
@@ -602,18 +617,21 @@ static void correct(int n){
  * (GLOBAL/PRS23 modes), per system over its own coordinates */
 static void pc_error(const V tmp){
     static V maxak, maxb6, aabs, tabs; static uint8_t *ca, *ct;
-    if (!maxak){ maxak = valloc(1); maxb6 = valloc(1); aabs = valloc(N3); tabs = valloc(N3); ca = malloc(N3); ct = malloc(N3); }
+    if (!maxak){ maxak = valloc(E); maxb6 = valloc(E); aabs = valloc(N3); tabs = valloc(N3); ca = malloc(N3); ct = malloc(N3); }
     vabs(aabs, at, N3); vabs(tabs, tmp, N3);
     vclass(ca, aabs, N3); vclass(ct, tabs, N3);
     for (size_t s = 0; s < E; s++){
-        if (!pc_active[s]) continue;
-        vzero(maxak, 1); vzero(maxb6, 1);
+        V ma = E(maxak, s), mb = E(maxb6, s);
+        if (!pc_active[s]){ memcpy(ma, K1, ESZ); memcpy(mb, K1, ESZ); continue; }   /* unused: a harmless quotient */
+        vzero(ma, 1); vzero(mb, 1);   /* +0, below every normal value, as REBOUND's maxak = 0 */
         for (size_t k = L * s; k < L * (s + 1); k++){
-            if (is_normal_class(ca[k]) && s_lt(maxak, E(aabs, k))) vcopy(maxak, E(aabs, k), 1);
-            if (is_normal_class(ct[k]) && s_lt(maxb6, E(tabs, k))) vcopy(maxb6, E(tabs, k), 1);
+            if (is_normal_class(ca[k]) && bits_gt(E(aabs, k), ma)) memcpy(ma, E(aabs, k), ESZ);
+            if (is_normal_class(ct[k]) && bits_gt(E(tabs, k), mb)) memcpy(mb, E(tabs, k), ESZ);
         }
-        vdiv(E(SPCE, s), maxb6, maxak, 1);
     }
+    /* every system's quotient in one call: element s is what system s
+     * would get from the scalar divide */
+    vdiv(SPCE, maxb6, maxak, E);
 }
 
 /* ------------------------------------------------------------------ */
@@ -759,13 +777,27 @@ static void sqrt7(V out, const V ain){
 static V EPS, EPS5040;
 
 /* For every active system: accepted[s] and SDTNEW[s], from SDTDONE[s].
- * The per-particle timescale is REBOUND's, particle by particle; the
- * minimum is taken within each system. */
+ * The per-particle timescale is REBOUND's; every particle's is computed
+ * in one call (a particle REBOUND would skip - a0^2 not normal - is
+ * given the inputs 1 so that its lane raises nothing, and is never
+ * read), the minimum within each system is a selection by bit pattern,
+ * and the per-system step logic runs over all E systems at once, each
+ * element the scalar operation the system would issue alone, both
+ * branches computed and each system keeping its own. The step
+ * control's call count is therefore independent of E. */
 static void choose_timestep(void){
-    static V sq, tmp, y[6], a0i, ts2, mints2, num, den, s7; static uint8_t *cls;
-    if (!sq){ sq = valloc(N3); tmp = valloc(N3); for (int i = 0; i < 6; i++) y[i] = valloc(NB); a0i = valloc(NB); ts2 = valloc(NB); mints2 = valloc(E); num = valloc(NB); den = valloc(NB); cls = malloc(NB);
-              /* sqrt7(epsilon*5040) depends on nothing that changes: once, the same bits every step */
-              s7 = valloc(1); sqrt7(s7, EPS5040); }
+    static V sq, tmp, y[6], a0i, ts2, mints2, num, den, s7, S7B, INVB;
+    static V y1m, y2m, y3m, mim, r, dtnA, dtnB, ad, rr, ar, P0, PR, PL, PI; static uint8_t *cls, *cls2, *clsm;
+    if (!sq){
+        sq = valloc(N3); tmp = valloc(N3); for (int i = 0; i < 6; i++) y[i] = valloc(NB); a0i = valloc(NB); ts2 = valloc(NB);
+        mints2 = valloc(E); num = valloc(NB); den = valloc(NB); cls = malloc(NB); cls2 = malloc(NB); clsm = malloc(E);
+        y1m = valloc(NB); y2m = valloc(NB); y3m = valloc(NB); mim = valloc(E); r = valloc(E); dtnA = valloc(E); dtnB = valloc(E);
+        ad = valloc(E); rr = valloc(E); ar = valloc(E); P0 = valloc(E); PR = valloc(E); PL = valloc(E); PI = valloc(E);
+        if (!cls || !cls2 || !clsm) die("out of memory");
+        /* sqrt7(epsilon*5040) and 1/safety_factor depend on nothing that changes: once, the same bits every step */
+        s7 = valloc(1); sqrt7(s7, EPS5040); S7B = valloc(NMAX); vbcast(S7B, s7, NMAX);
+        { V inv = valloc(1); vdiv(inv, K1, K0_25, 1); INVB = valloc(NMAX); vbcast(INVB, inv, NMAX); free(inv); }
+    }
     /* per component: a0^2; (a0+b0+...+b6)^2; (sum (m+1) b_m)^2; (sum m(m+1) b_m)^2; (sum (m-1)m(m+1) b_m)^2 */
     V sums[5];
     static V S[5]; if (!S[0]) for (int i = 0; i < 5; i++) S[i] = valloc(N3);
@@ -787,45 +819,49 @@ static void choose_timestep(void){
             vadd(sums[i], sums[i], tmp, NB);
         }
     }
-    /* timescale2 = 2*y2/(y3 + sqrt(y4*y2)), only for particles whose a0^2
-     * is normal - REBOUND skips the others before dividing, and a 0/0
-     * here would raise a certificate flag for a particle it never looks at */
+    /* timescale2 = 2*y2/(y3 + sqrt(y4*y2)) for every particle at once.
+     * REBOUND skips a particle whose a0^2 is not normal before dividing,
+     * and a 0/0 here would raise a certificate flag for a particle it
+     * never looks at: such a particle's inputs are replaced by 1 and
+     * its lane is never read */
     vclass(cls, a0i, NB);
+    for (size_t p = 0; p < NB; p++){
+        if (is_normal_class(cls[p])){ memcpy(E(y1m, p), E(y[1], p), ESZ); memcpy(E(y2m, p), E(y[2], p), ESZ); memcpy(E(y3m, p), E(y[3], p), ESZ); }
+        else { memcpy(E(y1m, p), K1, ESZ); memcpy(E(y2m, p), K1, ESZ); memcpy(E(y3m, p), K1, ESZ); }
+    }
+    vmul(num, K2, y1m, NB);
+    vmul(tmp, y3m, y1m, NB); vsqrt(tmp, tmp, NB); vadd(den, y2m, tmp, NB);
+    vdiv(ts2, num, den, NB);
+    vclass(cls2, ts2, NB);
+    /* the minimum within each system over the particles REBOUND looks
+     * at, from +inf, by bit pattern (all non-negative, none NaN) */
     for (size_t s = 0; s < E; s++) vcopy(E(mints2, s), KINF, 1);
     for (size_t p = 0; p < NB; p++){
         size_t s = p / N;
-        if (!active[s]) continue;
-        if (!is_normal_class(cls[p])) continue;    /* no acceleration, or not finite: skip */
-        vmul(E(num, p), K2, E(y[1], p), 1);
-        vmul(E(tmp, p), E(y[3], p), E(y[1], p), 1); vsqrt(E(tmp, p), E(tmp, p), 1); vadd(E(den, p), E(y[2], p), E(tmp, p), 1);
-        vdiv(E(ts2, p), E(num, p), E(den, p), 1);
-        if (s_isnormal(E(ts2, p)) && s_lt(E(ts2, p), E(mints2, s))) vcopy(E(mints2, s), E(ts2, p), 1);
+        if (!is_normal_class(cls[p]) || !is_normal_class(cls2[p])) continue;
+        if (bits_gt(E(mints2, s), E(ts2, p))) memcpy(E(mints2, s), E(ts2, p), ESZ);
     }
+    /* dt_new = sqrt(min_timescale2) * dt_done * sqrt7(epsilon 5040) when
+     * the minimum is normal, else dt_done / safety_factor: both for
+     * every system, each keeping its own branch's element */
+    vclass(clsm, mints2, E);
+    for (size_t s = 0; s < E; s++) memcpy(E(mim, s), is_normal_class(clsm[s]) ? E(mints2, s) : K1, ESZ);
+    vsqrt(r, mim, E); vmul(r, r, SDTDONE, E); vmul(dtnA, r, S7B, E);
+    vdiv(dtnB, SDTDONE, K0_25, E);
+    for (size_t s = 0; s < E; s++) memcpy(E(SDTNEW, s), is_normal_class(clsm[s]) ? E(dtnA, s) : E(dtnB, s), ESZ);
+    /* min_dt is 0: fabs(dt_new) < 0 is never true, but issue it */
+    vabs(ad, SDTNEW, E); vcmplt(P0, ad, K0, E);
+    /* fabs(dt_new/dt_done) < safety_factor -> reject; if it is larger
+     * than 1/safety_factor, clamp to dt_done/safety_factor */
+    vdiv(rr, SDTNEW, SDTDONE, E); vabs(ar, rr, E);
+    vcmplt(PR, ar, K0_25, E);
+    vcmplt(PL, K1, ar, E);
+    vcmplt(PI, INVB, rr, E);
     for (size_t s = 0; s < E; s++){
         if (!active[s]) continue;
-        V dt_done = E(SDTDONE, s), dt_new = E(SDTNEW, s), mi = E(mints2, s);
-        if (s_isnormal(mi)){
-            V r = valloc(1);
-            vsqrt(r, mi, 1); vmul(r, r, dt_done, 1);
-            vmul(dt_new, r, s7, 1);
-            free(r);
-        }else{
-            vdiv(dt_new, dt_done, K0_25, 1);
-        }
-        /* min_dt is 0: fabs(dt_new) < 0 is never true, but issue it */
-        { V ad = valloc(1); vabs(ad, dt_new, 1); (void)s_lt(ad, K0); free(ad); }
-        /* fabs(dt_new/dt_done) < safety_factor -> reject */
-        { V rr = valloc(1), ar = valloc(1); int reject, larger;
-          vdiv(rr, dt_new, dt_done, 1); vabs(ar, rr, 1);
-          reject = s_lt(ar, K0_25);
-          larger = s_lt(K1, ar);
-          if (!reject && larger){
-              V inv = valloc(1); vdiv(inv, K1, K0_25, 1);    /* 1./safety_factor */
-              if (s_lt(inv, rr)) vdiv(dt_new, dt_done, K0_25, 1);
-              free(inv);
-          }
-          free(rr); free(ar);
-          accepted[s] = !reject; }
+        int reject = pred_at(PR, s), larger = pred_at(PL, s);
+        if (!reject && larger && pred_at(PI, s)) memcpy(E(SDTNEW, s), E(dtnB, s), ESZ);
+        accepted[s] = !reject;
     }
 }
 
@@ -863,9 +899,14 @@ static void step_attempt(void){
         iters[s] = 0;
         pc_active[s] = active[s];
     }
+    static V P_TOL, P_STALL; if (!P_TOL){ P_TOL = valloc(E); P_STALL = valloc(E); }
     int npass = 0;
     while (1){
         int any = 0;
+        /* the two exit tests for every system at once; each element is
+         * the scalar compare the system would issue alone */
+        vcmplt(P_TOL, SPCE, TOL, E);
+        vcmple(P_STALL, SPCELAST, SPCE, E);
         for (size_t s = 0; s < E; s++){
             if (!pc_active[s]) continue;
             V pce = E(SPCE, s), pce_last = E(SPCELAST, s);
@@ -875,8 +916,8 @@ static void step_attempt(void){
                 fprintf(stderr, "  step %ld iteration %d: predictor_corrector_error %s\n", steps_traced, iters[s], buf);
             }
             int stop = 0;
-            if (s_lt(pce, TOL)) stop = 1;
-            else if (iters[s] > 2 && s_le(pce_last, pce)) stop = 1;
+            if (pred_at(P_TOL, s)) stop = 1;
+            else if (iters[s] > 2 && pred_at(P_STALL, s)) stop = 1;
             else if (iters[s] >= max_iter){ max_exceeded[s]++; stop = 1; }
             if (stop){ pc_active[s] = 0; save_system(s); continue; }
             vcopy(pce_last, pce, 1);
@@ -937,12 +978,20 @@ static void step_attempt(void){
     vmul(T1, a0, DTDB, N3); add_cs(v0, csv, T1, N3);
     for (size_t s = 0; s < E; s++) if (active[s] && !accepted[s]) restore_system(s);
 
+    /* t += dt_done for every accepted system at once - the plain sum
+     * REBOUND keeps, and an exact one beside it. A system that did not
+     * accept adds +0, which is exact, raises nothing, and leaves its
+     * time bit for bit (no time here is ever -0: they start at +0 and
+     * an augmented error term is +0 when the sum is exact). */
+    static V DTADD, TR, TERR; if (!DTADD){ DTADD = valloc(E); TR = valloc(E); TERR = valloc(E); }
+    for (size_t s = 0; s < E; s++){
+        if (active[s] && accepted[s]) memcpy(E(DTADD, s), E(SDTDONE, s), ESZ); else memset(E(DTADD, s), 0, ESZ);
+    }
+    vadd(STPLAIN, STPLAIN, DTADD, E);
+    vaugadd(TR, TERR, STHI, DTADD, E); vadd(STLO, STLO, TERR, E); vcopy(STHI, TR, E);
     for (size_t s = 0; s < E; s++){
         if (!(active[s] && accepted[s])) continue;
         V dt_done = E(SDTDONE, s);
-        /* t += dt_done: the plain sum REBOUND keeps, and an exact one beside it */
-        vadd(E(STPLAIN, s), E(STPLAIN, s), dt_done, 1);
-        { V r = valloc(1), err = valloc(1); vaugadd(r, err, E(STHI, s), dt_done, 1); vadd(E(STLO, s), E(STLO, s), err, 1); vcopy(E(STHI, s), r, 1); free(r); free(err); }
         vcopy(E(SDTLAST, s), dt_done, 1);
         if (dt_out) { char buf[160]; size_t len = 0; cft_to_hex_char(dev, F, dt_done, buf, sizeof buf, &len); fprintf(dt_out, "%s\n", buf); }
         done[s]++;
@@ -959,27 +1008,33 @@ static void step_attempt(void){
      * dt/dt_done after an accepted step; from er, br with ratio
      * dt/dt_last_done after a rejected one (not at all if it was the
      * first step); every active system's lanes in one pass */
+    static V RDIV, P20; if (!RDIV){ RDIV = valloc(E); P20 = valloc(E); }
     int any_pns = 0;
     for (size_t s = 0; s < E; s++){
         pns_skip[s] = 1;
+        memcpy(E(RDIV, s), K1, ESZ);               /* a harmless divisor for a system that predicts nothing */
         if (!active[s]) continue;
         if (accepted[s]){
-            vdiv(E(SRATIO, s), E(SDT, s), E(SDTDONE, s), 1);
+            memcpy(E(RDIV, s), E(SDTDONE, s), ESZ);
             for (int m = 0; m < 7; m++){ copy_sys(PE[m], e[m], s); copy_sys(PB[m], b[m], s); }
             pns_skip[s] = 0;
         }else if (!s_eq(E(SDTLAST, s), K0)){
-            vdiv(E(SRATIO, s), E(SDT, s), E(SDTLAST, s), 1);
+            memcpy(E(RDIV, s), E(SDTLAST, s), ESZ);
             for (int m = 0; m < 7; m++){ copy_sys(PE[m], er[m], s); copy_sys(PB[m], br[m], s); }
             pns_skip[s] = 0;
         }
         if (!pns_skip[s]) any_pns = 1;
     }
     if (any_pns){
+        /* every system's ratio in one divide: dt / dt_done after an
+         * accepted step, dt / dt_last_done after a rejected one */
+        vdiv(SRATIO, SDT, RDIV, E);
         bcast_sys(RB, SRATIO);
         predict_next_step_vec(RB, PE, PB, e, b);
+        vcmplt(P20, K20, SRATIO, E);               /* ratio > 20: do not predict */
         for (size_t s = 0; s < E; s++){
             if (pns_skip[s]) continue;
-            if (s_lt(K20, E(SRATIO, s)))           /* ratio > 20: do not predict */
+            if (pred_at(P20, s))
                 for (int m = 0; m < 7; m++){ zero_sys(e[m], s); zero_sys(b[m], s); }
         }
         for (size_t s = 0; s < E; s++) if (active[s] && pns_skip[s]) restore_system(s);
@@ -1016,15 +1071,20 @@ static void energy_all(V out){
          * multiplies it; the list's pair_i IS the larger index */
         vmul(uu, G, pmi, P); vmul(uu, uu, pmj, P); vdiv(uu, uu, tt, P);
     }
-    /* the sums, in REBOUND's order within each system */
-    for (size_t s = 0; s < E; s++){
-        vzero(E(ekin, s), 1); vzero(E(epot, s), 1);
-        for (size_t i = 0; i < N; i++) vadd(E(ekin, s), E(ekin, s), E(bu, s * N + i), 1);
-        for (size_t i = 0; i < N; i++) for (size_t j = i + 1; j < N; j++)
-            vsub(E(epot, s), E(epot, s), E(uu, s * PS + j * (j - 1) / 2 + i), 1);   /* pair (j > i) of the list */
-        vadd(E(out, s), E(ekin, s), E(epot, s), 1);
-        vadd(E(out, s), E(out, s), K0, 1);   /* + energy_offset, which is 0 */
+    /* the sums, in REBOUND's order within each system, every system at
+     * once: element s of each call is the scalar add system s would do */
+    static V gat; if (!gat) gat = valloc(E);
+    vzero(ekin, E); vzero(epot, E);
+    for (size_t i = 0; i < N; i++){
+        for (size_t s = 0; s < E; s++) memcpy(E(gat, s), E(bu, s * N + i), ESZ);
+        vadd(ekin, ekin, gat, E);
     }
+    for (size_t i = 0; i < N; i++) for (size_t j = i + 1; j < N; j++){
+        for (size_t s = 0; s < E; s++) memcpy(E(gat, s), E(uu, s * PS + j * (j - 1) / 2 + i), ESZ);   /* pair (j > i) of the list */
+        vsub(epot, epot, gat, E);
+    }
+    vadd(out, ekin, epot, E);
+    vadd(out, out, K0, E);   /* + energy_offset, which is 0 */
 }
 
 /* ------------------------------------------------------------------ */

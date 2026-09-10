@@ -182,7 +182,12 @@ See docs/VALIDATION.md for every number. In brief:
   both engines, including an attempt in which four members reject a
   step while the fifth accepts it (tools/check_ensemble.py,
   docs/ENSEMBLE.md). The cost is idle lanes when members disagree
-  about their corrector pass count: 1 to 31 percent, measured.
+  about their corrector pass count: 1 to 31 percent, measured. The
+  step's library-call count is independent of E (71,213 calls for 20
+  binary256 steps at E = 1, 74,671 at E = 1,024), which is what the
+  tile's per-call overhead needs; the software backend, element-bound,
+  does 18 binary256 system-steps a second at E = 1 and 62 at 1,024 on
+  one core, the baseline a card run must beat.
 - **The horizon** (docs/HORIZON.md). Binary64's error is a random walk
   and a single run is one draw of it; a 64-member binary64 ensemble
   through REBOUND itself gives Brouwer's law to 0.02 dex, the

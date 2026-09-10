@@ -296,17 +296,37 @@ card, and what needs the card to confirm:
   scratch block can be bound resident (the first ask below). A
   fixed-step ensemble runs the original, card-verified `predict-<fmt>`
   with more lanes and needs nothing new.
-- **The scalar control.** The convergence test already reads 3NE
-  deposits per pass; the step control issues four scalar operations
-  and two compares per particle per step (REBOUND's own loop, kept so
-  that the minimum is REBOUND's), i.e. 12E round trips per step for a
-  two-body ensemble. On the software backend that is under 1 percent
-  at E = 1,000; on the card it is 12E fixed costs of 35 us, 0.4 s per
-  step at E = 1,000, which would swamp the 0.8 s of element work. The
-  fix is a `CFT_MIN` reduction (or a general per-lane select) beside
-  the `CFT_MAX` already asked for, plus vectorising the timescale
-  arithmetic over particles, which changes no bits (it is elementwise
-  already) and is a host change.
+- **The scalar control.** The first ensemble build kept REBOUND's
+  scalar control scalar: two compare round trips per lane per
+  corrector pass for the `max` of the convergence test, one divide
+  per system per pass, and about twelve scalar operations per system
+  per step for the step control - some 220 library calls per
+  system-step at binary256, which the software backend's throughput
+  scan showed as a call count growing from 74,000 to 4.2 million
+  between E = 1 and E = 1,024 (the ledger). On the software backend
+  that was 3 percent of the time; on the card it would have been
+  220,000 round trips of 35 us per step at E = 1,000, eight seconds
+  against the 0.8 s of element work. It is gone: the maximum over a
+  system's lanes and the minimum over its particles are selections
+  by bit pattern on the host (the unsigned order of non-negative IEEE
+  encodings is their numeric order - the same reading of bits the
+  predicates already use, not arithmetic), the convergence quotient
+  and the two exit tests are one E-wide divide and two E-wide
+  compares per pass, and the step control is a dozen E-wide calls
+  per step with masked inputs for the particles REBOUND skips and
+  both branches computed for every system, each keeping its own -
+  every element still the operation the system would issue alone,
+  which the gates re-proved at every format. The step's round-trip
+  count is now independent of E: 71,213 calls for 20 binary256 steps
+  at E = 1 and 74,671 at E = 1,024 on the final build (the ledger's
+  throughput entry), against 4,171,889 on the first. What remains for
+  the card is that the convergence decision still reads 3NE deposits
+  per pass: a `CFT_MAX` reduction over the deposits would keep it on
+  the tile, and that ask stands. And the baseline is now measured:
+  the software backend does 62 binary256 system-steps a second at
+  E = 1,024 on one core (it gains 3.5x from width itself), so the
+  engine-bound projection of 1,300 per tile is 21x that, not the 100x
+  quoted against the E = 1 rate above.
 - **Memory.** About 350 vectors of `max(3NE, E N(N-1)/2)` elements
   (52 state, ~300 broadcast constants) plus E snapshots: 60 MB at
   E = 1,000 and binary256, on the host; on the card only the operands

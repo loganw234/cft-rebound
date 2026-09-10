@@ -1,0 +1,11 @@
+# cft-rebound problem file, exact hex floats
+# the state of outer_at500 at step 500 of C:/Users/logan/AppData/Local/Temp/claude/C--Users-logan-source-repos/ee78a62e-821f-4dd3-a7cd-6d09b5670eed/scratchpad/rebound2/reversal\outer_fp128_dt40_n500_back.rec, t = -0x1.388p+14
+name outer_at500_at500
+G 0x1.3649541cf95e7p-12
+N 6
+body sun 0x1.000064463f165p+0 -0x1.0a5b6609250a5fffffffffffed5fp-8 -0x1.8efdffbb8376e000000000000c2bp-8 -0x1.be09ddb1f1e44fffffffffff0e8bp-20 0x1.c0fdb9646776200000000000184fp-18 -0x1.a96b0d7f160c4ffffffffffff304p-18 -0x1.ae763552cfdeffffffffffff76bdp-29
+body jupiter 0x1.f49538bb7962ap-11 0x1.b3e650865a3bbfffffffffffda35p+1 0x1.d09cb17daf7f7000000000001ce3p+1 0x1.187b9a7609f29fffffffffffe75dp-5 -0x1.6ede83b49feab000000000001be4p-8 0x1.69a342f124784ffffffffffff381p-8 -0x1.65f956379fecdffffffffffef37fp-19
+body saturn 0x1.2b74ccb4d7efap-12 0x1.a6e9ba0745aa2fffffffffffff3p+2 0x1.985fcb078ddb7ffffffffffff9acp+2 -0x1.16d3b1ed6f3a2ffffffffffff1d2p-3 -0x1.118462ae444b7ffffffffffff5dap-8 0x1.05f6846973f84ffffffffffffd58p-8 0x1.1886915edf40dfffffffffff5512p-16
+body uranus 0x1.6ecfb27256659p-15 0x1.653c7b9167dca000000000000003p+3 0x1.0098fa1e1aa60fffffffffffffffp+4 0x1.727750e488cecp-2 -0x1.ab24cbb1928c3p-9 0x1.0e953ca4318cc000000000000003p-9 -0x1.6d3d06d2c53f3ffffffffffffff9p-16
+body neptune 0x1.b253eda7d4866p-15 -0x1.e2d7f57a63ce4000000000000001p+4 0x1.e95b8c17bb8dbfffffffffffffecp+0 -0x1.3b296b739e9d2ffffffffffffffep-3 -0x1.c812468bdd5cefffffffffffffe3p-13 -0x1.981b73c8344b2p-9 0x1.2c99f085a127bp-15
+body pluto 0x0p+0 -0x1.562ca31f56914ffffffffffffffep+4 0x1.009345cc702adp+5 0x1.3f08d3da8fdf8ffffffffffffffep+1 -0x1.cfd42082b83eb000000000000002p-10 -0x1.0ef409651c03afffffffffffffffp-9 0x1.59079a96959a6000000000000001p-11

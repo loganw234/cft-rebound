@@ -1,0 +1,7 @@
+# cft-rebound problem file, exact hex floats
+# the state of kepler at step 1000 of C:/Users/logan/AppData/Local/Temp/claude/C--Users-logan-source-repos/ee78a62e-821f-4dd3-a7cd-6d09b5670eed/scratchpad/rebound2/reversal\kepler_fp64_dt0.0625_n1000_fwd.rec, t = 0x1.f4p+5
+name kepler_at1000
+G 0x1p+0
+N 2
+body star 0x1p+0 -0x1.65bbecfbbc779p-12 0x1.ea1c11398095dp-12 0x0p+0 -0x1.e8bf692c1046ap-11 -0x1.49a4aea14dbafp-10 0x0p+0
+body planet 0x1.0624dd2f1a9fcp-10 0x1.5d59856dd609bp-2 -0x1.de9f68d2279bap-2 0x0p+0 0x1.dd4aecb507e4dp-1 0x1.41ead28985e88p+0 0x0p+0
