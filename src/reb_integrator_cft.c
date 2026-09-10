@@ -214,6 +214,12 @@ static int adopt_loaded_state(struct reb_simulation *r, struct cft_ias15_state *
     struct ias15_engine_view w;
     ias15_engine_view(&w);
     if (!st->x || st->x == w.x) return 1;          /* nothing was loaded */
+    /* The negative control for tools/check_checkpoint.py. With this set,
+     * the loaded state is deliberately NOT carried into the engine - the
+     * exact defect gate_real found - so the checker can require its own
+     * comparison to FAIL and thereby prove it would notice. A gate that
+     * cannot fail on demand is not evidence. */
+    if (getenv("CFT_REBOUND_NO_ADOPT")) return 1;
 
     size_t width = cft_format_size((cft_format)st->format);
     if (!width) return 1;

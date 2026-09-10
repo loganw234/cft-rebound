@@ -41,8 +41,14 @@
 #include "cft_archive.h"
 #include "cft_ias15_fields.h"
 
-#define STEPS_A   20     /* before the checkpoint */
-#define STEPS_B   10     /* after it */
+/* Long enough that the wide bits reach the binary64 output. At 20 + 10
+ * steps only 2 of the 14 dumped lines differ between fp64 and fp256, so
+ * a restart that had truncated the wide state to binary64 could pass on
+ * the other 12; at 60 + 120 the difference is broad and the comparison
+ * has margin. In software this is still milliseconds; on a card it is
+ * about two minutes a format, which is the reason it is not larger. */
+#define STEPS_A   60     /* before the checkpoint */
+#define STEPS_B  120     /* after it */
 #define NBODY      4
 
 static const char *ARCHIVE = "gate_real.bin";
@@ -89,6 +95,60 @@ static unsigned char *snap(struct reb_simulation *r, size_t *len){
     d[k++] = r->t; d[k++] = r->dt;
     *len = n;
     return b;
+}
+
+/* The same values snap() collects, as exact hex floats, one per line
+ * and named. Two processes' dumps are compared with diff, so the
+ * comparison is over bits: %a is exact and reversible, and a
+ * difference in the last bit shows as a different line rather than
+ * rounding to the same 17 digits. */
+static void dump(struct reb_simulation *r){
+    for (size_t i = 0; i < (size_t)r->N; i++){
+        const struct reb_particle *q = &r->particles[i];
+        printf("p%lu m  %a\n",  (unsigned long)i, q->m);
+        printf("p%lu x  %a %a %a\n", (unsigned long)i, q->x,  q->y,  q->z);
+        printf("p%lu v  %a %a %a\n", (unsigned long)i, q->vx, q->vy, q->vz);
+    }
+    printf("t  %a\n", r->t);
+    printf("dt %a\n", r->dt);
+}
+
+/* One process of a multi-process checkpoint. Each returns 0 on
+ * success so a shell can chain them; the comparison is the shell's,
+ * because the point is that nothing is shared between the runs. */
+static int phase_straight(int format, double dt){
+    struct reb_simulation *r = build(format, dt);
+    reb_simulation_steps(r, STEPS_A + STEPS_B);
+    dump(r);
+    reb_simulation_free(r);
+    return 0;
+}
+
+static int phase_save(int format, double dt, const char *path){
+    struct reb_simulation *r = build(format, dt);
+    reb_simulation_steps(r, STEPS_A);
+    if (cft_archive_bind(r)){ fprintf(stderr, "gate_real: bind failed\n"); return 2; }
+    remove(path);
+    reb_simulation_save_to_file(r, path);
+    fprintf(stderr, "gate_real: wrote %s at t=%.17g after %d steps\n",
+            path, r->t, STEPS_A);
+    reb_simulation_free(r);
+    return 0;
+}
+
+static int phase_resume(int format, const char *path){
+    enum cft_archive_status st;
+    struct reb_simulation *r = cft_archive_load(path, 0, format, NULL, &st);
+    if (!r){
+        fprintf(stderr, "gate_real: load failed: %s\n", cft_archive_status_str(st));
+        return 2;
+    }
+    fprintf(stderr, "gate_real: loaded %s (%s) at t=%.17g\n",
+            path, cft_archive_status_str(st), r->t);
+    reb_simulation_steps(r, STEPS_B);
+    dump(r);
+    reb_simulation_free(r);
+    return 0;
 }
 
 static int one_format(int format, const char *fname, double dt){
@@ -164,13 +224,25 @@ int main(int argc, char **argv){
     int fmts[3] = { CFT_FP64, CFT_FP128, CFT_FP256 };
     const char *names[3] = { "fp64", "fp128", "fp256" };
     int only = -1;
+    int phase = 0;                  /* 0 self-contained, 1 straight, 2 save, 3 resume */
+    const char *path = NULL;
     for (int i = 1; i < argc; i++){
         if (!strcmp(argv[i], "--fp64"))  only = 0;
         if (!strcmp(argv[i], "--fp128")) only = 1;
         if (!strcmp(argv[i], "--fp256")) only = 2;
+        if (!strcmp(argv[i], "--straight")) phase = 1;
+        if (!strcmp(argv[i], "--save")   && i + 1 < argc){ phase = 2; path = argv[++i]; }
+        if (!strcmp(argv[i], "--resume") && i + 1 < argc){ phase = 3; path = argv[++i]; }
     }
+    if (only < 0) only = 0;
 
     cft_ias15_register(CFT_IAS15_INTEGRATOR_NAME);
+
+    /* A phase writes only its dump to stdout, so a shell can diff two
+     * processes' output directly. Everything else goes to stderr. */
+    if (phase == 1) return phase_straight(fmts[only], 0.01);
+    if (phase == 2) return phase_save(fmts[only], 0.01, path);
+    if (phase == 3) return phase_resume(fmts[only], path);
 
     printf("gate_real: the registered integrator through a Simulationarchive\n");
     printf("           %d steps, checkpoint, %d more, against %d straight\n",
@@ -180,7 +252,6 @@ int main(int argc, char **argv){
      * refuses a format change, so a loop over all three would fail on
      * the second for a reason that is not about archives. The Makefile
      * runs this three times - which is also what a checkpoint is. */
-    if (only < 0) only = 0;
     int ok = one_format(fmts[only], names[only], 0.01);
     printf("gate_real: %s\n", ok ? "PASS" : "FAIL");
     return ok ? 0 : 1;

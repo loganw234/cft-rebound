@@ -234,6 +234,7 @@ check: all programs $(ARCHIVE_GATES)
 	$(B)/gate_real$(EXE) --fp64
 	$(B)/gate_real$(EXE) --fp128
 	$(B)/gate_real$(EXE) --fp256
+	$(PYTHON) tools/check_checkpoint.py --build $(B)
 
 # the same gates at binary64 only, in a few minutes
 .PHONY: check-quick
@@ -250,6 +251,7 @@ check-quick: all programs $(ARCHIVE_GATES)
 	$(B)/gate_real$(EXE) --fp64
 	$(B)/gate_real$(EXE) --fp128
 	$(B)/gate_real$(EXE) --fp256
+	$(PYTHON) tools/check_checkpoint.py --build $(B) --quick
 
 # The worked round trip, built in the tree and run against the
 # programs here rather than an installed copy.
