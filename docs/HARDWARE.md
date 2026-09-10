@@ -234,17 +234,100 @@ per step is a lower bound on how slow a naive one is, and the tile's
   and the software-backend times are measured; the card times are
   arithmetic on cft-fp256's published constants.
 
+## What the card said, and the crossover
+
+Item 2 of the original list below was run by the integrator on the
+read-ahead quad (docs/VALIDATION.md, "the first run on a tile"): the
+records are identical bit for bit, and the tile was 4.5x slower than
+one core of the software backend on the two-body problem. The
+crossover was then measured on the same integration at three widths,
+fp256, `--arith fma --engine program`:
+
+| N | pairs per force call | software backend | card | card / software |
+|---|---|---|---|---|
+| 2 | 1 | 5.87 s | 26.93 s | 4.59x slower |
+| 8 | 28 | 10.80 s | 41.80 s | 3.87x slower |
+| 32 | 496 | 29.01 s | 22.65 s | 0.78x - the card wins |
+
+So the card's deficit is per-call overhead and width amortises it,
+with the crossover near 500 elements per call - well under the ~4,000
+the naive overhead estimate above suggested. And difficulty alone does
+not move the ratio: Burrau's Pythagorean problem drives the adaptive
+step over three orders of magnitude and needs 18.2 corrector passes
+against 15.07, but the software backend did 51,900 library calls a
+second on it against 51,200 on the easy problem. Difficulty buys more
+calls at the same rate; width is the lever.
+
+## The ensemble on the tile
+
+Item 3 is now implemented (docs/ENSEMBLE.md): E systems in one run,
+3NE lanes for the predictor and corrector, E N(N-1)/2 for the gravity,
+every member bit for bit its solo run (tools/check_ensemble.py, gated
+at all three formats on the software backend). What it maps to on the
+card, and what needs the card to confirm:
+
+- **Width.** A Kepler ensemble of E members puts 6E elements into
+  every predictor and corrector call and E into every gravity call.
+  Against the measured crossover of ~500 elements per call, the
+  predictor and corrector cross at E ~ 80 and the gravity's pair calls
+  at E ~ 500; at E = 1,000 every call in the step is past it. The
+  projection is the one above - 100x the software backend at E = 1,000
+  for one tile - and it is a projection until the ensemble gate is run
+  with `--artifact`. The software backend's own throughput against E
+  is measured in the ledger (the ensemble throughput entry): it too
+  gains from width, since its per-call cost has a fixed part, and that
+  curve is the baseline the card's must beat.
+- **Masking.** The prototype masks a member that has left the
+  corrector, rejected its step or finished its block by a byte
+  snapshot and restore on the host. On the tile that is a `SETACT`
+  lane mask, which the sequencer has; but the host's snapshot is not
+  how a card should do it, because the masked lanes still compute and
+  their state still crosses the bus in the scratch block. The wasted
+  work is measured by `pc_lane_efficiency` in every ensemble trailer:
+  0.77 to 0.92 at binary64 on the gate's families, and at binary256,
+  where the pass count runs from 10 to 23, whatever the ledger says.
+  The ask is a per-run lane mask in `cft_run_args` (a host-supplied
+  bitmap the engine honours), so that an idle lane costs neither a
+  beat nor a byte.
+- **Per-lane dt.** `predict-ens-<fmt>` carries `fl(dt h_n)` and its
+  half in scratch slots 8 and 9, so an adaptive ensemble's predictor
+  stages 10 slots a lane per run instead of 8 - 25 percent more
+  scratch traffic on the predictor, none on the corrector, until the
+  scratch block can be bound resident (the first ask below). A
+  fixed-step ensemble runs the original, card-verified `predict-<fmt>`
+  with more lanes and needs nothing new.
+- **The scalar control.** The convergence test already reads 3NE
+  deposits per pass; the step control issues four scalar operations
+  and two compares per particle per step (REBOUND's own loop, kept so
+  that the minimum is REBOUND's), i.e. 12E round trips per step for a
+  two-body ensemble. On the software backend that is under 1 percent
+  at E = 1,000; on the card it is 12E fixed costs of 35 us, 0.4 s per
+  step at E = 1,000, which would swamp the 0.8 s of element work. The
+  fix is a `CFT_MIN` reduction (or a general per-lane select) beside
+  the `CFT_MAX` already asked for, plus vectorising the timescale
+  arithmetic over particles, which changes no bits (it is elementwise
+  already) and is a host change.
+- **Memory.** About 350 vectors of `max(3NE, E N(N-1)/2)` elements
+  (52 state, ~300 broadcast constants) plus E snapshots: 60 MB at
+  E = 1,000 and binary256, on the host; on the card only the operands
+  of each call cross, so the constant width is bus traffic, not
+  device memory, until `cft_run` gains a scalar-broadcast operand -
+  a fourth ask, small, and worth 300 staged vectors a step.
+
 ## What to do first, if a card is available
 
-1. Time `cft_program_run_ex` on the assembled `correct7-fp256.cftp`
-   over 6,000 lanes with a 22-slot scratch block, staged, and compare
-   with the 35 us + 3.7 ms projection above. That one number decides
-   whether the scratch-residency change is the first job or the
-   second.
-2. Run `ias15_cft --engine program --artifact <xclbin>` on the Kepler
-   problem for 200 steps and diff the record against the software
-   backend's byte for byte. The contract says they are identical; the
-   record is the proof and it does not exist yet.
-3. Then the ensemble: E systems in one `ias15_cft` run is not
-   implemented (the prototype integrates one system), and it is the
-   step that turns the design's lane count from 6 into 6,000.
+1. Run tools/check_ensemble.py with `--artifact`: the ensemble gate on
+   the card, all three formats. The contract says the records are the
+   software backend's; the record of a 1,000-member ensemble on a tile
+   is the proof, and it does not exist yet.
+2. Time the same Kepler ensemble at E = 1, 8, 64, 512, 4,096 members,
+   fp256, `--engine program`, 20 steps, card against software backend,
+   which is the ledger's throughput entry with the card column filled
+   in. That curve is the whole economic case, measured.
+3. Time `cft_program_run_ex` on `correct7-fp256.cftp` over 6,000 lanes
+   with the 22-slot scratch block, staged, against the 35 us + 3.7 ms
+   projection above; and `predict-ens-fp256.cftp` with its 10. Those
+   numbers decide whether scratch residency is the first library job.
+4. A mixed ensemble (members needing 10 and 23 passes in the same
+   step) to price idle lanes on the tile in wall time, which is what
+   decides whether the lane-mask ask is worth its library change.

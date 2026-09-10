@@ -261,7 +261,9 @@ def main():
         E, L, pos, vel = invariants(G, masses, s["state"])
         dE = abs((E - E0) / E0)
         Lmag = mpmath.sqrt(sum(q * q for q in L))
-        dL = abs((Lmag - L0mag) / L0mag)
+        # relative to the initial angular momentum, or absolute when that
+        # is exactly zero (a system started at rest, Burrau's problem)
+        dL = abs((Lmag - L0mag) / L0mag) if L0mag != 0 else Lmag
         dP = mpf(0); dV = mpf(0); dPh = mpf(0)
         if kep:
             x0, v0, x1, v1 = kep.bodies_at(t)
@@ -281,7 +283,7 @@ def main():
             dPh = abs(sum(dr[c] * vt[c] for c in range(3)) / v2) / kep.T
             orbits = t / kep.T
         else:
-            orbits = t / mpf(365.25)   # years, for the outer solar system in days
+            orbits = t / mpf(365.25) if problem == "outer" else t   # years for the outer solar system (days); else the time itself
         maxE = max(maxE, dE); maxL = max(maxL, dL); maxP = max(maxP, dP); lastP = dP; lastE = dE
         maxPh = max(maxPh, dPh); lastPh = dPh
         rows.append((s["k"], s["step"], orbits, t, dE, dL, dP, dV, dPh))
@@ -290,13 +292,13 @@ def main():
                                                        mpmath.nstr(dE, 6), mpmath.nstr(dL, 6), mpmath.nstr(dP, 6), mpmath.nstr(dV, 6), mpmath.nstr(dPh, 6)))
         if not args.quiet:
             print("sample %4d step %8d %s %12s  dE/E %s  dL/L %s  dx/a %s  dphase %s" %
-                  (s["k"], s["step"], "orbits" if kep else "years ", mpmath.nstr(orbits, 8),
+                  (s["k"], s["step"], "orbits" if kep else ("years " if problem == "outer" else "t     "), mpmath.nstr(orbits, 8),
                    mpmath.nstr(dE, 4), mpmath.nstr(dL, 4), mpmath.nstr(dP, 4) if kep else "-", mpmath.nstr(dPh, 4) if kep else "-"))
     if out:
         out.close()
     last = rows[-1]
     print("SUMMARY problem=%s format=%s cs=%s steps=%d %s=%s max_dE=%s last_dE=%s max_dL=%s max_dx=%s last_dx=%s max_dphase=%s last_dphase=%s rejected=%s max_exceeded=%s mean_pc=%s seconds=%s" %
-          (problem, fmt, header.get("cs", "-"), last[1], "orbits" if kep else "years", mpmath.nstr(last[2], 8),
+          (problem, fmt, header.get("cs", "-"), last[1], "orbits" if kep else ("years" if problem == "outer" else "t"), mpmath.nstr(last[2], 8),
            mpmath.nstr(maxE, 4), mpmath.nstr(lastE, 4), mpmath.nstr(maxL, 4),
            mpmath.nstr(maxP, 4) if kep else "-", mpmath.nstr(lastP, 4) if kep else "-",
            mpmath.nstr(maxPh, 4) if kep else "-", mpmath.nstr(lastPh, 4) if kep else "-",

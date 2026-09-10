@@ -1201,7 +1201,13 @@ int main(int argc, char **argv){
                       pc_lane_max ? (double)pc_lane_sum / (double)pc_lane_max : 0.0);
     printf("\n");
     if (!quiet) fprintf(stderr, "done: %ld steps%s, %llu library calls, %.1f s, flags 0x%02x\n", done[0], E > 1 ? " per system" : "", ncalls, secs, flags_union);
-    if (dt_out) fclose(dt_out);
+    if (dt_out){
+        /* the step the run would take next, so that a replay of this
+         * file forms the same final prediction ratio and reports the
+         * same dt_next: steps + 1 lines in all */
+        char buf[160]; size_t len = 0; cft_to_hex_char(dev, F, E(SDT, 0), buf, sizeof buf, &len); fprintf(dt_out, "%s\n", buf);
+        fclose(dt_out);
+    }
     cft_close(dev);
     return 0;
 }

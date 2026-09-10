@@ -40,17 +40,28 @@ Nothing is vendored by hand.
     ref/whfast512_stub.c     why REBOUND's WHFast512 is not built here (MinGW)
     tools/gen_constants.py   derives and CHECKS the constants (mpmath, 130 digits)
     tools/gen_programs.py    the predictor and corrector as sequencer programs
-    tools/make_problems.py   the two problems as exact binary64 bit patterns
+    tools/make_problems.py   the problems as exact binary64 bit patterns
+    tools/make_ensemble.py   E perturbed copies of a problem as one ensemble file
     tools/check_equivalence.py     the gate: binary64 port == REBOUND, bit for bit
     tools/check_program_engine.py  the gate: programs == host loop, bit for bit
+    tools/check_ensemble.py        the gate: ensemble == its members run alone, bit for bit
+    tools/check_records.py         the gate: the committed records, recomputed, bit for bit
     tools/oracle.py          scores a record from its exact bits (mpmath)
+    tools/compare_formats.py the round-off floor: one run at two formats, differenced
+    tools/horizon.py         percentiles of an ensemble's error against time, and crossings
+    tools/divergence.py      members of an ensemble against member 0: the Lyapunov measurement
+    tools/reversal.py        forward N steps, back N steps, from the exact recorded state
+    tools/state_to_problem.py      a record's sample as a problem file, bit for bit
     tools/sweep.py           the precision-versus-error measurement
     tools/tabulate.py        its tables and figure
-    programs/*.cfta          GENERATED: 24 orbit-sequencer programs
-    data/problems/           kepler.txt, outer.txt
+    programs/*.cfta          GENERATED: 27 orbit-sequencer programs
+    data/problems/           kepler.txt (e = 1/2), kepler_e09.txt, kepler_e099.txt,
+                             pythagorean.txt (Burrau's problem), outer.txt
     data/ias15_constants.json
     results/                 the sweep's per-sample tables and summary
     docs/VALIDATION.md       what ran and what it said, failures included
+    docs/ENSEMBLE.md         E systems in one run: the layout, the step decision, the gate
+    docs/HORIZON.md          when binary64 stops being enough, measured
     docs/HARDWARE.md         the resident design, its break-even, what is unverified
     docs/INTEGRATORS.md      which other REBOUND integrators port well, ranked
 
@@ -106,6 +117,17 @@ convention for a fixed step.
 - `--max-iter N` (12 in REBOUND; the corrector needs about 18 passes at
   binary256), `--pc-tol-shift S` (the corrector tolerance 1e-16 is
   scaled by 2^-S, default 53-p), `--trace-pc N`.
+- An ensemble file (`tools/make_ensemble.py`; `E` and `system` lines)
+  integrates all its systems in one run, each with its own adaptive
+  step (docs/ENSEMBLE.md); `--member K` runs system K of it alone,
+  which is what the ensemble gate diffs against.
+- `--dt-file FILE` replays a prescribed step sequence (one hex float
+  per step, shared by every system; needs `--epsilon 0`) and
+  `--dt-out FILE` records one; `--dt` and `--epsilon` take a decimal
+  or an exact hex float.
+
+`make check` runs every gate at every format (about half an hour);
+`make check-quick` runs them at binary64 in a few minutes.
 
 ## What was found
 

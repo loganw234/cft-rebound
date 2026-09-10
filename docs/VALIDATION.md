@@ -556,3 +556,305 @@ program` only, since the program engine requires them. The three asks
 of cft-fp256 in docs/HARDWARE.md are untouched and still asks: binding
 `cft_alloc` buffers to `scratch_in`/`scratch_out`, a device-side
 gather, and a `CFT_MAX` reduction.
+
+
+## 2026-09-10 - the rewrite for ensembles, and the single-system path gated three ways
+
+`src/ias15_cft.c` was rewritten so that E systems ride in one vector
+(docs/ENSEMBLE.md). The single-system path goes through the same code,
+so before anything else it had to be shown unchanged, and it was shown
+three ways on the rebuilt binary:
+
+- tools/check_equivalence.py, full: the six binary64 cases against
+  REBOUND's own IAS15, 1,576 values identical, the two rejection cases
+  included (`steps_rejected=1, max_exceeded=1` in both programs).
+- tools/check_program_engine.py at all three formats: nine cases, 960
+  values identical, and the FMA form's gap from REBOUND's rounding
+  sequence at `2.625e-15`, `9.004e-33` and `2.092e-70` on the fixed
+  Kepler case - the same digits the 2026-09-09 entry printed, which is
+  its own regression check.
+- tools/check_records.py, new: the first two samples after the start
+  of nine committed sweep records (`results/raw/`: Kepler fixed and
+  adaptive and the outer solar system at binary64 and binary128, Kepler
+  fixed and adaptive at binary256, and the augmented-summation run)
+  recomputed by the new binary on the same sampling grid and compared
+  as exact rationals: 27 samples, 576 values identical. A record's
+  sampling does not perturb its trajectory, so a short run reproduces
+  a long run's early samples exactly, and this is what protects the
+  E = 1 path when the integrator changes shape.
+
+Two things changed on purpose in the E = 1 path and are visible only
+in the call count, not in any recorded value: the energy is now
+vectorised over bodies and pairs (the same operations in REBOUND's
+order, issued once for all systems), and `sqrt7(epsilon * 5040)`,
+whose input never changes, is computed once instead of once per step
+(20 Newton iterations, about 200 scalar calls a step). The
+`calls=` trailer of a Kepler run therefore no longer reads what the
+2026-09-09 entries report; the data lines do.
+
+One bug was caught by the new binary before any gate ran: the
+vectorised energy first multiplied `G * m_smaller * m_larger` where
+`reb_simulation_energy` multiplies `G * m_j * m_i` with `j` the larger
+index. Identical for G = 1 and irrelevant for the Kepler gates; not
+identical for the outer solar system's `G = k^2`, where the quick
+equivalence gate would have failed on the energy column. Found by
+reading, fixed before building.
+
+## 2026-09-10 - the ensemble mode and its gate
+
+tools/check_ensemble.py (docs/ENSEMBLE.md): each case runs an ensemble
+once and every member alone with `--member k` on the same file with
+the same arguments, and compares every recorded value of every sample
+- time, next and last step, energy, every coordinate, the exact-time
+pair - as an exact rational, plus each member's own trailer (steps
+done and rejected, corrector passes mean and maximum, cap hits). The
+families: five Kepler orbits with the planet's velocity scaled by
+1 - 0.08k (eccentricities 0.5 down to 0.03, different periods and
+step sequences); four Kepler orbits 2^-40 apart in x; five Kepler
+orbits with the planet started at 0.5, 0.9, 1.3, 1.7 and 2.1 with the
+base orbit's pericentre speed (an 8.6x spread in natural step, the
+outer two unbound) from a first step of 0.6, which the inner four
+reject in the same attempt in which the outermost accepts; and three
+outer solar systems with Jupiter displaced by 2^-20 AU. Fixed and
+adaptive steps, the loop engine and the program engine (the latter
+with the new `predict-ens` program when the steps are per system).
+
+At binary64, `--quick` (50 to 30 steps a case, 37 s in all), nine
+cases:
+
+    kepler vscale E=5 fixed dt=0.05:                 5 members, 180 values identical, rejected [0,0,0,0,0], lane efficiency 0.766
+    kepler vscale E=5 adaptive eps=1e-9:             5 members, 180 values identical, rejected [0,0,0,0,0], 0.868
+    kepler spread E=5 adaptive from dt0=0.6:         5 members, 180 values identical, rejected [1,1,1,1,0], 0.862
+    kepler spread E=5, the same, program engine:     5 members, 180 values identical, rejected [1,1,1,1,0], 0.836
+    kepler ulps E=4 adaptive eps=1e-9:               4 members, 144 values identical, rejected [0,0,0,0], 0.919
+    kepler vscale E=5 adaptive eps=1e-9, program:    5 members, 180 values identical, 0.871
+    kepler vscale E=5 fixed dt=0.05, program:        5 members, 180 values identical, 0.806
+    outer jupiter E=3 fixed dt=40:                   3 members, 252 values identical, 0.927
+    outer jupiter E=3 adaptive eps=1e-9:             3 members, 252 values identical, 0.974
+    RESULT: PASS
+
+The first run of the gate failed one case by design of the case, not
+of the code: the mixed-rejection family was first the velocity-scaled
+one from dt0 = 0.6, and all five members rejected the step
+(`steps_rejected=[1,1,1,1,1]`), so the attempt was not mixed and the
+gate said so. The spread family replaced it; the trace above is the
+second run. `pc_lane_efficiency` is the fraction of issued lane-passes
+that belonged to a system still iterating: with 2 to 6 passes a step
+at binary64 the members disagree often enough to idle a quarter of
+the lanes on the fixed-step Kepler family and 3 percent on the outer
+solar system, whose members are nearly identical.
+
+The full gate, 200 to 60 steps a case, at all three formats, 27 cases
+in all (59 minutes on a box running ten other jobs):
+
+    fp64:   nine cases, 3,708 values identical; lane efficiency 0.750 to 0.972
+    fp128:  nine cases, 3,708 values identical; 0.721 to 0.984
+    fp256:  nine cases, 3,708 values identical; 0.687 to 0.996
+    RESULT: PASS
+
+with the mixed-rejection family rejecting `[1, 1, 1, 1, 0]` at every
+format on both engines, and the corrector passes per step rising from
+2.3-3.5 at binary64 through 6.0-8.9 at binary128 to 13.7-20.8 at
+binary256. The lane efficiency is what the shared corrector loop
+costs: at binary256 the members of the velocity-scaled family
+disagree enough about their pass count to idle 18 percent of the
+lanes on the fixed step and 6 percent on the adaptive one; the
+spread family, whose members range from a bound e = 1/2 orbit to an
+unbound one, idles 31 percent; the ulp family and the outer solar
+system, whose members are nearly the same system, idle under 1
+percent. So an ensemble of a chaotic system's nearby copies - the
+scientific case - wastes almost nothing, and an ensemble spanning
+regimes wastes a third.
+
+## 2026-09-10 - prescribed steps: a replay is the run, bit for bit
+
+`--dt-file FILE` feeds a run its step sequence (one exact hex float
+per step) and `--dt-out FILE` records one; the replay sets the next
+step before the prediction ratio `dt / dt_done` is formed, exactly as
+the adaptive path does after an accepted step. The consequence is a
+checkable property: an adaptive run that rejected no step, replayed
+from its own recorded sequence, must reproduce its record to the bit.
+Kepler and the Pythagorean problem, 2,000 adaptive steps at
+binary64 (`steps_rejected=0` in both), replayed:
+
+    kepler:       2001 dt lines; replay IDENTICAL on all 21 sample lines
+    pythagorean:  2001 dt lines; replay IDENTICAL on all 21 sample lines
+
+The first version of `--dt-out` wrote `steps` lines - one per accepted
+step - and the replays differed in exactly one value: the last
+sample's `dt_next`, because the adaptive run had already chosen its
+2,001st step and the replay's sequence had ended. Every position,
+velocity, time and energy was identical. `--dt-out` now writes the
+step the run would take next as its last line (`steps + 1` in all),
+and the difference is gone. The point of the mechanism is the horizon
+campaign below: a binary256 run's sequence, rounded to binary64, lets
+every format take literally the same steps, so that the difference
+between two formats' records is the narrower one's round-off and
+nothing else.
+
+## 2026-09-10 - the reversal test: no format returns exactly, and the wide ones return to the same error
+
+tools/reversal.py: N fixed steps forward, the exact recorded state
+written as a problem file (tools/state_to_problem.py), N steps back
+with `-dt`, and the returned state against the initial one as exact
+rationals. Kepler at dt = 1/16, 1,000 steps out and back (10 orbits
+each way); the outer solar system at 40 days, 500 steps each way:
+
+    problem  format  bits identical  max|dx|/L   max|dv|/V   |dE/E|
+    kepler   fp64    no              1.243e-13   8.254e-14   1.431e-16
+    kepler   fp128   no              7.813e-19   5.207e-19   5.040e-21
+    kepler   fp256   no              7.813e-19   5.207e-19   5.040e-21
+    outer    fp64    no              7.893e-16   6.972e-15   2.489e-16
+    outer    fp128   no              1.162e-31   9.595e-31   2.106e-31
+    outer    fp256   no              1.154e-31   9.531e-31   2.104e-31
+
+IAS15 is not time-symmetric - its Gauss-Radau nodes include the start
+of the step and not the end, so the backward polynomial is a different
+polynomial - and no exact arithmetic would bring it back bit for bit;
+the test was run to see which error is which, and it does. On Kepler
+the binary128 and binary256 returns are identical to every digit
+printed: 7.813e-19 of the orbit is the method's own asymmetry at this
+step, with the arithmetic invisible under it, and binary64's
+1.243e-13 is a factor of 1.6e5 above it and is all arithmetic. On the
+outer solar system, whose 40-day step is so smooth that the method's
+asymmetry is 1.15e-31, binary128 sits 8e-34 above binary256 - its own
+floor showing - and binary64 is 7e15 times higher. A bit-exact return
+is a property of a symmetric or a lattice scheme (JANUS, ranked for it
+in docs/INTEGRATORS.md), not of this one; what is exact here is the
+run itself, repeated.
+
+## 2026-09-10 - the horizon of a regular orbit at binary64, measured with REBOUND itself
+
+The question (docs/HORIZON.md): after how much simulated time does a
+binary64 answer stop being worth having. Every binary64 run in this
+entry is REBOUND's own IAS15 through `build/ias15_ref`, which the
+equivalence gate shows is the port at binary64 bit for bit and which
+does a Kepler step in 5 to 9 us here; `ias15_ref` now writes an exact
+TwoSum time pair beside REBOUND's `r->t` (a label, not an input: the
+force and the step control are time-independent, and the quick
+equivalence gate passed unchanged), because `r->t` alone mislabels a
+1e8-step run at the 1e-5 level, which is the size of the effect being
+measured. The error is the along-track phase error of tools/oracle.py
+in units of the period; the oracle's Kepler solver was made robust on
+the way (below).
+
+**Single runs.** Kepler e = 1/2 at the fixed dyadic step 1/16
+(100.48 steps an orbit, the time exact by construction):
+
+    orbits   steps         max |dE/E|   phase error (last sample)
+    1e4      1,004,807     1.109e-14    2.09e-11
+    1e5      10,048,074    5.027e-14    1.879e-9
+    1e6      100,480,737   1.271e-13    3.486e-8
+
+and at REBOUND's default adaptive settings (epsilon 1e-9, 1e8 steps
+each, 12 to 17 minutes a run):
+
+    e     steps/orbit  orbits      max |dE/E|   phase (max / last)
+    0.5   51.2         1,953,174   6.546e-13    9.857e-7 / 9.857e-7
+    0.9   97.2         1,029,258   5.089e-13    8.944e-8 / 6.554e-9
+    0.99  159          627,838     6.824e-12    1.865e-6 / 1.792e-6
+
+The e = 0.99 run first reported a maximum position error of 8.3
+semi-major axes, which is geometrically impossible for a bound orbit
+(two points on it are at most 4a apart): the oracle started Newton on
+Kepler's equation at dE = M with M ~ 4e6 radians and e = 0.99 and did
+not converge. The solver now reduces the mean anomaly modulo 2 pi at
+the working precision and runs Newton inside a bisection bracket on
+the monotonic function; re-scoring the committed
+`kepler_fixed_dt0.05_fp64` record reproduces its committed CSV in
+every column of every sample but one, the first sample's position
+error, which reads 1.68e-72 instead of 0.0 (the 60-digit reduction's
+own round-off). With the robust solver the e = 0.99 run's maximum
+`|dx|/a` is 1.643e-4 and its phase error 1.865e-6 of an orbit.
+
+**Single runs do not measure the law.** Fitting `phase = C t^alpha`
+to those runs gives alpha = 0.59, 1.38 and 1.30 on the three
+fixed-step spans, 1.92 for the adaptive e = 1/2 run (0.06 dex
+residual, on top of an energy error growing as t^0.85 - a drift, not
+a walk, in that realisation), 0.75 for e = 0.9 and 1.90 for e = 0.99,
+with 0.2 to 0.5 dex of scatter in most; the e = 0.9 run's phase error
+at a million orbits (6.6e-9) is five times SMALLER than the e = 1/2
+run's at the same count. A round-off random walk is a distribution
+and one run is one draw from it.
+
+**Ensembles measure it.** tools/make_ensemble.py wrote 64 copies of
+the e = 1/2 problem with the planet's x shifted by 2k ulps
+(`--offset planet x 0x1p-52`) and their member files; each was run
+through `ias15_ref` for 1e7 steps at epsilon 1e-9 (2e5 orbits) and
+again at the fixed step 1/16 (1e5 orbits), 128 runs, four at a time,
+and tools/horizon.py took the distribution at every sample:
+
+    adaptive, epsilon 1e-9, 64 members, phase error:
+      orbits    median      p90         max         min
+      1953      1.042e-11   2.350e-11   3.723e-11   1.259e-13
+      2.15e4    3.458e-10   7.513e-10   1.268e-9    8.371e-12
+      6.06e4    1.793e-9    4.151e-9    7.340e-9    1.725e-10
+      1.19e5    4.410e-9    1.254e-8    1.582e-8    8.571e-12
+      1.78e5    8.334e-9    1.995e-8    3.169e-8    3.233e-10
+      p90    = 2.110e-16 * orbits^1.525   (90 samples from 2e4 orbits, rms residual 0.02 dex)
+      median = 2.073e-16 * orbits^1.446   (0.02 dex)
+      energy p90 1.489e-14 at 1953 orbits, 1.314e-13 at 1.78e5: ~ orbits^0.5
+      the p90 curve crosses 1e-9 of an orbit at 2.73e4 orbits (the fit says 2.39e4)
+
+    fixed dt = 1/16, 64 members, phase error:
+      p90    = 3.212e-16 * orbits^1.471   (0.01 dex)
+      median = 9.761e-17 * orbits^1.494   (0.02 dex)
+      energy p90 = 1.729e-16 * orbits^0.540 (0.03 dex); median ~ orbits^0.477
+      crosses 1e-9 at 2.59e4 orbits (fit 2.6e4)
+
+That is Brouwer's law - the energy error a t^1/2 walk, the phase error
+its t^3/2 integral - measured to 0.01-0.02 dex, and the fixed-step
+coefficient is 1.5x the adaptive one where 100 steps an orbit against
+51 is a walk 1.4x longer. The single long run (2e6 orbits, 9.86e-7)
+lands where the adaptive p90 law says 1.1e-6. One more single run
+went a decade further: the fixed step 1/16 for 1e7 orbits,
+1,004,807,371 steps, 2.6 hours of REBOUND, phase error 3.49e-8 at
+1e6 orbits, 3.24e-7 at 2e6, 6.07e-7 at 3e6 and 8.19e-7 at 1e7 (the
+walk stalled between 3e6 and 9e6 orbits, as walks do), against the
+fixed-step median law's 2.6e-6 and p90's 6.6e-6 at 1e7: a draw on the
+low side, within the ensemble's spread (its members differ by a
+factor of 100 at every sample). The energy error of that run never
+left the 2e-14 to 3e-13 band in a billion steps. Extrapolated on the
+law beyond the data, the p90 phase error reaches:
+
+    threshold   adaptive eps 1e-9   fixed dt 1/16
+    1e-6        2.21e6 orbits       2.86e6
+    1e-3        2.05e8              3.13e8
+    0.1         4.2e9               7.2e9
+
+The extrapolation rests on the law, not on the data, past 2e5 orbits
+(2e6 for the one long run); the law is Brouwer's and the fit is clean,
+but it is an extrapolation and is marked as one in docs/HORIZON.md.
+
+**The other law.** Re-scoring the committed sweep records with the
+phase column: every truncation-limited wide-format record has energy
+error proportional to t^1.00 and phase error to t^2.00, both to 0.00
+dex over 200 orbits - the systematic per-orbit error of the method,
+integrated twice - with coefficients set by the step control:
+
+    binary128 (= binary256 to every digit), phase = C * orbits^2:
+      adaptive eps 1e-9:   C = 1.71e-21     (energy 4.589e-19 at 195 orbits, ~ t^1.00)
+      adaptive eps 1e-12:  C = 3.86e-28     (energy 1.025e-25, ~ t^1.00)
+      adaptive eps 1e-16:  C = 1.92e-36, alpha 2.07 (energy 1.57e-34, flat: the binary128 floor)
+      fixed dt 0.05:       C = 7.04e-24;  dt 1/16: 1.99e-22;  dt 0.025: 2.17e-28;  dt 1/64: 1.90e-31
+
+Against binary64's 2.11e-16 t^1.5 walk, the two laws cross at 1.5e10
+orbits at epsilon 1e-9: binary128 at REBOUND's default tolerance
+reaches 1e-6 of an orbit at 2.4e7 orbits (eleven times binary64's
+2.2e6) and 0.1 at 7.6e9 (1.8 times binary64's 4.2e9), because the
+method's t^2 overtakes the arithmetic's t^1.5; at epsilon 1e-12 it
+reaches 1e-6 at 5.1e10 orbits, 23,000 times later than binary64 can
+at any setting. The table with costs is in docs/HORIZON.md, and the
+sentence it supports is: binary64's horizon is fixed by the
+arithmetic and no setting moves it; binary128's is set by the method
+and is for sale at 2.5 to 12.5 times the force evaluations an orbit.
+
+**The outer solar system**, fixed 40-day step, binary64 through
+`ias15_ref`: 1e6 years (9,131,250 steps) max |dE/E| 1.878e-14, max
+|dL/L| 6.072e-15; 1e7 years (91,312,500 steps, 16 minutes) 5.091e-14
+and 1.799e-14, the energy error between 2e-14 and 5e-14 throughout
+and fitted as t^0.63 with 0.5 dex of scatter - one draw of a walk
+again. No closed form, so no phase; the sweep's binary128 record at
+the same step gives 3.97e-31 over 1,200 years, a t^1.00 ruler, so at
+40 days the two formats are 16 orders apart in energy at 1,200 years
+and, on their laws, 15 orders at 1e7 years.
