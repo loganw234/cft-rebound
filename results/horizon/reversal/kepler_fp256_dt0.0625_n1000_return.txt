@@ -1,5 +1,5 @@
 # cft-rebound problem file, exact hex floats
-# the state of kepler_at1000 at step 1000 of C:/Users/logan/AppData/Local/Temp/claude/C--Users-logan-source-repos/ee78a62e-821f-4dd3-a7cd-6d09b5670eed/scratchpad/rebound2/reversal\kepler_fp256_dt0.0625_n1000_back.rec, t = -0x1.f4p+5
+# the state of kepler_at1000 at step 1000 of <scratch>/reversal\kepler_fp256_dt0.0625_n1000_back.rec, t = -0x1.f4p+5
 name kepler_at1000_at1000
 G 0x1p+0
 N 2

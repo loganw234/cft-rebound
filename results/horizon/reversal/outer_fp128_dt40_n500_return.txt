@@ -1,5 +1,5 @@
 # cft-rebound problem file, exact hex floats
-# the state of outer_at500 at step 500 of C:/Users/logan/AppData/Local/Temp/claude/C--Users-logan-source-repos/ee78a62e-821f-4dd3-a7cd-6d09b5670eed/scratchpad/rebound2/reversal\outer_fp128_dt40_n500_back.rec, t = -0x1.388p+14
+# the state of outer_at500 at step 500 of <scratch>/reversal\outer_fp128_dt40_n500_back.rec, t = -0x1.388p+14
 name outer_at500_at500
 G 0x1.3649541cf95e7p-12
 N 6

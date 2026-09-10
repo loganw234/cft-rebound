@@ -1,5 +1,5 @@
 # cft-rebound ias15 record v1
-# program=cft impl=libcft-0.11 format=fp256 backend=software problem=kepler N=2 steps=20000 sample=200 cs=kahan arith=rebound engine=loop pc_tol_shift=184 max_iter=60 dt_file=C:/Users/logan/AppData/Local/Temp/claude/C--Users-logan-source-repos/ee78a62e-821f-4dd3-a7cd-6d09b5670eed/scratchpad/rebound2/hie/dt64_e05.txt
+# program=cft impl=libcft-0.11 format=fp256 backend=software problem=kepler N=2 steps=20000 sample=200 cs=kahan arith=rebound engine=loop pc_tol_shift=184 max_iter=60 dt_file=<scratch>/hie/dt64_e05.txt
 # dt0= 0x1.47ae147ae147bp-7 epsilon= 0x0p+0 G= 0x1p+0 pc_tol= 0x1.cd2b297d889bc2b6985d7cd0f31353677ee2d835ba4fe10a4799a6909b7p-238
 # body 0 star m= 0x1p+0
 # body 1 planet m= 0x1.0624dd2f1a9fcp-10

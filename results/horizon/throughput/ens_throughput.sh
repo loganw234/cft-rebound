@@ -5,7 +5,7 @@
 # Sequential, one job at a time, on an otherwise idle box.
 R=/c/Users/logan/source/repos/cft-rebound
 O=/c/Users/logan/AppData/Local/Temp/claude/C--Users-logan-source-repos/ee78a62e-821f-4dd3-a7cd-6d09b5670eed/scratchpad/rebound2/throughput
-PY=C:/Users/logan/AppData/Local/Programs/Miniconda3/python.exe
+PY=${PYTHON:-python3}
 mkdir -p "$O"
 cd "$R"
 for E in 1 4 16 64 256 1024; do

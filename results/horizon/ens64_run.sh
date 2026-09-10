@@ -6,7 +6,7 @@
 # fixed dt = 1/16; 1e7 steps each (2e5 and 1e5 orbits).
 R=/c/Users/logan/source/repos/cft-rebound
 O=/c/Users/logan/AppData/Local/Temp/claude/C--Users-logan-source-repos/ee78a62e-821f-4dd3-a7cd-6d09b5670eed/scratchpad/rebound2/ens64
-PY=C:/Users/logan/AppData/Local/Programs/Miniconda3/python.exe
+PY=${PYTHON:-python3}
 mkdir -p "$O/members" "$O/adapt" "$O/fixed"
 cd "$R"
 $PY tools/make_ensemble.py data/problems/kepler.txt --members 64 --out "$O/kepler_ulps_E64.txt" --offset planet x 0x1p-52 --members-dir "$O/members"
