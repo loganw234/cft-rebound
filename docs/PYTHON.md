@@ -149,6 +149,14 @@ the *next* call that runs `process_messages()`, on an unrelated line.
 ever sets that bit - the friendly message the roadmap quotes is dead
 code at bdfda4bd.
 
+So: **call `cft_rebound.load()` before you open the archive.** Doing it
+afterwards, the way binarydata.c's unreachable message advises, does
+recover - `sim.process_messages()` to swallow the stale error, then
+`sim.integrator = "ias15_cft"` - but `set_integrator` calls your
+`create()`, so the integrator's own archived state is not there:
+measured, a field the archive held at 8 read back as 0. `t`, `dt` and
+the particles are intact.
+
 **Loading twice is safe; loading two copies is not.** Calling
 `cft_rebound.load()` on the same path twice is a no-op - `dlopen` and
 `LoadLibrary` both return the existing handle without re-running the

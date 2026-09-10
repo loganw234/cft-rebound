@@ -1337,6 +1337,13 @@ and printed for in `reb_binarydata_process_warnings`, but no line in
 REBOUND sets that bit. The friendly message the roadmap quotes is dead
 code at bdfda4bd.
 
+Its advice - set the integrator after loading - was tried anyway, and
+half works. Draining the stale message and then assigning the name
+succeeds, but `set_integrator` calls `create()`, so the integrator's own
+state is fresh: `nsteps` read 0 where the archive held 8, with
+`t = 2.0` and `p1.y = 2.0` intact. Load the library before opening the
+archive.
+
 **A second failure, upstream, and it hangs.** The first probe run of
 this campaign never returned. `reb_integrator_register` (src/rebound.c)
 scans the existing registrations with
