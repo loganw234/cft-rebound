@@ -82,6 +82,48 @@ def predict(fmt):
     return "\n".join(L) + "\n"
 
 
+def predict_ens(fmt):
+    """The predictor for an ensemble whose systems keep their own
+    adaptive steps: fl(dt h_n) and its half are per LANE, so they ride
+    in the scratch block (slots 8 and 9) instead of the bank, and the
+    bank holds only the seven format-wide K constants. The arithmetic
+    is instruction for instruction the same as predict()'s; the two
+    constants are loaded into a register first."""
+    L = [HEADER % ("predict-ens-" + fmt, "IAS15 position predictor at one substep, FMA form, per-lane dt; see tools/gen_programs.py")]
+    L.append(".format   %s" % fmt)
+    L.append(".deposits 1")
+    L.append(".bank     external")
+    for i in range(7):
+        L.append(".const    K%d" % i)
+    L.append(".scratch  in 10")
+    for i in range(7):
+        L.append(".slot     B%d = %d" % (i, i))
+    L.append(".slot     CSX = 7")
+    L.append(".slot     D2L = 8")
+    L.append(".slot     D1L = 9")
+    L.append(".reg      x0 = r0")
+    L.append(".reg      v0 = r1")
+    L.append(".reg      a0 = r2")
+    L.append(".reg      t  = r3")
+    L.append(".reg      s  = r4")
+    L.append("")
+    L.append("ldl  t, B6")
+    for i, j in enumerate(range(5, -1, -1)):
+        L.append("ldl  s, B%d" % j)
+        L.append("fma  t, t, K%d, s" % i)           # t = t*K_i + b_j
+    L.append("fma  t, t, K6, a0")                   # + a0 level
+    L.append("ldl  s, D2L")
+    L.append("fma  t, t, s, v0")                    # *dt*h/2 + v0, this lane's dt
+    L.append("ldl  s, D1L")
+    L.append("mul  t, t, s")                        # *dt*h
+    L.append("ldl  s, CSX")
+    L.append("sub  t, t, s")                        # xk = P - csx
+    L.append("add  t, t, x0")                       # x = xk + x0
+    L.append("deposit t")
+    L.append("halt")
+    return "\n".join(L) + "\n"
+
+
 def add_cs(L, p, cs, inp, y, t, u):
     """Kahan's add_cs exactly as REBOUND writes it: y = inp - cs; t = p + y;
     cs = (t - p) - y; p = t. Registers p and cs are updated in place;
@@ -157,6 +199,10 @@ def main():
         name = "predict-%s.cfta" % fmt
         with open(os.path.join(outdir, name), "w", newline="\n") as f:
             f.write(predict(fmt))
+        names.append(name)
+        name = "predict-ens-%s.cfta" % fmt
+        with open(os.path.join(outdir, name), "w", newline="\n") as f:
+            f.write(predict_ens(fmt))
         names.append(name)
         for n in range(1, 8):
             name = "correct%d-%s.cfta" % (n, fmt)

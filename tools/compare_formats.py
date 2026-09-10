@@ -53,7 +53,7 @@ def main():
     wide_by_step = {s["step"]: s for s in sw}
     out = open(args.csv, "w", newline="\n") if args.csv else None
     if out:
-        out.write("step,rel_energy_diff,max_rel_coord_diff\n")
+        out.write("step,t,rel_energy_diff,max_rel_coord_diff\n")
     scale = None
     worstE = mpf(0); worstX = mpf(0); last = None; ncommon = 0
     for s in sn:
@@ -72,7 +72,8 @@ def main():
                 dX = max(dX, abs(pn[i][c] - pw[i][c]) / scale)
         worstE = max(worstE, dE); worstX = max(worstX, dX); last = (s["step"], dE, dX)
         if out:
-            out.write("%d,%s,%s\n" % (s["step"], mpmath.nstr(dE, 6), mpmath.nstr(dX, 6)))
+            tt = s["t_exact"] if s["t_exact"] is not None else s["t"]
+            out.write("%d,%s,%s,%s\n" % (s["step"], mpmath.nstr(F2m(tt), 18), mpmath.nstr(dE, 6), mpmath.nstr(dX, 6)))
         if not args.quiet:
             print("step %8d  |dE/E| %s  max|dx|/L %s" % (s["step"], mpmath.nstr(dE, 4), mpmath.nstr(dX, 4)))
     if out:

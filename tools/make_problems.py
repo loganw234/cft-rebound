@@ -50,14 +50,13 @@ def write_problem(path, name, G, bodies, note):
     print("wrote", path)
 
 
-def kepler():
+def kepler(e=0.5, fname="kepler.txt", pname="kepler"):
     G = 1.0
     m0 = 1.0
     m1 = 1.0 / 1000.0
     a = 1.0
-    e = 0.5
     mu = G * (m0 + m1)
-    q = a * (1.0 - e)                      # pericentre distance, exact
+    q = a * (1.0 - e)                      # pericentre distance (exact for e = 1/2)
     v = math.sqrt(mu * (1.0 + e) / q)      # pericentre speed
     mt = m0 + m1
     w0 = m1 / mt
@@ -66,8 +65,24 @@ def kepler():
         ("star",   m0, -q * w0, 0.0, 0.0, 0.0, -v * w0, 0.0),
         ("planet", m1,  q * w1, 0.0, 0.0, 0.0,  v * w1, 0.0),
     ]
-    write_problem(os.path.join(outdir, "kepler.txt"), "kepler", G, bodies,
-                  "two-body, G=1, m0=1, m1=1e-3, a=1, e=1/2, pericentre, barycentric frame")
+    write_problem(os.path.join(outdir, fname), pname, G, bodies,
+                  "two-body, G=1, m0=1, m1=1e-3, a=1, e=%s, pericentre, barycentric frame" % ("1/2" if e == 0.5 else repr(e)))
+
+
+def pythagorean():
+    """Burrau's problem (Burrau 1913; Szebehely & Peters 1967): masses 3,
+    4, 5 at rest at the vertices of a 3-4-5 right triangle, G = 1. Every
+    initial value is an integer, so it is exact in every format, and the
+    centre of mass is at the origin already: (3*1 - 4*2 + 5*1, 3*3 - 4 - 5)
+    = (0, 0). The system is chaotic with repeated close encounters and
+    ends, near t = 70, with the 4-5 binary ejecting body 3."""
+    bodies = [
+        ("m3", 3.0,  1.0,  3.0, 0.0, 0.0, 0.0, 0.0),
+        ("m4", 4.0, -2.0, -1.0, 0.0, 0.0, 0.0, 0.0),
+        ("m5", 5.0,  1.0, -1.0, 0.0, 0.0, 0.0, 0.0),
+    ]
+    write_problem(os.path.join(outdir, "pythagorean.txt"), "pythagorean", 1.0, bodies,
+                  "Burrau's Pythagorean three-body problem: m = 3, 4, 5 at (1,3), (-2,-1), (1,-1), at rest, G = 1; all values exact")
 
 
 def outer():
@@ -119,6 +134,9 @@ def outer():
 def main():
     os.makedirs(outdir, exist_ok=True)
     kepler()
+    kepler(0.9, "kepler_e09.txt", "kepler_e09")
+    kepler(0.99, "kepler_e099.txt", "kepler_e099")
+    pythagorean()
     outer()
     return 0
 

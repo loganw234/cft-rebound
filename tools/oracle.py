@@ -51,13 +51,30 @@ def F2m(x):
     return mpf(x.numerator) / mpf(x.denominator)
 
 
-def parse(path):
+def parse(path, system=None):
+    """A record's header, masses, samples and trailer. For an ensemble
+    record, `system` selects one member: its `# body` lines, its
+    `system S sample ...` lines and its `# system S steps_done=...`
+    trailer, so that the rest of the tool sees a single-system record."""
     header = {}
     masses = []
     samples = []
     tail = {}
+    cur_sys = None
+    want = None if system is None else "system %d sample " % system
     with open(path) as f:
         for line in f:
+            from_sys = False
+            if want is not None and line.startswith(want):
+                line = "sample " + line[len(want):]
+            elif want is not None and line.startswith("# system %d steps_done=" % system):
+                line = "# " + line.split(None, 3)[3]
+                from_sys = True
+            elif line.startswith("# system ") and "steps_done" not in line:
+                cur_sys = int(line.split()[2])
+                continue
+            elif want is not None and line.startswith("# steps_done="):
+                continue   # the ensemble's totals; this member's own trailer was taken above
             if line.startswith("# program="):
                 for kv in line[2:].split():
                     k, _, v = kv.partition("=")
@@ -75,6 +92,8 @@ def parse(path):
                     for k, v in zip(keys, vals):
                         header[k[:-1]] = v
             elif line.startswith("# body"):
+                if system is not None and cur_sys != system:
+                    continue
                 toks = line.split()
                 mtok = [t for t in toks if t.startswith("m=") or t.startswith("0x") or t.startswith("-0x")]
                 m = mtok[-1]
@@ -155,20 +174,43 @@ class Kepler:
         self.rmag0 = r
 
     def at(self, t):
-        """Relative position/velocity at time t via the f and g functions."""
-        M = self.n * t   # mean anomaly advanced from E0: solve dE - e(sin(E0+dE) - sin E0) = n t
+        """Relative position/velocity at time t via the f and g functions.
+
+        Kepler's equation is solved for the eccentric anomaly with the
+        mean anomaly first reduced modulo 2 pi at the working precision
+        (t may be millions of periods) and then by Newton safeguarded by
+        bisection on E - e sin E - M, which is monotonic; the first
+        version started Newton at M itself, which at e = 0.99 and
+        M ~ 4e6 radians does not converge and reported position errors
+        larger than the orbit. The f and g functions take the reduced
+        anomaly difference and the correspondingly reduced time."""
         e, E0 = self.e, self.E0
-        dE = M
-        for _ in range(100):
-            f = dE - e * (mpmath.sin(E0 + dE) - mpmath.sin(E0)) - M
-            fp = 1 - e * mpmath.cos(E0 + dE)
-            step = f / fp
-            dE -= step
-            if abs(step) < mpf(10) ** (-(mp.dps - 5)):
+        twopi = 2 * mpmath.pi
+        M0 = E0 - e * mpmath.sin(E0)
+        Mt = M0 + self.n * t
+        k = mpmath.floor(Mt / twopi)
+        Mr = Mt - k * twopi                      # in [0, 2 pi)
+        lo, hi = mpf(0), twopi
+        Er = mpmath.pi if e > mpf("0.8") else Mr
+        for _ in range(200):
+            fE = Er - e * mpmath.sin(Er) - Mr
+            if fE > 0:
+                hi = Er
+            else:
+                lo = Er
+            step = fE / (1 - e * mpmath.cos(Er))
+            Enew = Er - step
+            if not (lo < Enew < hi):
+                Enew = (lo + hi) / 2                # Newton left the bracket: bisect
+            if abs(Enew - Er) < mpf(10) ** (-(mp.dps - 5)):
+                Er = Enew
                 break
+            Er = Enew
+        dE = Er - E0                              # the anomaly difference, reduced
+        tr = (dE - e * (mpmath.sin(Er) - mpmath.sin(E0))) / self.n   # t - k T, exactly the reduced time
         a, r0 = self.a, self.rmag0
         f = 1 - (a / r0) * (1 - mpmath.cos(dE))
-        g = t - (dE - mpmath.sin(dE)) / self.n
+        g = tr - (dE - mpmath.sin(dE)) / self.n
         r = [f * self.r0[c] + g * self.v0[c] for c in range(3)]
         rmag = mpmath.sqrt(sum(q * q for q in r))
         fdot = -mpmath.sqrt(self.mu * a) / (r0 * rmag) * mpmath.sin(dE)
@@ -191,21 +233,24 @@ def main():
     ap.add_argument("record")
     ap.add_argument("--csv")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--system", type=int, default=None, help="score this member of an ensemble record")
     args = ap.parse_args()
-    header, masses, samples, tail = parse(args.record)
+    header, masses, samples, tail = parse(args.record, args.system)
+    if not samples:
+        raise SystemExit("no samples%s in %s" % ("" if args.system is None else " for system %d" % args.system, args.record))
     G = F2m(hex_to_fraction(header["G"]))
     problem = header.get("problem", "?")
     fmt = header.get("format", "?")
     E0, L0, _, _ = invariants(G, masses, samples[0]["state"])
     L0mag = mpmath.sqrt(sum(q * q for q in L0))
-    kep = Kepler(G, masses, samples[0]["state"]) if problem == "kepler" else None
+    kep = Kepler(G, masses, samples[0]["state"]) if (problem.startswith("kepler") and len(masses) == 2) else None
     fixed = header.get("epsilon", "") in ("0x0p+0", "0x0.0p+0", "0")
     dt0 = hex_to_fraction(header["dt0"]) if "dt0" in header else None
     rows = []
     out = open(args.csv, "w", newline="\n") if args.csv else None
     if out:
-        out.write("sample,step,orbits,t,rel_energy_err,rel_angmom_err,rel_pos_err,rel_vel_err\n")
-    maxE = mpf(0); maxL = mpf(0); maxP = mpf(0); lastP = mpf(0); lastE = mpf(0)
+        out.write("sample,step,orbits,t,rel_energy_err,rel_angmom_err,rel_pos_err,rel_vel_err,rel_phase_err\n")
+    maxE = mpf(0); maxL = mpf(0); maxP = mpf(0); lastP = mpf(0); lastE = mpf(0); maxPh = mpf(0); lastPh = mpf(0)
     for s in samples:
         if s["t_exact"] is not None:
             t = F2m(s["t_exact"])
@@ -217,31 +262,44 @@ def main():
         dE = abs((E - E0) / E0)
         Lmag = mpmath.sqrt(sum(q * q for q in L))
         dL = abs((Lmag - L0mag) / L0mag)
-        dP = mpf(0); dV = mpf(0)
+        dP = mpf(0); dV = mpf(0); dPh = mpf(0)
         if kep:
             x0, v0, x1, v1 = kep.bodies_at(t)
             dP = mpmath.sqrt(sum((pos[1][c] - x1[c]) ** 2 for c in range(3))) / kep.a
             vscale = mpmath.sqrt(kep.mu / kep.a)
             dV = mpmath.sqrt(sum((vel[1][c] - v1[c]) ** 2 for c in range(3))) / vscale
+            # the along-track timing error: the relative position error
+            # projected on the true relative velocity, as a fraction of
+            # the period. A phase error shows up in dx/a scaled by the
+            # local speed, 200x larger at the pericentre of an e = 0.99
+            # orbit than at its apocentre; this is the same error read
+            # as "how late is the planet", which does not depend on
+            # where in the orbit a sample happens to land.
+            rt, vt = kep.at(t)
+            dr = [(pos[1][c] - pos[0][c]) - rt[c] for c in range(3)]
+            v2 = sum(q * q for q in vt)
+            dPh = abs(sum(dr[c] * vt[c] for c in range(3)) / v2) / kep.T
             orbits = t / kep.T
         else:
             orbits = t / mpf(365.25)   # years, for the outer solar system in days
         maxE = max(maxE, dE); maxL = max(maxL, dL); maxP = max(maxP, dP); lastP = dP; lastE = dE
-        rows.append((s["k"], s["step"], orbits, t, dE, dL, dP, dV))
+        maxPh = max(maxPh, dPh); lastPh = dPh
+        rows.append((s["k"], s["step"], orbits, t, dE, dL, dP, dV, dPh))
         if out:
-            out.write("%d,%d,%s,%s,%s,%s,%s,%s\n" % (s["k"], s["step"], mpmath.nstr(orbits, 12), mpmath.nstr(t, 20),
-                                                    mpmath.nstr(dE, 6), mpmath.nstr(dL, 6), mpmath.nstr(dP, 6), mpmath.nstr(dV, 6)))
+            out.write("%d,%d,%s,%s,%s,%s,%s,%s,%s\n" % (s["k"], s["step"], mpmath.nstr(orbits, 12), mpmath.nstr(t, 20),
+                                                       mpmath.nstr(dE, 6), mpmath.nstr(dL, 6), mpmath.nstr(dP, 6), mpmath.nstr(dV, 6), mpmath.nstr(dPh, 6)))
         if not args.quiet:
-            print("sample %4d step %8d %s %12s  dE/E %s  dL/L %s  dx/a %s" %
+            print("sample %4d step %8d %s %12s  dE/E %s  dL/L %s  dx/a %s  dphase %s" %
                   (s["k"], s["step"], "orbits" if kep else "years ", mpmath.nstr(orbits, 8),
-                   mpmath.nstr(dE, 4), mpmath.nstr(dL, 4), mpmath.nstr(dP, 4) if kep else "-"))
+                   mpmath.nstr(dE, 4), mpmath.nstr(dL, 4), mpmath.nstr(dP, 4) if kep else "-", mpmath.nstr(dPh, 4) if kep else "-"))
     if out:
         out.close()
     last = rows[-1]
-    print("SUMMARY problem=%s format=%s cs=%s steps=%d %s=%s max_dE=%s last_dE=%s max_dL=%s max_dx=%s last_dx=%s rejected=%s max_exceeded=%s mean_pc=%s seconds=%s" %
+    print("SUMMARY problem=%s format=%s cs=%s steps=%d %s=%s max_dE=%s last_dE=%s max_dL=%s max_dx=%s last_dx=%s max_dphase=%s last_dphase=%s rejected=%s max_exceeded=%s mean_pc=%s seconds=%s" %
           (problem, fmt, header.get("cs", "-"), last[1], "orbits" if kep else "years", mpmath.nstr(last[2], 8),
            mpmath.nstr(maxE, 4), mpmath.nstr(lastE, 4), mpmath.nstr(maxL, 4),
            mpmath.nstr(maxP, 4) if kep else "-", mpmath.nstr(lastP, 4) if kep else "-",
+           mpmath.nstr(maxPh, 4) if kep else "-", mpmath.nstr(lastPh, 4) if kep else "-",
            tail.get("steps_rejected", "-"), tail.get("iterations_max_exceeded", "-"),
            tail.get("mean_pc_iterations", "-"), tail.get("seconds", "-")))
     if kep and not args.quiet:

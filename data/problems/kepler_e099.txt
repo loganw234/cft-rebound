@@ -1,0 +1,7 @@
+# cft-rebound problem file, binary64 hex floats
+# two-body, G=1, m0=1, m1=1e-3, a=1, e=0.99, pericentre, barycentric frame
+name kepler_e099
+G 0x1.0000000000000p+0
+N 2
+body star 0x1.0000000000000p+0 -0x1.4f35884a8df87p-17 0x0.0p+0 0x0.0p+0 0x0.0p+0 -0x1.ce04c1338babep-7 0x0.0p+0
+body planet 0x1.0624dd2f1a9fcp-10 0x1.475a4718cea49p-7 0x0.0p+0 0x0.0p+0 0x0.0p+0 0x1.c330a4ac5665dp+3 0x0.0p+0

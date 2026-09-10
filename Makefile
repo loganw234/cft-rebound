@@ -105,6 +105,17 @@ check: all programs
 	$(PYTHON) tools/gen_constants.py --no-write
 	$(PYTHON) tools/check_equivalence.py --build $(B)
 	$(PYTHON) tools/check_program_engine.py --build $(B)
+	$(PYTHON) tools/check_records.py --build $(B)
+	$(PYTHON) tools/check_ensemble.py --build $(B)
+
+# the same gates at binary64 only, in a few minutes
+.PHONY: check-quick
+check-quick: all programs
+	$(PYTHON) tools/gen_constants.py --no-write
+	$(PYTHON) tools/check_equivalence.py --build $(B) --quick
+	$(PYTHON) tools/check_program_engine.py --build $(B) --formats fp64
+	$(PYTHON) tools/check_records.py --build $(B) --quick
+	$(PYTHON) tools/check_ensemble.py --build $(B) --quick
 
 clean:
 	rm -rf $(B)

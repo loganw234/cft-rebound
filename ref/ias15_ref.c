@@ -110,8 +110,21 @@ int main(int argc, char **argv){
     { char a[40], b[40], c[40]; hexfloat_print(dt, a); hexfloat_print(epsilon, b); hexfloat_print(G, c);
       printf("# dt0=%s epsilon=%s G=%s\n", a, b, c); }
     for (int i = 0; i < N; i++){ char m[40]; hexfloat_print(bodies[i].m, m); printf("# body %d %s m=%s\n", i, bodies[i].name, m); }
-    printf("# columns: sample step t dt_next dt_last E_rebound then per body x y z vx vy vz\n");
+    printf("# columns: sample step t dt_next dt_last E_rebound then per body x y z vx vy vz ; then exact-time pair t_hi t_lo\n");
 
+    /* The exact elapsed time, kept beside REBOUND's own r->t. r->t is a
+     * plain running sum of the steps taken and its rounding error grows
+     * with the step count; it never feeds back into the trajectory (the
+     * force and the step control are time-independent), so it is only a
+     * label - but a label the oracle would mistake for a position error
+     * once a run reaches 1e8 steps. The pair (t_hi, t_lo) accumulates
+     * every dt_last_done with an exact TwoSum (Knuth), the same idea the
+     * libcft port implements with 754-2019's augmentedAddition; -std=c99
+     * pins -ffp-contract=off, so no FMA contraction disturbs it. Stepping
+     * one step at a time is what reb_simulation_steps(r, todo) does
+     * internally (a per-step loop, plus a synchronize IAS15 does not
+     * implement), so the trajectory is unchanged. */
+    double t_hi = 0.0, t_lo = 0.0;
     long done = 0, k = 0;
     while (1){
         printf("sample %ld %ld", k, done);
@@ -120,10 +133,20 @@ int main(int argc, char **argv){
             struct reb_particle *p = &r->particles[i];
             put("", p->x); put("", p->y); put("", p->z); put("", p->vx); put("", p->vy); put("", p->vz);
         }
+        printf(" |"); put("", t_hi); put("", t_lo);
         printf("\n");
+        fflush(stdout);
         if (done >= steps) break;
         long todo = sample; if (done + todo > steps) todo = steps - done;
-        reb_simulation_steps(r, (size_t)todo);
+        for (long s = 0; s < todo; s++){
+            reb_simulation_steps(r, 1);
+            double d = r->dt_last_done;
+            double sum = t_hi + d;
+            double bv = sum - t_hi;
+            double err = (t_hi - (sum - bv)) + (d - bv);
+            t_hi = sum;
+            t_lo += err;
+        }
         done += todo;
         k++;
     }
