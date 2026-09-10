@@ -196,26 +196,48 @@ contraction changes REBOUND's doubles.
 
     make install PREFIX=/usr/local        # DESTDIR=... also honoured
 
-installs both ways in. Two lines go into your own build either way:
+installs both ways in. Add the include path, then pick a library.
+
+### The drop-in
 
     CFLAGS  += -I/usr/local/include
-    LDLIBS  += -L/usr/local/lib -lcft_ias15 -lcft      # the drop-in
-    LDLIBS  += -L/usr/local/lib -lcft_rebound -lcft    # the subprocess API
+    LDLIBS  += -L/usr/local/lib -lcft_ias15 -lcft
 
-- **`-lcft_ias15`** with `cft_ias15.h` is the drop-in: the registered
-  integrator, the engine and Simulationarchive support, all in this
-  process. `cft_ias15_register("ias15_cft")`, then
-  `reb_simulation_set_integrator(r, "ias15_cft")`, and REBOUND's own
-  driver runs the rest.
-- **`-lcft_rebound`** with `cft_rebound.h` is the subprocess API:
-  `cft_rebound_steps()` writes a problem file and runs the
-  `ias15_cft` program, which the install also puts on the system.
-  It exists for a caller that does not want the engine in its own
-  address space.
+The integrator runs inside your process and REBOUND's own driver
+calls it, so your program keeps the API it has. Two lines are new:
+register once, and say which format.
 
-Then include `cft_rebound.h` instead of `rebound.h`, build your
-simulation exactly as you do now, and call `cft_rebound_steps()` where
-you would have called `reb_simulation_steps()`:
+    #include "rebound.h"
+    #include "cft_ias15.h"
+
+    cft_ias15_register("ias15_cft");            /* once per process */
+
+    struct reb_simulation *r = reb_simulation_create();
+    /* ... your particles, G and dt, exactly as now ... */
+    struct cft_ias15_state *s =
+        reb_simulation_set_integrator(r, "ias15_cft");
+    s->format  = CFT_FP256;      /* CFT_FP64 is REBOUND, bit for bit */
+    s->epsilon = 1e-9;           /* 0 is REBOUND's fixed step */
+
+    reb_simulation_steps(r, 1000);               /* REBOUND's own call */
+
+Add `cft_archive.h` and a `cft_archive_bind(r)` before
+`reb_simulation_save_to_file()` and the Simulationarchive carries the
+wide state, so a run can stop and be picked up later at full width.
+`examples/dropin.c` is all of that in one runnable file, built against
+the install rather than against the source tree.
+
+### The subprocess API
+
+    CFLAGS  += -I/usr/local/include
+    LDLIBS  += -L/usr/local/lib -lcft_rebound -lcft
+
+For a caller that does not want the engine in its own address space.
+`cft_rebound_steps()` writes a problem file and runs the `ias15_cft`
+program, which the install also puts on the system. Include
+`cft_rebound.h` instead of `rebound.h`, build your simulation exactly
+as you do now, and call it where you would have called
+`reb_simulation_steps()`:
 
     struct cft_rebound_options opt = {0};
     opt.format  = CFT_REBOUND_FP128;
