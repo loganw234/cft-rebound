@@ -477,3 +477,82 @@ direct floor measurements, results/tables.md as tools/tabulate.py
 writes it, and results/energy_vs_orbits.png. results/raw/ (the hex
 records, about 1 MB in all) is committed too; every number above is
 recomputable from the commands in tools/sweep.py.
+
+
+## 2026-09-09 - the first run on a tile
+
+Everything above this entry was measured on the software backend,
+because the card was in use while this port was written and the brief
+forbade touching it. This is the port meeting hardware for the first
+time, run by the integrator on the box that owns the card.
+
+### What ran
+
+The pinned tree, cloned from a bundle onto the Linux box that has XRT
+and the Alveo U50. libcft rebuilt from the same pinned cft-fp256 clone
+with `XRT=1`, and `ias15_cft` linked against that archive. The twenty-
+four sequencer programs were assembled from the **committed** `.cfta`
+files rather than regenerated, so what ran on the tile is exactly what
+the software-backend gates checked.
+
+The same integration twice, changing one argument:
+
+      ias15_cft --format fp256 --arith fma --engine program
+                --programs programs/out --problem kepler.txt
+                --dt 0.05 --epsilon 0 --steps 200 --sample 20 --max-iter 60
+      ... and again with --artifact ~/cardday-ra/cft_hw_quad.xclbin
+
+The artifact is the read-ahead quad, four `cft_krnl` tiles at 135 MHz.
+
+### The result
+
+**The records are identical.** Every data line matches bit for bit -
+eleven samples, each carrying the time, the next and last step, the
+energy and every coordinate as an exact hex float. So does every
+derived quantity in the trailer:
+
+      steps_done                 200      200
+      iterations_max_exceeded      0        0
+      steps_rejected               0        0
+      mean_pc_iterations      15.070   15.070
+      max_pc_iterations           23       23
+      flags_seen                0x10     0x10
+      library calls          624,006  624,006
+      divsqrt calls           45,860   45,860
+
+Two lines differ in the whole file and neither is arithmetic: the
+provenance header, which names the backend, and the wall clock.
+
+That the predictor-corrector took the same number of passes on both -
+15.070 on average, 23 at worst, over 200 steps of an adaptive scheme
+whose iteration count is decided by a tolerance test on computed values
+- is the part worth noticing. A single differing bit anywhere would
+have moved it.
+
+### The wall clock, which is the honest half
+
+      software backend, one core     12.19 s    16.41 steps a second
+      the tile                       55.37 s     3.61 steps a second
+
+**The tile is 4.5x slower here, and that is the expected result rather
+than a disappointment.** This problem is two bodies: six coordinates.
+The engine's width is its whole advantage and six lanes leave nearly
+all of it idle, while every program run still pays its fixed cost -
+two runs per substep-pass, 624,006 library calls for 200 steps. The
+projection in docs/HARDWARE.md said as much before this ran: one system
+is 2-3x the software backend at best and the win needs an ensemble,
+where a thousand systems put roughly a thousand coordinates across the
+lanes.
+
+So this run settles correctness on hardware and says nothing good about
+throughput, which is what a two-body problem was always going to say.
+The ensemble mode named as next step 3 is the one that would move it.
+
+### What this does not cover
+
+Single tile's worth of work on a four-tile artifact; no ensemble; one
+problem; 200 steps; binary256 only; `--arith fma` and `--engine
+program` only, since the program engine requires them. The three asks
+of cft-fp256 in docs/HARDWARE.md are untouched and still asks: binding
+`cft_alloc` buffers to `scratch_in`/`scratch_out`, a device-side
+gather, and a `CFT_MAX` reduction.
