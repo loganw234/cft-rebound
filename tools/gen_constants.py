@@ -329,7 +329,21 @@ def main():
     h = [mpf(0)] + [(x + 1) / 2 for x in xs]
     rr, c, d = derive_arrays(h)
 
+    # Two derived tables for the FMA-form variant (--arith fma), which
+    # is the form a sequencer program can run because it has no
+    # division: the reciprocals 1/rr, and the predictor's per-substep
+    # factors h_n * (j+1)/(j+3) for the b_j level (j = 6..0). Each is an
+    # exact rational at 130 digits rounded ONCE per format below, never
+    # a product of two rounded numbers.
+    rinv = [mpf(1) / v for v in rr]
+    hf = []
+    for n in range(1, 8):
+        row = []
+        for j in range(6, -1, -1):
+            row.append(h[n] * mpf(j + 1) / mpf(j + 3))
+        hf.append(row)
     arrays = {"h": h, "rr": rr, "c": c, "d": d}
+    derived = {"rinv": rinv, "hf": [v for row in hf for v in row]}
     lits = read_rebound_literals(args.rebound_src)
 
     print("check 2: correctly rounded to binary64 against REBOUND's %d literals" %
@@ -365,12 +379,14 @@ def main():
         return 1
 
     # ---------------- emission ----------------
+    everything = dict(arrays)
+    everything.update(derived)
     out = {"dps": DPS, "dec_digits": DEC_DIGITS, "formats": {}, "decimal": {}}
-    for name, vals in arrays.items():
+    for name, vals in everything.items():
         out["decimal"][name] = [decimal_text(mpf_to_fraction(v), DEC_DIGITS) for v in vals]
     for fname, p, emin in FORMATS:
         fmt = {}
-        for name, vals in arrays.items():
+        for name, vals in everything.items():
             fmt[name] = [hex_float(*round_to_binary(mpf_to_fraction(v), p, emin), p=p) for v in vals]
         out["formats"][fname] = fmt
 
@@ -401,11 +417,14 @@ def main():
         w(" * (CFT_FP64 - 1, CFT_FP128 - 1, CFT_FP256 - 1). */\n")
         w("#ifndef IAS15_CONSTANTS_H\n#define IAS15_CONSTANTS_H\n\n")
         w("#define IAS15_NFMT 3\n")
-        for name, vals in arrays.items():
+        for name, vals in everything.items():
             n = len(vals)
             w("#define IAS15_N_%s %d\n" % (name.upper(), n))
+        w("/* rinv[i] = 1/rr[i]; hf[7*(n-1) + lvl] = h[n] * (j+1)/(j+3) with j = 6 - lvl,\n")
+        w(" * the FMA-form predictor's factor at the b_j level of substep n. Both are\n")
+        w(" * exact rationals rounded once, for --arith fma. */\n")
         w("\n")
-        for name, vals in arrays.items():
+        for name, vals in everything.items():
             n = len(vals)
             w("static const char *const ias15_%s_hex[IAS15_NFMT][%d] = {\n" % (name, n))
             for fname, p, emin in FORMATS:

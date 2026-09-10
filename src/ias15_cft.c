@@ -96,6 +96,8 @@ static V valloc(size_t n){
 /* ------------------------------------------------------------------ */
 /* Elementwise operations. d may alias any input (cft_run's rule).      */
 /* ------------------------------------------------------------------ */
+static void vfma(V d, const V a, const V b, const V c, size_t n){
+    uint32_t fl = 0; note(cft_run(dev, CFT_FMA, F, CFT_RNE, a, b, c, d, n, &fl, NULL), fl, "fma"); }
 static void vadd(V d, const V a, const V c, size_t n){
     uint32_t fl = 0; note(cft_run(dev, CFT_ADD, F, CFT_RNE, a, NULL, c, d, n, &fl, NULL), fl, "add"); }
 static void vsub(V d, const V a, const V c, size_t n){
@@ -190,6 +192,15 @@ static V KPOS[8], KVEL[8];      /* the end-of-step divisors */
 static V KY3[7], KY4[7], KY5[7];/* PRS23 coefficients (m+1), m(m+1), (m-1)m(m+1) */
 static V KBIN[7][7];            /* binomial(j+1, m+1) for predict_next_step */
 static V TOL;                   /* 1e-16 * 2^(53-p) */
+/* the FMA form (--arith fma): reciprocals and per-substep factors, each
+ * an exact rational rounded once */
+static V KRINV[28];             /* 1/rr */
+static V KHF[7][7];             /* h_n (j+1)/(j+3), [n-1][lvl], j = 6 - lvl */
+static V KPOSR[8], KVELR[8];    /* 1/((m+2)(m+3)), 1/(m+2); [7] is a0's 1/2 and 1 */
+static V KHALF;
+static int arith_fma = 0;       /* 0: REBOUND's divisions; 1: the FMA form */
+static int engine_program = 0;  /* 1: predictor and corrector as sequencer programs */
+static const char *programs_dir = "programs/out";
 
 static long binom(long n, long k){ long r = 1; for (long i = 1; i <= k; i++) r = r * (n - k + i) / i; return r; }
 
@@ -199,6 +210,9 @@ static void make_constants(int tol_shift, int quiet){
     for (int i = 0; i < 28; i++) KRR[i] = kderived(ias15_rr_hex[FI][i], ias15_rr_dec[i], "rr", i, &nchecked);
     for (int i = 0; i < 21; i++) KC[i]  = kderived(ias15_c_hex[FI][i],  ias15_c_dec[i],  "c",  i, &nchecked);
     for (int i = 0; i < 21; i++) KD[i]  = kderived(ias15_d_hex[FI][i],  ias15_d_dec[i],  "d",  i, &nchecked);
+    for (int i = 0; i < 28; i++) KRINV[i] = kderived(ias15_rinv_hex[FI][i], ias15_rinv_dec[i], "rinv", i, &nchecked);
+    for (int n = 0; n < 7; n++) for (int l = 0; l < 7; l++)
+        KHF[n][l] = kderived(ias15_hf_hex[FI][7 * n + l], ias15_hf_dec[7 * n + l], "hf", 7 * n + l, &nchecked);
     K0 = kint(0); K1 = kint(1); K2 = kint(2); K3 = kint(3); K4 = kint(4); K5 = kint(5); K6 = kint(6); K7 = kint(7);
     K10 = kint(10); K20 = kint(20); K5040 = kint(5040);
     K0_1 = kdec("0.1"); K0_25 = kdec("0.25"); K1E2 = kdec("1e2"); K1E7 = kdec("1e7"); K1EM7 = kdec("1e-7");
@@ -223,6 +237,15 @@ static void make_constants(int tol_shift, int quiet){
     }
     KPOS[7] = kint(2);   /* a0 / 2 dt^2 */
     KVEL[7] = kint(1);   /* a0 dt */
+    /* the reciprocals of those small integers, correctly rounded by the
+     * library's own divide, and one half */
+    for (int m = 0; m < 8; m++){
+        V s = valloc(1);
+        vdiv(s, K1, KPOS[m], 1); KPOSR[m] = valloc(NMAX); vbcast(KPOSR[m], s, NMAX);
+        vdiv(s, K1, KVEL[m], 1); KVELR[m] = valloc(NMAX); vbcast(KVELR[m], s, NMAX);
+        free(s);
+    }
+    { V s = valloc(1); vdiv(s, K1, K2, 1); KHALF = valloc(NMAX); vbcast(KHALF, s, NMAX); free(s); }
     for (int m = 0; m < 7; m++)
         for (int j = 0; j < 7; j++)
             KBIN[m][j] = (j > m) ? kint(binom(j + 1, m + 1)) : NULL;
@@ -301,6 +324,7 @@ static int trace_pc = 0;          /* --trace-pc N: print the corrector's error p
 static long steps_traced = 0;
 static long iterations_max_exceeded = 0, steps_rejected = 0;
 static unsigned long long pc_iterations_total = 0;
+static int pc_iterations_max = 0;
 
 /* pairs, in REBOUND's visiting order: i = 1..N-1, j = 0..i-1 */
 static size_t *pair_i, *pair_j;
@@ -396,8 +420,23 @@ static void add_cs(V p, V cs, const V inp, size_t n){
 /* ------------------------------------------------------------------ */
 /* The predictor: positions at substep n from the b polynomial          */
 /* ------------------------------------------------------------------ */
+static V D1[8], D2[8], D1B[8], D2B[8];   /* fl(dt h_n) and its half, per substep, for the FMA form */
+
 static void predict_positions(int n){
     V H = KH[n];
+    if (arith_fma){
+        /* t = b6; t = t*K_lvl + b_j down the levels; then + a0, then
+         * fl(dt h/2) and v0, then * fl(dt h) - one rounding per level
+         * instead of REBOUND's three */
+        vcopy(T1, b[6], N3);
+        for (int lvl = 0; lvl < 6; lvl++) vfma(T1, T1, KHF[n - 1][lvl], b[5 - lvl], N3);
+        vfma(T1, T1, KHF[n - 1][6], a0, N3);
+        vfma(T1, T1, D2B[n], v0, N3);
+        vmul(T1, T1, D1B[n], N3);
+        vsub(T1, T1, csx, N3);
+        vadd(x, T1, x0, N3);
+        return;
+    }
     /* ((((((((b6*7*h/9 + b5)*3*h/4 + b4)*5*h/7 + b3)*2*h/3 + b2)*3*h/5 + b1)*h/2 + b0)*h/3 + a0)*dt*h/2 + v0)*dt*h,
      * each level as ((T*num)*h)/den with num/den = (j+1)/(j+3); the
      * levels REBOUND writes reduced (3/4, 2/3, 1/2) differ only by a
@@ -420,6 +459,8 @@ static void predict_positions(int n){
 /* ------------------------------------------------------------------ */
 /* The corrector at substep n: improve g and b                          */
 /* ------------------------------------------------------------------ */
+static void pc_error(const V tmp);
+
 static void correct(int n){
     /* gk = at; gk_cs = gravity_cs; add_cs(gk, gk_cs, -a0); add_cs(gk, gk_cs, csa0) */
     static V gk, gk_cs, tmp, neg_a0, gnew, told, y, t, u, prod;
@@ -437,26 +478,115 @@ static void correct(int n){
     /* g[n-1] = (((gk/rr[base] - g0)/rr[base+1] - g1)/... - g[n-2])/rr[base+n-1] */
     size_t base = (size_t)n * (n - 1) / 2;
     vcopy(told, g[n - 1], N3);
-    vdiv(gnew, gk, KRR[base], N3);
-    for (int m = 1; m < n; m++){ vsub(gnew, gnew, g[m - 1], N3); vdiv(gnew, gnew, KRR[base + m], N3); }
+    if (arith_fma) vmul(gnew, gk, KRINV[base], N3); else vdiv(gnew, gk, KRR[base], N3);
+    for (int m = 1; m < n; m++){
+        vsub(gnew, gnew, g[m - 1], N3);
+        if (arith_fma) vmul(gnew, gnew, KRINV[base + m], N3); else vdiv(gnew, gnew, KRR[base + m], N3);
+    }
     vcopy(g[n - 1], gnew, N3);
     vsub(tmp, gnew, told, N3);                 /* tmp = g_new - g_old */
     size_t cbase = (size_t)(n - 1) * (n - 2) / 2;
     for (int m = 0; m < n - 1; m++){ vmul(prod, tmp, KC[cbase + m], N3); add_cs(b[m], csb[m], prod, N3); }
     add_cs(b[n - 1], csb[n - 1], tmp, N3);
-    if (n == 7){
-        /* predictor_corrector_error = max|tmp| / max|at| over normal values (GLOBAL/PRS23 modes) */
-        static V maxak, maxb6, aabs, tabs; static uint8_t *ca, *ct;
-        if (!maxak){ maxak = valloc(1); maxb6 = valloc(1); aabs = valloc(N3); tabs = valloc(N3); ca = malloc(N3); ct = malloc(N3); }
-        vzero(maxak, 1); vzero(maxb6, 1);
-        vabs(aabs, at, N3); vabs(tabs, tmp, N3);
-        vclass(ca, aabs, N3); vclass(ct, tabs, N3);
-        for (size_t k = 0; k < N3; k++){
-            if (is_normal_class(ca[k]) && s_lt(maxak, E(aabs, k))) vcopy(maxak, E(aabs, k), 1);
-            if (is_normal_class(ct[k]) && s_lt(maxb6, E(tabs, k))) vcopy(maxb6, E(tabs, k), 1);
-        }
-        vdiv(pce, maxb6, maxak, 1);
+    if (n == 7) pc_error(tmp);
+}
+
+/* predictor_corrector_error = max|tmp| / max|at| over normal values (GLOBAL/PRS23 modes) */
+static void pc_error(const V tmp){
+    static V maxak, maxb6, aabs, tabs; static uint8_t *ca, *ct;
+    if (!maxak){ maxak = valloc(1); maxb6 = valloc(1); aabs = valloc(N3); tabs = valloc(N3); ca = malloc(N3); ct = malloc(N3); }
+    vzero(maxak, 1); vzero(maxb6, 1);
+    vabs(aabs, at, N3); vabs(tabs, tmp, N3);
+    vclass(ca, aabs, N3); vclass(ct, tabs, N3);
+    for (size_t k = 0; k < N3; k++){
+        if (is_normal_class(ca[k]) && s_lt(maxak, E(aabs, k))) vcopy(maxak, E(aabs, k), 1);
+        if (is_normal_class(ct[k]) && s_lt(maxb6, E(tabs, k))) vcopy(maxb6, E(tabs, k), 1);
     }
+    vdiv(pce, maxb6, maxak, 1);
+}
+
+/* ------------------------------------------------------------------ */
+/* The same two pieces as sequencer programs (--engine program)         */
+/* ------------------------------------------------------------------ */
+static cft_program *prog_predict, *prog_correct[8];
+static V prog_bank, prog_sin, prog_sout, prog_dep;
+
+static void *read_file(const char *path, size_t *len){
+    FILE *f = fopen(path, "rb");
+    if (!f) die("cannot open program image %s", path);
+    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
+    void *buf = malloc(n > 0 ? (size_t)n : 1);
+    if (fread(buf, 1, (size_t)n, f) != (size_t)n) die("short read on %s", path);
+    fclose(f); *len = (size_t)n; return buf;
+}
+
+static void load_programs(void){
+    char path[512]; size_t len; void *img;
+    snprintf(path, sizeof path, "%s/predict-%s.cftp", programs_dir, cft_format_name(F));
+    img = read_file(path, &len);
+    cft_status st = cft_program_load(dev, img, len, &prog_predict);
+    if (st != CFT_OK) die("cft_program_load(%s): %s (%s)", path, cft_strerror(st), cft_last_error());
+    free(img);
+    for (int n = 1; n < 8; n++){
+        snprintf(path, sizeof path, "%s/correct%d-%s.cftp", programs_dir, n, cft_format_name(F));
+        img = read_file(path, &len);
+        st = cft_program_load(dev, img, len, &prog_correct[n]);
+        if (st != CFT_OK) die("cft_program_load(%s): %s (%s)", path, cft_strerror(st), cft_last_error());
+        free(img);
+    }
+    prog_bank = valloc(16); prog_sin = valloc(N3 * 22); prog_sout = valloc(N3 * 22); prog_dep = valloc(N3);
+}
+
+static void run_program(cft_program *prog, const V a, const V bb, const V c, size_t nbank,
+                        size_t nsin, size_t nsout, const char *what){
+    cft_run_args ra; memset(&ra, 0, sizeof ra);
+    ra.struct_size = sizeof ra;
+    ra.a = a; ra.b = bb; ra.c = c; ra.n = N3;
+    ra.bank = prog_bank; ra.bank_bytes = nbank * ESZ;
+    ra.scratch_in = nsin ? prog_sin : NULL; ra.scratch_in_bytes = nsin * N3 * ESZ;
+    ra.scratch_out = nsout ? prog_sout : NULL; ra.scratch_out_bytes = nsout * N3 * ESZ;
+    ra.deposits = prog_dep; ra.counts = NULL;
+    uint32_t fl = 0, bus = 0; ra.flags_out = &fl; ra.bus_out = &bus;
+    cft_status st = cft_program_run_ex(prog, &ra);
+    if (st == CFT_OK && (bus & CFT_STATUS_DEPOSIT_OVERFLOW)) die("%s: deposit overflow", what);
+    note(st, fl, what);
+}
+
+static void predict_positions_program(int n){
+    /* bank: K0..K6, D2, D1 */
+    for (int l = 0; l < 7; l++) memcpy(E(prog_bank, l), KHF[n - 1][l], ESZ);
+    memcpy(E(prog_bank, 7), D2[n], ESZ);
+    memcpy(E(prog_bank, 8), D1[n], ESZ);
+    /* scratch in, lane-major: b0..b6, csx */
+    for (size_t k = 0; k < N3; k++){
+        for (int m = 0; m < 7; m++) memcpy(E(prog_sin, 8 * k + m), E(b[m], k), ESZ);
+        memcpy(E(prog_sin, 8 * k + 7), E(csx, k), ESZ);
+    }
+    run_program(prog_predict, x0, v0, a0, 9, 8, 0, "predict program");
+    vcopy(x, prog_dep, N3);
+}
+
+static void correct_program(int n){
+    size_t base = (size_t)n * (n - 1) / 2, cbase = (size_t)(n - 1) * (n - 2) / 2;
+    for (int m = 0; m < n; m++) memcpy(E(prog_bank, m), KRINV[base + m], ESZ);
+    for (int m = 0; m < n - 1; m++) memcpy(E(prog_bank, n + m), KC[cbase + m], ESZ);
+    for (size_t k = 0; k < N3; k++){
+        memcpy(E(prog_sin, 22 * k), E(a0, k), ESZ);
+        for (int m = 0; m < 7; m++){
+            memcpy(E(prog_sin, 22 * k + 1 + m), E(g[m], k), ESZ);
+            memcpy(E(prog_sin, 22 * k + 8 + m), E(b[m], k), ESZ);
+            memcpy(E(prog_sin, 22 * k + 15 + m), E(csb[m], k), ESZ);
+        }
+    }
+    run_program(prog_correct[n], at, NULL, NULL, (size_t)(2 * n - 1), 22, 22, "correct program");
+    for (size_t k = 0; k < N3; k++){
+        for (int m = 0; m < 7; m++){
+            memcpy(E(g[m], k),   E(prog_sout, 22 * k + 1 + m), ESZ);
+            memcpy(E(b[m], k),   E(prog_sout, 22 * k + 8 + m), ESZ);
+            memcpy(E(csb[m], k), E(prog_sout, 22 * k + 15 + m), ESZ);
+        }
+    }
+    if (n == 7) pc_error(prog_dep);
 }
 
 /* ------------------------------------------------------------------ */
@@ -588,6 +718,14 @@ static int step_try(void){
         vadd(g[m], T1, b[m], N3);
     }
     vcopy(g[6], b[6], N3);
+    if (arith_fma){
+        /* fl(dt h_n) and its exact half, for this step's dt */
+        for (int n = 1; n < 8; n++){
+            if (!D1[n]){ D1[n] = valloc(1); D2[n] = valloc(1); D1B[n] = valloc(NMAX); D2B[n] = valloc(NMAX); }
+            vmul(D1[n], DT, KH[n], 1); vmul(D2[n], D1[n], KHALF, 1);
+            vbcast(D1B[n], D1[n], NMAX); vbcast(D2B[n], D2[n], NMAX);
+        }
+    }
 
     vcopy(pce, K1E300, 1);
     vcopy(pce_last, K2, 1);
@@ -605,13 +743,14 @@ static int step_try(void){
         vzero(pce, 1);
         iterations++;
         for (int n = 1; n < 8; n++){
-            predict_positions(n);
+            if (engine_program) predict_positions_program(n); else predict_positions(n);
             gravity();
             vcopy(at, a, N3);
-            correct(n);
+            if (engine_program) correct_program(n); else correct(n);
         }
     }
     pc_iterations_total += (unsigned long long)iterations;
+    if (iterations > pc_iterations_max) pc_iterations_max = iterations;
     if (trace_pc){ steps_traced++; if (steps_traced >= trace_pc) trace_pc = 0; }
 
     V dt_done = valloc(1); vcopy(dt_done, DT, 1);
@@ -633,10 +772,17 @@ static int step_try(void){
     /* positions and velocities at the end of the step */
     static V dtdb; if (!dtdb) dtdb = valloc(NMAX);
     vbcast(dtdb, dt_done, NMAX);
-    for (int m = 6; m >= 0; m--){ vdiv(T1, b[m], KPOS[m], N3); vmul(T1, T1, dtdb, N3); vmul(T1, T1, dtdb, N3); add_cs(x0, csx, T1, N3); }
-    vdiv(T1, a0, KPOS[7], N3); vmul(T1, T1, dtdb, N3); vmul(T1, T1, dtdb, N3); add_cs(x0, csx, T1, N3);
+    for (int m = 6; m >= 0; m--){
+        if (arith_fma) vmul(T1, b[m], KPOSR[m], N3); else vdiv(T1, b[m], KPOS[m], N3);
+        vmul(T1, T1, dtdb, N3); vmul(T1, T1, dtdb, N3); add_cs(x0, csx, T1, N3);
+    }
+    if (arith_fma) vmul(T1, a0, KPOSR[7], N3); else vdiv(T1, a0, KPOS[7], N3);
+    vmul(T1, T1, dtdb, N3); vmul(T1, T1, dtdb, N3); add_cs(x0, csx, T1, N3);
     vmul(T1, v0, dtdb, N3); add_cs(x0, csx, T1, N3);
-    for (int m = 6; m >= 0; m--){ vdiv(T1, b[m], KVEL[m], N3); vmul(T1, T1, dtdb, N3); add_cs(v0, csv, T1, N3); }
+    for (int m = 6; m >= 0; m--){
+        if (arith_fma) vmul(T1, b[m], KVELR[m], N3); else vdiv(T1, b[m], KVEL[m], N3);
+        vmul(T1, T1, dtdb, N3); add_cs(v0, csv, T1, N3);
+    }
     vmul(T1, a0, dtdb, N3); add_cs(v0, csv, T1, N3);
 
     /* t += dt_done: the plain sum REBOUND keeps, and an exact one beside it */
@@ -712,6 +858,9 @@ int main(int argc, char **argv){
         else if (!strcmp(argv[i], "--pc-tol-shift") && i + 1 < argc) tol_shift = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--max-iter") && i + 1 < argc) max_iter = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--trace-pc") && i + 1 < argc) trace_pc = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--arith") && i + 1 < argc){ const char *m = argv[++i]; if (!strcmp(m, "rebound")) arith_fma = 0; else if (!strcmp(m, "fma")) arith_fma = 1; else die("--arith rebound|fma"); }
+        else if (!strcmp(argv[i], "--engine") && i + 1 < argc){ const char *m = argv[++i]; if (!strcmp(m, "loop")) engine_program = 0; else if (!strcmp(m, "program")) engine_program = 1; else die("--engine loop|program"); }
+        else if (!strcmp(argv[i], "--programs") && i + 1 < argc) programs_dir = argv[++i];
         else if (!strcmp(argv[i], "--artifact") && i + 1 < argc) artifact = argv[++i];
         else if (!strcmp(argv[i], "--no-flag-abort")) flag_abort = 0;
         else if (!strcmp(argv[i], "--dump-constants")) do_dump = 1;
@@ -729,9 +878,12 @@ int main(int argc, char **argv){
         if (do_dump){ NMAX = 8; make_constants(tol_shift, quiet); dump_constants(); return 0; }
         die("usage: ias15_cft --format F --problem FILE [--dt DT] [--epsilon EPS] [--steps N] [--sample K] [--cs kahan|augmented]");
     }
+    if (engine_program && !arith_fma) die("--engine program needs --arith fma: a correctly rounded divide is not a sequencer program (cft-fp256 docs/ORBITS.md)");
+    if (engine_program && cs_augmented) die("--engine program carries Kahan's add_cs only; --cs augmented is a host operation");
     read_problem(problem);
     make_constants(tol_shift, quiet);
     alloc_state();
+    if (engine_program) load_programs();
     if (do_dump) dump_constants();
 
     /* dt and epsilon from their decimal text, correctly rounded in the
@@ -747,9 +899,10 @@ int main(int argc, char **argv){
     for (int m = 0; m < 7; m++){ vzero(g[m], N3); vzero(b[m], N3); vzero(e[m], N3); vzero(csb[m], N3); vzero(er[m], N3); vzero(br[m], N3); }
 
     printf("# cft-rebound ias15 record v1\n");
-    printf("# program=cft impl=libcft-%u.%u format=%s backend=%s problem=%s N=%zu steps=%ld sample=%ld cs=%s pc_tol_shift=%d max_iter=%d\n",
+    printf("# program=cft impl=libcft-%u.%u format=%s backend=%s problem=%s N=%zu steps=%ld sample=%ld cs=%s arith=%s engine=%s pc_tol_shift=%d max_iter=%d\n",
            (unsigned)(cft_abi_version() >> 16), (unsigned)(cft_abi_version() & 0xffff), cft_format_name(F),
-           artifact ? artifact : "software", problem_name, N, steps, sample, cs_augmented ? "augmented" : "kahan", tol_shift, max_iter);
+           artifact ? artifact : "software", problem_name, N, steps, sample, cs_augmented ? "augmented" : "kahan",
+           arith_fma ? "fma" : "rebound", engine_program ? "program" : "loop", tol_shift, max_iter);
     printf("# dt0="); puthex(DT); printf(" epsilon="); puthex(EPS); printf(" G="); puthex(G); printf(" pc_tol="); puthex(TOL); printf("\n");
     for (size_t i = 0; i < N; i++){ printf("# body %zu %s m=", i, body_names[i]); puthex(E(mass, i)); printf("\n"); }
     printf("# columns: sample step t dt_next dt_last E then per body x y z vx vy vz ; then exact-time pair t_hi t_lo\n");
@@ -771,9 +924,9 @@ int main(int argc, char **argv){
         done += todo; k++;
     }
     double secs = (double)(clock() - c0) / CLOCKS_PER_SEC;
-    printf("# steps_done=%ld iterations_max_exceeded=%ld steps_rejected=%ld mean_pc_iterations=%.3f flags_seen=0x%02x calls=%llu divsqrt_calls=%llu seconds=%.3f steps_per_s=%.2f\n",
+    printf("# steps_done=%ld iterations_max_exceeded=%ld steps_rejected=%ld mean_pc_iterations=%.3f max_pc_iterations=%d flags_seen=0x%02x calls=%llu divsqrt_calls=%llu seconds=%.3f steps_per_s=%.2f\n",
            done, iterations_max_exceeded, steps_rejected,
-           done ? (double)pc_iterations_total / (double)(done + steps_rejected) : 0.0,
+           done ? (double)pc_iterations_total / (double)(done + steps_rejected) : 0.0, pc_iterations_max,
            flags_union, ncalls, ncalls_divsqrt, secs, secs > 0 ? done / secs : 0.0);
     if (!quiet) fprintf(stderr, "done: %ld steps, %llu library calls, %.1f s, flags 0x%02x\n", done, ncalls, secs, flags_union);
     cft_close(dev);

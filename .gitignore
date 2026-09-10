@@ -17,3 +17,6 @@ __pycache__/
 # Large run outputs (the summaries in results/ are committed; raw
 # per-sample dumps are not)
 results/raw/
+
+# Assembled program images are rebuilt by `make programs` from programs/*.cfta
+programs/out/
