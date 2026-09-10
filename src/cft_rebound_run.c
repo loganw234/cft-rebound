@@ -78,6 +78,17 @@ const char *cft_rebound_program_path(const struct cft_rebound_options *opt){
     return "ias15_cft";     /* let PATH decide */
 }
 
+/* opt->artifact, then $CFT_REBOUND_ARTIFACT, then NULL for software.
+ * src/reb_integrator_cft.c resolve_artifact() is the same rule for the
+ * registered integrator; keep them together if either changes. */
+static const char *artifact_of(const struct cft_rebound_options *opt){
+    const char *p;
+    if (opt && opt->artifact && opt->artifact[0]) return opt->artifact;
+    p = getenv("CFT_REBOUND_ARTIFACT");
+    if (p && p[0]) return p;
+    return NULL;
+}
+
 static const char *workdir_of(const struct cft_rebound_options *opt){
     const char *p;
     if (opt && opt->workdir && opt->workdir[0]) return opt->workdir;
@@ -265,7 +276,7 @@ int cft_rebound_steps(struct reb_simulation *r, long nsteps,
     struct cft_rebound_options defaults;
     char why[256];
     char probpath[1024], recpath[1024], cmd[4096];
-    const char *dir, *prog;
+    const char *dir, *prog, *art;
     FILE *f;
     size_t i, N, nfields, nvals;
     cft_device *dev = NULL;
@@ -285,12 +296,14 @@ int cft_rebound_steps(struct reb_simulation *r, long nsteps,
     N = r->N;
     dir  = workdir_of(opt);
     prog = cft_rebound_program_path(opt);
+    art  = artifact_of(opt);
     sprintf(probpath, "%.900s/cft_rebound_%d.problem", dir, (int)CFT_GETPID());
     sprintf(recpath,  "%.900s/cft_rebound_%d.record",  dir, (int)CFT_GETPID());
     /* prog comes from the caller or the environment and is otherwise
      * unbounded; 200 covers the flags and their arguments. Fail rather
      * than truncate - a truncated path is a wrong path. */
-    if (strlen(prog) + strlen(probpath) + strlen(recpath) + 200 > sizeof cmd){
+    if (strlen(prog) + strlen(probpath) + strlen(recpath)
+        + (art ? strlen(art) : 0) + 200 > sizeof cmd){
         fprintf(stderr, "cft_rebound: the command line would not fit in %lu bytes;"
                         " use a shorter program or workdir path\n", (unsigned long)sizeof cmd);
         return 1;
@@ -340,6 +353,7 @@ int cft_rebound_steps(struct reb_simulation *r, long nsteps,
                             : 0;    /* binary64: leave REBOUND's 12 alone */
             if (mi > 0) k += sprintf(cmd + k, " --max-iter %d", mi);
         }
+        if (art) k += sprintf(cmd + k, " --artifact \"%s\"", art);
         k += sprintf(cmd + k, " > \"%s\"", recpath);
         (void)k;
     }

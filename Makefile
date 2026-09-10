@@ -73,6 +73,23 @@ else
   CFT_MAKEVARS :=
 endif
 
+# An XRT build of libcft.a carries backend_xrt.o, which is C++ and needs
+# the XRT runtime at link time; without these a plain `make` fails with
+# undefined references to xrt::bo and operator new, which names neither
+# the cause nor the fix. Sourcing /opt/xilinx/xrt/setup.sh sets
+# XILINX_XRT, so that is the signal. XRT=0 turns it off for a
+# software-only libcft.a in a shell that happens to have XRT sourced;
+# LIBS= still overrides the lot.
+ifneq ($(OS),Windows_NT)
+  ifneq ($(XILINX_XRT),)
+    XRT ?= 1
+  endif
+  XRT ?= 0
+  ifeq ($(XRT),1)
+    LIBS += -L$(XILINX_XRT)/lib -lxrt_coreutil -lstdc++ -lpthread -luuid
+  endif
+endif
+
 all: $(B)/ias15_ref$(EXE) $(B)/ias15_cft$(EXE) $(B)/check_dropin$(EXE) $(B)/libcft_rebound.a
 
 .PHONY: all third-party libcft librebound constants check clean
@@ -156,24 +173,34 @@ constants:
 # --- Simulationarchive support and its gates -------------------------
 # The archive module is compiled against BOTH upstreams: REBOUND for the
 # field descriptors and the loader, libcft for the wide formats.
-ARCHIVE_SRC := src/cft_archive.c src/cft_archive.h src/cft_ias15_state.h
+ARCHIVE_SRC := src/cft_archive.c src/cft_archive.h src/cft_ias15_state.h src/cft_ias15_fields.c src/cft_ias15_fields.h
 ARCH_CFLAGS := $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -I$(REB) -I$(CFT)/include -Isrc -Itests
 ARCHIVE_GATES := $(B)/gate_restart$(EXE) $(B)/gate_write$(EXE) \
-                 $(B)/gate_stock$(EXE) $(B)/gate_promote$(EXE)
+                 $(B)/gate_stock$(EXE) $(B)/gate_promote$(EXE) \
+                 $(B)/gate_real$(EXE)
 
 $(B)/gate_restart$(EXE): tests/gate_restart.c tests/cft_shim_stub.c tests/cft_shim_stub.h $(ARCHIVE_SRC) $(B)/librebound.a $(CFTLIB)
-	$(CC) $(ARCH_CFLAGS) -o $@ tests/gate_restart.c tests/cft_shim_stub.c src/cft_archive.c $(B)/librebound.a $(CFTLIB) $(LIBS)
+	$(CC) $(ARCH_CFLAGS) -o $@ tests/gate_restart.c tests/cft_shim_stub.c src/cft_archive.c src/cft_ias15_fields.c $(B)/librebound.a $(CFTLIB) $(LIBS)
 
 $(B)/gate_write$(EXE): tests/gate_write.c tests/cft_shim_stub.c tests/cft_shim_stub.h $(ARCHIVE_SRC) $(B)/librebound.a $(CFTLIB)
-	$(CC) $(ARCH_CFLAGS) -o $@ tests/gate_write.c tests/cft_shim_stub.c src/cft_archive.c $(B)/librebound.a $(CFTLIB) $(LIBS)
+	$(CC) $(ARCH_CFLAGS) -o $@ tests/gate_write.c tests/cft_shim_stub.c src/cft_archive.c src/cft_ias15_fields.c $(B)/librebound.a $(CFTLIB) $(LIBS)
 
 $(B)/gate_promote$(EXE): tests/gate_promote.c tests/cft_shim_stub.c tests/cft_shim_stub.h $(ARCHIVE_SRC) $(B)/librebound.a $(CFTLIB)
-	$(CC) $(ARCH_CFLAGS) -o $@ tests/gate_promote.c tests/cft_shim_stub.c src/cft_archive.c $(B)/librebound.a $(CFTLIB) $(LIBS)
+	$(CC) $(ARCH_CFLAGS) -o $@ tests/gate_promote.c tests/cft_shim_stub.c src/cft_archive.c src/cft_ias15_fields.c $(B)/librebound.a $(CFTLIB) $(LIBS)
 
 # Deliberately links the pinned upstream librebound and NOTHING of
 # cft-rebound's: this program is a stock REBOUND reader.
 $(B)/gate_stock$(EXE): tests/gate_stock.c $(B)/librebound.a
 	$(CC) $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -I$(REB) -o $@ tests/gate_stock.c $(B)/librebound.a $(LIBS)
+
+# The only target that links the REAL shim and the archive together.
+# The four gates above link tests/cft_shim_stub.c, whose own header says
+# to re-point them once the real integrator exists; this gate is that
+# re-pointing, kept separate so the stub gates go on proving descriptor
+# completeness - their step touches all 48 blobs, and 20 steps of a real
+# IAS15 need not.
+$(B)/gate_real$(EXE): tests/gate_real.c $(ARCHIVE_SRC) $(DROPIN_OBJ) $(B)/librebound.a $(CFTLIB)
+	$(CC) $(ARCH_CFLAGS) -o $@ tests/gate_real.c src/cft_archive.c $(DROPIN_OBJ) $(B)/librebound.a $(CFTLIB) $(LIBS)
 
 .PHONY: archive check-archive
 archive: $(ARCHIVE_GATES)
@@ -204,6 +231,9 @@ check: all programs $(ARCHIVE_GATES)
 	$(PYTHON) tools/check_ensemble.py --build $(B)
 	$(PYTHON) tools/check_archive.py --build $(B)
 	$(PYTHON) tools/check_bodycount.py --build $(B)
+	$(B)/gate_real$(EXE) --fp64
+	$(B)/gate_real$(EXE) --fp128
+	$(B)/gate_real$(EXE) --fp256
 
 # the same gates at binary64 only, in a few minutes
 .PHONY: check-quick
@@ -217,6 +247,9 @@ check-quick: all programs $(ARCHIVE_GATES)
 	$(PYTHON) tools/check_ensemble.py --build $(B) --quick
 	$(PYTHON) tools/check_archive.py --build $(B)
 	$(PYTHON) tools/check_bodycount.py --build $(B) --quick
+	$(B)/gate_real$(EXE) --fp64
+	$(B)/gate_real$(EXE) --fp128
+	$(B)/gate_real$(EXE) --fp256
 
 # The worked round trip, built in the tree and run against the
 # programs here rather than an installed copy.

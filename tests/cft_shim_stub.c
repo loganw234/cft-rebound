@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "cft_shim_stub.h"
+#include "cft_ias15_fields.h"   /* CFT_N_BLOBS: the count comes from the descriptor list */
 
 static cft_device *dev;
 
@@ -61,24 +62,6 @@ static void shim_free(void *p){
     if (!p) return;
     cft_archive_state_free((struct cft_ias15_state*)p);
     free(p);
-}
-
-static unsigned char **blob_of(struct cft_ias15_state *s, int i){
-    switch (i){
-        case 0: return &s->x0;  case 1: return &s->v0;  case 2: return &s->a0;
-        case 3: return &s->csx; case 4: return &s->csv; case 5: return &s->csa0;
-        default: break;
-    }
-    i -= 6;
-    switch (i / 7){
-        case 0: return &s->g  [i % 7];
-        case 1: return &s->b  [i % 7];
-        case 2: return &s->csb[i % 7];
-        case 3: return &s->e  [i % 7];
-        case 4: return &s->br [i % 7];
-        case 5: return &s->er [i % 7];
-    }
-    return NULL;
 }
 
 static void shim_step(struct reb_simulation *r, void *p){
@@ -182,11 +165,11 @@ int cft_shim_setup(struct reb_simulation *r, int format){
         row[3*i] = r->particles[i].vx; row[3*i+1] = r->particles[i].vy; row[3*i+2] = r->particles[i].vz;
     }
     cft_archive_promote_doubles(dev, format, row, s->v0, n);
-    for (int bi = 2; bi < 48; bi++){
+    for (int bi = 2; bi < CFT_N_BLOBS; bi++){
         for (size_t j = 0; j < n; j++)
             row[j] = (double)(((size_t)bi * 7 + j * 13) % 97 + 1) / 256.0
                      * (((bi + j) & 1) ? -1.0 : 1.0);
-        cft_archive_promote_doubles(dev, format, row, *blob_of(s, bi), n);
+        cft_archive_promote_doubles(dev, format, row, *cft_archive_state_blob(s, bi), n);
     }
     free(row);
     return 0;
@@ -196,8 +179,8 @@ int cft_shim_blobs_nonzero(struct reb_simulation *r){
     struct cft_ias15_state *s = (struct cft_ias15_state*)r->integrator.state;
     size_t w = cft_format_size((cft_format)s->format);
     int count = 0;
-    for (int i = 0; i < 48; i++){
-        unsigned char *b = *blob_of(s, i);
+    for (int i = 0; i < CFT_N_BLOBS; i++){
+        unsigned char *b = *cft_archive_state_blob(s, i);
         for (size_t k = 0; k < s->n_elem * w; k++) if (b[k]){ count++; break; }
     }
     return count;
@@ -207,11 +190,11 @@ unsigned char *cft_shim_snapshot(struct reb_simulation *r, size_t *len){
     struct cft_ias15_state *s = (struct cft_ias15_state*)r->integrator.state;
     size_t w = cft_format_size((cft_format)s->format);
     size_t blob = s->n_elem * w;
-    size_t total = 48 * blob + r->N * sizeof(struct reb_particle) + sizeof(double) * 2
+    size_t total = CFT_N_BLOBS * blob + r->N * sizeof(struct reb_particle) + sizeof(double) * 2
                  + sizeof(size_t) * 2 + sizeof(int) * 4;
     unsigned char *buf = malloc(total);
     size_t o = 0;
-    for (int i = 0; i < 48; i++){ memcpy(buf + o, *blob_of(s, i), blob); o += blob; }
+    for (int i = 0; i < CFT_N_BLOBS; i++){ memcpy(buf + o, *cft_archive_state_blob(s, i), blob); o += blob; }
     for (size_t i = 0; i < r->N; i++){
         struct reb_particle p = r->particles[i];
         p.ap = NULL; p.sim = NULL; p.name = NULL;   /* pointers are not state */

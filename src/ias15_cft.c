@@ -1220,6 +1220,13 @@ int main(int argc, char **argv){
     else if (!strcmp(fmtname, "fp256")){ F = CFT_FP256; FI = 2; if (tol_shift < 0) tol_shift = 237 - 53; }
     else die("--format fp64|fp128|fp256");
     ESZ = cft_format_size(F);
+    /* No --artifact? Let the environment name one, the same rule the
+     * registered integrator and cft_rebound_steps() use. This is what
+     * lets the whole gate suite run against a card unmodified. */
+    if (!artifact){
+        const char *e = getenv("CFT_REBOUND_ARTIFACT");
+        if (e && e[0]) artifact = e;
+    }
     cft_status st = cft_open(artifact, 0, &dev);
     if (st != CFT_OK) die("cft_open(%s): %s (%s)", artifact ? artifact : "software", cft_strerror(st), cft_last_error());
     if (!problem){

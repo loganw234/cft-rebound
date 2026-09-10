@@ -73,6 +73,11 @@ struct cft_ias15_state {
 
     /* the wide state: byte blobs, archived as REB_POINTER with
      * element_size = W. Lengths are 3N or 3N*E elements. */
+    unsigned char *x, *v;                  /* the live coordinates: what a
+                                            * restart continues FROM. x0/v0/a0
+                                            * are the step's starting copy and
+                                            * are refreshed from these at the
+                                            * top of every step. */
     unsigned char *x0, *v0, *a0;      /* position, velocity, acceleration */
     unsigned char *csx, *csv, *csa0;  /* compensated-summation carries */
     unsigned char *g[7], *b[7], *e[7], *br[7], *er[7], *csb[7];

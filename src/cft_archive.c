@@ -91,61 +91,9 @@
 /* the descriptor lists                                               */
 /* ------------------------------------------------------------------ */
 
-#define CFT_OFF(m)   offsetof(struct cft_ias15_state, m)
-
-#define CFT_FD_P(NAME, MEMBER, W) \
-    { "", REB_POINTER, "cft_" NAME, CFT_OFF(MEMBER), CFT_OFF(n_elem), (W), 0 },
-
-#define CFT_FD_L(NAME, MEMBER, W) \
-    CFT_FD_P(NAME "0", MEMBER[0], W) CFT_FD_P(NAME "1", MEMBER[1], W) \
-    CFT_FD_P(NAME "2", MEMBER[2], W) CFT_FD_P(NAME "3", MEMBER[3], W) \
-    CFT_FD_P(NAME "4", MEMBER[4], W) CFT_FD_P(NAME "5", MEMBER[5], W) \
-    CFT_FD_P(NAME "6", MEMBER[6], W)
-
-/* the wide state */
-#define CFT_FD_BLOBS(W) \
-    CFT_FD_P("x0",   x0,   W) \
-    CFT_FD_P("v0",   v0,   W) \
-    CFT_FD_P("a0",   a0,   W) \
-    CFT_FD_P("csx",  csx,  W) \
-    CFT_FD_P("csv",  csv,  W) \
-    CFT_FD_P("csa0", csa0, W) \
-    CFT_FD_L("g",   g,   W) \
-    CFT_FD_L("b",   b,   W) \
-    CFT_FD_L("csb", csb, W) \
-    CFT_FD_L("e",   e,   W) \
-    CFT_FD_L("br",  br,  W) \
-    CFT_FD_L("er",  er,  W)
-
-#define CFT_FD_S(NAME, TYPE, MEMBER) \
-    { "", TYPE, "cft_" NAME, CFT_OFF(MEMBER), 0, 0, 0 },
-
-/* Configuration and provenance. cft_abi is a char[16] inside the
- * struct, not a char*: REB_STRING dereferences the field as a pointer
- * and REB_POINTER does the same, and no simple dtype is 16 bytes wide,
- * so the two halves go out as uint64 words at their own offsets. The
- * bytes on disk are the string's bytes, in order. */
-#define CFT_FD_SCALARS \
-    CFT_FD_S("epsilon",          REB_DOUBLE, epsilon) \
-    CFT_FD_S("min_dt",           REB_DOUBLE, min_dt) \
-    CFT_FD_S("adaptive_mode",    REB_INT,    adaptive_mode) \
-    CFT_FD_S("format",           REB_INT,    format) \
-    CFT_FD_S("max_iter",         REB_INT,    max_iter) \
-    CFT_FD_S("arith_fma",        REB_INT,    arith_fma) \
-    CFT_FD_S("E",                REB_SIZE_T, E) \
-    CFT_FD_S("abi_0",            REB_UINT64, cft_abi[0]) \
-    CFT_FD_S("abi_1",            REB_UINT64, cft_abi[8]) \
-    CFT_FD_S("constants_digest", REB_UINT64, constants_digest) \
-    CFT_FD_S("n_elem",           REB_SIZE_T, n_elem)      /* LAST: see NOTE 3 */
-
-#define CFT_FD_LIST(W) { CFT_FD_BLOBS(W) CFT_FD_SCALARS { 0 } }
-
-static const struct reb_binarydata_field_descriptor cft_fd_fp64[]  = CFT_FD_LIST(8);
-static const struct reb_binarydata_field_descriptor cft_fd_fp128[] = CFT_FD_LIST(16);
-static const struct reb_binarydata_field_descriptor cft_fd_fp256[] = CFT_FD_LIST(32);
+#include "cft_ias15_fields.h"
 
 /* the number of wide blobs: 6 flat arrays + 6 seven-level arrays */
-#define CFT_N_BLOBS 48
 
 const struct reb_binarydata_field_descriptor *cft_archive_descriptor_list(int format){
     switch (format){
@@ -229,8 +177,20 @@ int cft_archive_bind(struct reb_simulation *r){
 /* allocation                                                         */
 /* ------------------------------------------------------------------ */
 
-static unsigned char **cft_state_blobs(struct cft_ias15_state *s, int i){
-    /* the same order as CFT_FD_BLOBS, so a caller can walk all 48 */
+/* Is this the tail of a wide blob's name? Answered from the descriptor
+ * list rather than from a second list of names kept in step by hand:
+ * a blob is exactly a REB_POINTER field called cft_<tag>. */
+static int is_blob_tag(const char *tag){
+    char want[64];
+    const struct reb_binarydata_field_descriptor *f;
+    if (snprintf(want, sizeof want, "cft_%s", tag) >= (int)sizeof want) return 0;
+    for (f = cft_fd_fp64; f->name[0]; f++)
+        if (f->dtype == REB_POINTER && strcmp(f->name, want) == 0) return 1;
+    return 0;
+}
+
+unsigned char **cft_archive_state_blob(struct cft_ias15_state *s, int i){
+    /* the same order as CFT_FD_BLOBS, so a caller can walk them all */
     switch (i){
         case 0: return &s->x0;
         case 1: return &s->v0;
@@ -240,6 +200,8 @@ static unsigned char **cft_state_blobs(struct cft_ias15_state *s, int i){
         case 5: return &s->csa0;
         default: break;
     }
+    if (i == 48) return &s->x;      /* appended: see CFT_FD_BLOBS */
+    if (i == 49) return &s->v;
     i -= 6;
     if (i < 0 || i >= 42) return NULL;
     switch (i / 7){
@@ -257,7 +219,7 @@ int cft_archive_state_alloc(struct cft_ias15_state *s, size_t n_elem){
     size_t w = cft_ias15_state_width(s);
     if (!w) return -1;
     for (int i = 0; i < CFT_N_BLOBS; i++){
-        unsigned char **p = cft_state_blobs(s, i);
+        unsigned char **p = cft_archive_state_blob(s, i);
         free(*p);
         *p = calloc(n_elem ? n_elem : 1, w);   /* +0 in every format */
         if (!*p) return -1;
@@ -268,7 +230,7 @@ int cft_archive_state_alloc(struct cft_ias15_state *s, size_t n_elem){
 
 void cft_archive_state_free(struct cft_ias15_state *s){
     for (int i = 0; i < CFT_N_BLOBS; i++){
-        unsigned char **p = cft_state_blobs(s, i);
+        unsigned char **p = cft_archive_state_blob(s, i);
         free(*p);
         *p = NULL;
     }
@@ -379,11 +341,7 @@ static int cft_probe_one(FILE *f, uint64_t offset, struct cft_archive_info *out)
                 continue;
             }
             /* a wide blob: only its length matters here */
-            if (strcmp(tag, "x0") == 0 || strcmp(tag, "v0") == 0 || strcmp(tag, "a0") == 0
-                    || strcmp(tag, "csx") == 0 || strcmp(tag, "csv") == 0 || strcmp(tag, "csa0") == 0
-                    || ((tag[0]=='g'||tag[0]=='b'||tag[0]=='e') && tag[1] >= '0' && tag[1] <= '6' && tag[2]=='\0')
-                    || ((strncmp(tag,"csb",3)==0||strncmp(tag,"br",2)==0||strncmp(tag,"er",2)==0)
-                        && tag[strlen(tag)-1] >= '0' && tag[strlen(tag)-1] <= '6')){
+            if (is_blob_tag(tag)){
                 if (out->blob_bytes == 0) out->blob_bytes = (uint64_t)field.size_data;
                 else if (out->blob_bytes != (uint64_t)field.size_data) out->blob_lengths_agree = 0;
                 out->n_blobs_seen++;

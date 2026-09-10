@@ -62,6 +62,19 @@ static void refuse(struct reb_simulation *r, const char *fmt, ...){
 /* ------------------------------------------------------------------ */
 static size_t      reserve_N;          /* cft_ias15_reserve(); 0 = the N of the first step */
 static const char *artifact_path;
+
+/* The artifact this process will open, or NULL for the software
+ * backend. An explicit cft_ias15_set_artifact() wins; otherwise
+ * CFT_REBOUND_ARTIFACT names one, which is what lets the gate suite
+ * run against a card without a single gate being modified. Empty is
+ * treated as unset, so CFT_REBOUND_ARTIFACT= forces software. */
+static const char *resolve_artifact(void){
+    const char *p;
+    if (artifact_path && artifact_path[0]) return artifact_path;
+    p = getenv("CFT_REBOUND_ARTIFACT");
+    if (p && p[0]) return p;
+    return NULL;
+}
 static int         pc_tol_shift = -1;
 
 static struct cft_ias15_state *engine_owner;   /* the state the engine is bound to */
@@ -171,6 +184,7 @@ static int supported(struct reb_simulation *r, struct cft_ias15_state *st){
 static void publish_state(struct cft_ias15_state *st){
     struct ias15_engine_view w;
     ias15_engine_view(&w);
+    st->x = w.x; st->v = w.v;
     st->x0 = w.x0; st->v0 = w.v0; st->a0 = w.a0;
     st->csx = w.csx; st->csv = w.csv; st->csa0 = w.csa0;
     for (int m = 0; m < 7; m++){
@@ -180,6 +194,66 @@ static void publish_state(struct cft_ias15_state *st){
     st->n_elem = w.n_elem;
     st->E = 1;
     st->constants_digest = ias15_engine_constants_digest();
+}
+
+/* A state that came out of an archive owns its blobs: REBOUND's loader
+ * realloc'd each one and read the file into it. publish_state would
+ * overwrite those pointers with the engine's, dropping the whole
+ * restored state on the first step and continuing from an engine
+ * reset_state() had just zeroed - which is what tests/gate_real.c
+ * measured before this existed. Copy them in, release them, and let
+ * publish_state repoint the state at the engine like any other.
+ *
+ * "Came out of an archive" needs no flag: publish_state only ever sets
+ * these to the engine's own buffers, and bind_engine refuses a second
+ * simulation while the first owns the engine, so a non-NULL pointer
+ * that is not the engine's can only have been loaded.
+ *
+ * Returns 0 having refused; the caller must not go on to step. */
+static int adopt_loaded_state(struct reb_simulation *r, struct cft_ias15_state *st){
+    struct ias15_engine_view w;
+    ias15_engine_view(&w);
+    if (!st->x || st->x == w.x) return 1;          /* nothing was loaded */
+
+    size_t width = cft_format_size((cft_format)st->format);
+    if (!width) return 1;
+    if (st->n_elem != w.n_elem){
+        refuse(r, "ias15_cft: the archive holds %zu wide elements and the engine "
+                  "is allocated for %zu (%zu bodies). Load into a simulation with "
+                  "the same particle count, or call cft_ias15_reserve() first.",
+               st->n_elem, w.n_elem, w.n_bodies);
+        return 0;
+    }
+    const size_t bytes = st->n_elem * width;
+
+#define CFT_ADOPT(dst, src) do{ \
+        if ((src) && (src) != (dst)){ memcpy((dst), (src), bytes); free(src); (src) = NULL; } \
+    }while(0)
+    CFT_ADOPT(w.x,    st->x);    CFT_ADOPT(w.v,    st->v);
+    CFT_ADOPT(w.x0,   st->x0);   CFT_ADOPT(w.v0,   st->v0);   CFT_ADOPT(w.a0,   st->a0);
+    CFT_ADOPT(w.csx,  st->csx);  CFT_ADOPT(w.csv,  st->csv);  CFT_ADOPT(w.csa0, st->csa0);
+    for (int m = 0; m < 7; m++){
+        CFT_ADOPT(w.g[m],  st->g[m]);  CFT_ADOPT(w.b[m],  st->b[m]);
+        CFT_ADOPT(w.e[m],  st->e[m]);  CFT_ADOPT(w.br[m], st->br[m]);
+        CFT_ADOPT(w.er[m], st->er[m]); CFT_ADOPT(w.csb[m], st->csb[m]);
+    }
+#undef CFT_ADOPT
+
+    /* The clock is REBOUND's own, restored from its own fields, and the
+     * engine's copy was not reset with the rest - so write it here
+     * rather than leave the step's "has it changed" guard to notice. */
+    ias15_engine_put_t_f64(r->t);
+    ias15_engine_put_dt_f64(r->dt);
+    ias15_engine_put_dt_last_f64(r->dt_last_done);
+    view_t = r->t; view_dt = r->dt; view_dt_last = r->dt_last_done;
+
+    /* The wide x and v ARE the truth now, so the step must not
+     * re-promote r->particles over them: that would round a binary256
+     * restart back to binary64 in its first step. Publishing the view
+     * the engine now holds is what makes the guard agree. */
+    ias15_engine_get_xv_f64(view_x, view_v);
+    view_valid = 1;
+    return 1;
 }
 
 /* epsilon, max_iter and the arithmetic form may change between steps -
@@ -214,9 +288,10 @@ static int bind_engine(struct reb_simulation *r, struct cft_ias15_state *st){
     }
     if (!engine_ready){
         size_t cap = reserve_N > r->N ? reserve_N : r->N;
-        if (ias15_engine_open(st->format, artifact_path) != 0){
+        const char *art = resolve_artifact();
+        if (ias15_engine_open(st->format, art) != 0){
             refuse(r, "ias15_cft: cft_open(%s) failed: %s",
-                   artifact_path ? artifact_path : "software backend", cft_last_error());
+                   art ? art : "software backend", cft_last_error());
             return 0;
         }
         int shift = pc_tol_shift;
@@ -253,6 +328,7 @@ static int bind_engine(struct reb_simulation *r, struct cft_ias15_state *st){
     view_N = r->N;
     view_valid = 0;
     engine_owner = st;
+    if (!adopt_loaded_state(r, st)){ engine_owner = NULL; return 0; }
     publish_state(st);
     return 1;
 }
@@ -382,6 +458,18 @@ static void cft_ias15_free(void *p){
         engine_owner = NULL;
         view_valid = 0;
         view_N = 0;
+    }else{
+        /* Never bound, so any blob it holds is one REBOUND's loader
+         * allocated - see adopt_loaded_state for why that is the only
+         * way a non-owner has one. Freeing them here is what keeps a
+         * probe-and-discard load from leaking the whole wide state. */
+        free(st->x);   free(st->v);
+        free(st->x0);  free(st->v0);  free(st->a0);
+        free(st->csx); free(st->csv); free(st->csa0);
+        for (int m = 0; m < 7; m++){
+            free(st->g[m]);  free(st->b[m]);  free(st->e[m]);
+            free(st->br[m]); free(st->er[m]); free(st->csb[m]);
+        }
     }
     free(st);
 }

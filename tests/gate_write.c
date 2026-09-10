@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "cft_shim_stub.h"
+#include "cft_ias15_fields.h"
 
 static void expect(const char *path, struct reb_simulation *r){
     FILE *f = fopen(path, "wb");
@@ -70,9 +71,9 @@ int main(int argc, char **argv){
     if (cft_archive_probe(bin, 0, &info)) return 2;
     if (cft_archive_probe(bin2, -1, &info2)) return 2;
     printf("gate 2 (write): %s at %s, integrator \"%s\", %d cft_ fields, "
-           "%d/48 blobs, %llu B a blob, n_elem %llu, abi \"%s\"\n",
+           "%d/%d blobs, %llu B a blob, n_elem %llu, abi \"%s\"\n",
            bin, cft_format_name(CFT_FP128), info.integrator, info.n_cft_fields,
-           info.n_blobs_seen, (unsigned long long)info.blob_bytes,
+           info.n_blobs_seen, CFT_N_BLOBS, (unsigned long long)info.blob_bytes,
            (unsigned long long)info.n_elem, info.abi);
     printf("                %s, %lld snapshots, last one probes to n_elem %llu at %s\n",
            bin2, (long long)info2.n_snapshots, (unsigned long long)info2.n_elem,

@@ -2104,3 +2104,115 @@ parcel B's wide `cft_` fields. This repository also has no
 shared-library target yet - `src/ias15_cft.c` is a program with a
 `main` - so step 2 of docs/PYTHON.md's install order is owed by
 packaging, not by Python.
+
+
+---
+
+## 25. The checkpoint the parcels left broken between them
+
+**2026-09-10, after the four parcels were merged. Windows, mingw64,
+software backend, at every format.**
+
+**What was wrong.** Four archive gates passed and the drop-in gate
+passed, and a checkpoint taken through the registered integrator still
+did not work. Each gate was right about its own half; nothing exercised
+the seam. `tests/cft_shim_stub.c` says so in its own header - "when
+parcel A lands, the gates should be re-pointed at the real integrator" -
+and it never happened, so every archive test drove a stand-in whose step
+is not IAS15, and `tools/check_dropin.c` drove the real integrator and
+never wrote a file.
+
+`tests/gate_real.c` is that seam, and it is the shape a checkpoint has
+to survive: 30 steps straight against 20 steps, save, free, load, 10
+more, compared bit for bit in the particles and in `t`. It found three
+defects, none visible from either side alone.
+
+**1. Nothing was read back.** REBOUND resolves
+`integrator.ias15_cft.cft_x0` against the simulation's descriptor list,
+then the built-ins, then the registered custom integrators
+(`binarydata.c`, `reb_binarydata_field_descriptor_for_name`). All three
+are whatever registration installed, and `src/cft_ias15_fields.c` was
+still parcel A's placeholder holding nothing but its terminator, because
+parcel B had put its lists in `src/cft_archive.c` as file-scope statics.
+So the write side was correct - the file carried 59 `cft_` fields and
+all 48 blobs - and the read side skipped every one of them with "Could
+not find field descriptor for name". The state kept its `create()`
+defaults, `epsilon` came back 1e-9 instead of the archived 0, and the
+restarted run took adaptive steps and reached t = 1.63 where the
+straight run was at t = 0.30.
+
+Two files each holding half of one fact - the same duplication as the
+state struct at merge time, one layer down. The lists moved to the file
+whose stated job is to hold them, `src/cft_ias15_fields.c`, and
+`src/cft_ias15_fields.h` now carries the macros. The registered list is
+the binary64 one at every format, and that is correct rather than
+tolerated: REBOUND allocates `field.size_data` bytes from the file and
+reads them, using `element_size` only for
+`*pointer_N = size_data/element_size`, which
+`cft_archive_finish_load()` already overwrites from the file (its
+NOTE 3); and 8 divides 16 and 32, so the "Inconsistent size_data"
+warning cannot fire for a wide archive read through the narrow list.
+
+**2. The live coordinates were not in the archive.** The 48 blobs were
+`x0`, `v0`, `a0`, the three compensated sums and the six seven-element
+arrays. But `step_attempt()` sets `x0` FROM `x` at the top of a step and
+leaves the advanced position in `x`, so after a completed step `x0` is
+the previous step's start and `x` is where the bodies are. At binary64
+nothing was lost, because `r->particles` carry the same bits and the
+step re-promotes them - which is why this could sit under a passing
+binary64 gate indefinitely. At binary128 and binary256 they do not: a
+checkpoint silently truncated position and velocity to binary64, the one
+thing a wide run exists to avoid. `x` and `v` joined the list; 48 blobs
+became 50.
+
+**3. A loaded state was dropped on the first step.**
+`publish_state()` points the state's blobs at the engine's buffers, and
+REBOUND's loader had just filled those same pointers with the archive's
+bytes, so publishing over them discarded the restored state and the run
+continued from an engine `reset_state()` had just zeroed.
+`adopt_loaded_state()` copies them in, releases them, and lets
+`publish_state` repoint as usual. It needs no new field: `publish_state`
+only ever sets these to the engine's own buffers and `bind_engine`
+refuses a second simulation while the first owns the engine, so a
+non-NULL blob pointer that is not the engine's can only have been
+loaded. It also writes `t`, `dt` and `dt_last_done` into the engine and
+publishes the binary64 view, so the step's "has the user touched these"
+guard does not re-promote `r->particles` over the wide `x` and `v`.
+
+**Two more, found while fixing those.** The probe decided what a blob
+was from a hand-written list of names, a third copy of `CFT_FD_BLOBS`;
+it reported "48 of 50" and every load was refused for an element count
+that did add up. It asks the descriptor list now - a blob is exactly a
+`REB_POINTER` field named `cft_<tag>`. And `tests/cft_shim_stub.c` kept
+a fourth copy of the index-to-member walker, which returned NULL for the
+two new blobs and took the three stub gates down with 0xC0000005;
+`cft_archive_state_blob()` is exported and the copy is gone.
+
+**The result.** `gate_real` passes at fp64, fp128 and fp256: 30 values
+identical across the checkpoint at each, `restored exactly`, 61 `cft_`
+fields and 50 of 50 blobs in the file. `make check-quick` is rc = 0 in
+5 min 46 s with every other gate unchanged and passing, including
+gate 2, which is a stock REBOUND reader opening a cft archive.
+
+**Two more seams closed in the same pass, both about reaching the
+card.** Nothing in the gate suite could open an artifact: the drop-in
+had `cft_ias15_set_artifact()` and no gate called it,
+`struct cft_rebound_options` had no artifact field at all, so a caller
+with a U50C in the machine got the software backend and no indication
+of it. All three paths now resolve the same way - an explicit setting
+first, then `CFT_REBOUND_ARTIFACT`, then software - so
+`CFT_REBOUND_ARTIFACT=... make check` runs the whole existing suite on
+a card with no gate modified. And the Makefile could not link an
+XRT-enabled `libcft.a` at all: every hardware run this repository has
+done passed a hand-written `LIBS="-lm -L/opt/xilinx/xrt/lib
+-lxrt_coreutil -lstdc++ -lpthread -luuid"` that lived only in a scratch
+script, and a plain `make` against such a library failed with a page of
+undefined references to `xrt::bo` naming neither cause nor fix. Sourcing
+XRT's `setup.sh` sets `XILINX_XRT`; that is the signal now, `XRT=0`
+turns it off, and `LIBS=` still overrides.
+
+**Not tested here.** Any of this on the card - the artifact path is
+newly reachable and has not been run through a gate yet; macOS; and a
+checkpoint written by one process and read by another, which is a
+stronger test than `gate_real`'s single process and is what a real long
+run does.

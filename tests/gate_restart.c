@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include "cft_shim_stub.h"
+#include "cft_ias15_fields.h"
 
 static const char *dir = ".";
 
@@ -92,15 +93,16 @@ static void run_format(int format){
 
     int ok1 = (la == lb) && memcmp(sa, sb, la) == 0;
     int ok2 = (la == lc) && memcmp(sa, sc, la) == 0;
-    printf("  %-9s %s  %zu state bytes, %d/48 blobs non-zero, %d cft_ fields, "
+    printf("  %-9s %s  %zu state bytes, %d/%d blobs non-zero, %d cft_ fields, "
            "n_elem %llu, %llu B a blob, %lld snapshots; one-snapshot %s, appended-diff %s (%s, %s)\n",
-           fn, (ok1 && ok2) ? "PASS" : "FAIL", la, nz, info.n_cft_fields,
+           fn, (ok1 && ok2) ? "PASS" : "FAIL", la, nz, CFT_N_BLOBS, info.n_cft_fields,
            (unsigned long long)info.n_elem, (unsigned long long)info.blob_bytes,
            (long long)info.n_snapshots,
            ok1 ? "identical" : "DIFFERS", ok2 ? "identical" : "DIFFERS",
            cft_archive_status_str(st), cft_archive_status_str(st2));
-    if (!ok1 || !ok2 || nz != 48) fail = 1;
-    if (nz != 48) printf("  %-9s FAIL  only %d of 48 blobs carry a non-zero byte\n", fn, nz);
+    if (!ok1 || !ok2 || nz != CFT_N_BLOBS) fail = 1;
+    if (nz != CFT_N_BLOBS) printf("  %-9s FAIL  only %d of %d blobs carry a non-zero byte\n",
+                              fn, nz, CFT_N_BLOBS);
 
     free(sa); free(sb); free(sc);
     reb_simulation_free(a); reb_simulation_free(b); reb_simulation_free(c);
@@ -113,7 +115,7 @@ int main(int argc, char **argv){
     int shape = cft_archive_selftest();
     printf("  descriptor lists: %s\n", shape ?
            "MALFORMED" :
-           "48 blobs + 11 scalars at each of fp64/fp128/fp256, every name cft_-prefixed and unique, cft_n_elem last");
+           "every blob + 11 scalars at each of fp64/fp128/fp256, every name cft_-prefixed and unique, cft_n_elem last");
     if (shape) fail = 1;
     run_format(CFT_FP64);
     run_format(CFT_FP128);

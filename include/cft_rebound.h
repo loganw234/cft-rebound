@@ -88,6 +88,12 @@ struct cft_rebound_options {
                             * there, then "ias15_cft" on PATH. */
     const char *workdir;   /* where the two temporary files go. NULL uses
                             * $TMPDIR / $TEMP / $TMP, then "." */
+    const char *artifact;  /* the .xclbin to run on. NULL consults
+                            * $CFT_REBOUND_ARTIFACT, and if that is unset
+                            * or empty the software backend is used. The
+                            * registered integrator resolves its artifact
+                            * by the same rule, so a program that sets the
+                            * variable gets the card on both paths. */
     int    verbose;        /* 1: echo the command line to stderr */
 };
 

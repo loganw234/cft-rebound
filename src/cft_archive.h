@@ -93,6 +93,11 @@ int cft_archive_bind(struct reb_simulation *r);
  * format. Zero-filled (+0 in every format). The archive owns these two
  * only so that the promotion path can allocate; the integrator shim may
  * use them or its own. */
+/* The i'th wide blob of a state, by the order of CFT_FD_BLOBS, or NULL
+ * past the end. The one walker: anything that iterates the blobs uses
+ * this, so a list that grows cannot leave a second copy behind. */
+unsigned char **cft_archive_state_blob(struct cft_ias15_state *s, int i);
+
 int  cft_archive_state_alloc(struct cft_ias15_state *s, size_t n_elem);
 void cft_archive_state_free(struct cft_ias15_state *s);
 
