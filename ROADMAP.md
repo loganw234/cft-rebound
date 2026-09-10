@@ -64,18 +64,40 @@ case REB_FIELD_NOT_FOUND:
     int err = fseek(inf, field.size_data, SEEK_CUR);
 ```
 
-It **warns and seeks past it**. Which means:
+It warns, seeks past the field - **and then `goto finish_fields`,
+abandoning the rest of the snapshot.** That last clause was missed when
+this roadmap was first written, and two parcels found it independently
+by running it. What follows is the corrected account.
 
-- a `cft_`-prefixed field cannot collide with any present or future
-  REBOUND field, because names are unique strings rather than indices;
-- an archive written by cft-rebound **opens in stock REBOUND**, which
-  recovers the full binary64 state and warns about the extra fields;
-- an archive written by stock REBOUND opens here and is promoted.
+**What is true.** A stock REBOUND reader opens a cft archive and
+recovers every particle coordinate, mass, `t` and `dt` **bit for bit**
+(parcel B verified it, on one snapshot and on the last of three). Names
+are unique strings rather than indices, so a `cft_` field cannot
+collide with any present or future REBOUND field.
 
-Direct compatibility and native wide-precision support are therefore
-the same file, not a choice between them. That removes the barrier to
-entry the long way round: a collaborator without cft can still read
-your archives.
+**What is not.** Three corrections, all of which change what we should
+promise:
+
+- The binary64 state survives **incidentally**, because REBOUND writes
+  every simulation field before any integrator field. It is not a
+  designed skip and it is not robust to upstream reordering.
+- A stock reader never reaches the unknown-field path at all.
+  Integrator fields are resolved through the integrator's NAME first
+  (binarydata.c:152), so an unregistered `ias15_cft` produces
+  `Error! Integrator not found.` and `WARNING_CORRUPTFILE` - not
+  `WARNING_FIELD_UNKNOWN`, which for this case is unreachable, as is
+  `WARNING_CUSTOM_INTEGRATOR`, which nothing in REBOUND ever sets.
+  This is structural: any custom integrator name does it, and there is
+  no writer-side fix short of forking REBOUND.
+- A stock reader therefore restarts from a **cold** IAS15 series, not a
+  bit-identical continuation.
+
+Direct compatibility and native wide precision are still the same file,
+and that remains the right design. But the barrier to entry is lowered
+less than first claimed: a collaborator without cft gets a usable
+simulation AND is told a perfectly good file seems to be corrupted.
+**That sentence belongs in the README beside the compatibility claim**,
+not in a footnote.
 
 ### The one real constraint, stated plainly
 
@@ -226,3 +248,43 @@ is better than a long run that hides it.
 - **The device-side gather, scatter and scalar broadcast.** They are
   asks on cft-fp256, recorded in docs/HARDWARE.md and in that project's
   ROADMAP, and they are somebody else's parcel.
+
+---
+
+## Upstream defects found while building this
+
+Recorded because they constrain the design, and two of them were found
+twice, independently, which is why they are stated as facts rather than
+suspicions.
+
+- **`reb_integrator_register` faults on a SECOND custom integrator in
+  one process.** The scan increments before testing and `strcmp`s the
+  `{0}` terminator's NULL name. At `-O0` that segfaults; at `-O2` and
+  `-O3`, which is how every published wheel is built, the compiler
+  deletes the loop's exit via `strcmp`'s `nonnull` attribute and the
+  call never returns. **One custom integrator per process**, and a
+  stale second copy of our library is a hang rather than an error.
+  Colliding with a built-in name is clean.
+- **`element_size = W` does not survive a load.** The reader computes
+  `n_elem` as `size_data / element_size` using the descriptor list the
+  integrator was REGISTERED with, so a binary128 or binary256 archive
+  read back through a binary64 registration gets the wrong count.
+  Putting the count field last rescues a whole snapshot but not an
+  appended one, because those are stored as a diff that omits unchanged
+  fields. The count must be probed from the file.
+- **`offset_N = SIZE_MAX` is broken by the address fixup** - the
+  sentinel becomes `base - 1` and the read path writes eight bytes
+  below the object. REBOUND's own `display_settings` uses it; nothing
+  here does.
+- **Integrator names must be lowercase.** The Python layer lowercases
+  on assignment. `ias15_cft` is safe.
+
+## Corrections to the state struct above
+
+From building against it: there is no `at` member though the mirror
+list names one (safe - it is per-substep scratch); `g[7]` as seven
+pointers cannot be a single field with `element_size = 7*8`, so it
+archives as seven; `char cft_abi[16]` cannot be archived by any dtype
+and goes out as two `uint64`; and nothing records that a state was
+PROMOTED rather than restored exactly, which wants a one-word
+`provenance` member.
