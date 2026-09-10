@@ -24,4 +24,5 @@ results/sweep_followup2.log
 
 # scratch build trees and gate output
 build2/
+build3/
 gate_real.bin

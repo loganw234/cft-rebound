@@ -307,4 +307,8 @@ uninstall:
 
 clean:
 	rm -rf $(B)
+	# tests/gate_real.c writes its checkpoint beside the binary when it
+	# is run by hand rather than through tools/check_checkpoint.py,
+	# which uses a temporary directory.
+	rm -f gate_real.bin
 	$(MAKE) -C examples clean
