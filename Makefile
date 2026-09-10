@@ -166,7 +166,7 @@ $(B)/cft_ias15_fields.o: src/cft_ias15_fields.c src/cft_ias15_fields.h src/cft_i
 
 # cft_archive.c compiled for the library rather than for a gate: the
 # gates add -Itests for the stub's header and this does not need it.
-$(B)/cft_archive.o: src/cft_archive.c src/cft_archive.h src/cft_ias15_fields.h src/cft_ias15.h
+$(B)/cft_archive.o: src/cft_archive.c src/cft_archive.h src/cft_ias15_fields.h src/cft_ias15_state.h src/cft_ias15.h
 	@mkdir -p $(B)
 	$(CC) -c $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -Isrc -I$(CFT)/include -I$(REB) -o $@ src/cft_archive.c
 
