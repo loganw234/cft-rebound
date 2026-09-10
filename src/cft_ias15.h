@@ -114,6 +114,14 @@ extern const struct reb_integrator cft_ias15_integrator;
  * moves the increment. */
 void cft_ias15_register(const char *name);
 
+/* The name this integrator is registered under by everything in this
+ * repository, and the one the Simulationarchive's field prefix is
+ * built from. Lower case is not a style choice: REBOUND's Python layer
+ * lower-cases what you assign to sim.integrator before it reaches the
+ * C strcmp, so a name with a capital in it registers fine and can
+ * never be selected. */
+#define CFT_IAS15_INTEGRATOR_NAME "ias15_cft"
+
 /* The state of a simulation using this integrator, or NULL if it is
  * using another one. Same pointer reb_simulation_set_integrator returns. */
 struct cft_ias15_state *cft_ias15_get_state(struct reb_simulation *r);

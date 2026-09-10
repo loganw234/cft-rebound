@@ -33,11 +33,13 @@
 #include <stdint.h>
 #include "rebound.h"
 #include "cft.h"
+#include "cft_ias15.h"        /* CFT_IAS15_INTEGRATOR_NAME, the state */
 #include "cft_ias15_state.h"
 
 /* The name this project registers its integrator under. The archive
- * writes its fields as "integrator.<CFT_IAS15_INTEGRATOR_NAME>.cft_*". */
-#define CFT_IAS15_INTEGRATOR_NAME "ias15_cft"
+ * writes its fields as "integrator.<CFT_IAS15_INTEGRATOR_NAME>.cft_*".
+ * The name itself is the integrator's, and is defined in cft_ias15.h
+ * beside the call that registers it. */
 
 /* What a load did. */
 enum cft_archive_status {
