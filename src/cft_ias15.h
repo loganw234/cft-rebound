@@ -132,6 +132,30 @@ void cft_ias15_register(const char *name);
  * using another one. Same pointer reb_simulation_set_integrator returns. */
 struct cft_ias15_state *cft_ias15_get_state(struct reb_simulation *r);
 
+/* The same settings by value, for a caller that holds a simulation and
+ * not the state - which is every ctypes caller, because REBOUND's
+ * Python layer generates its integrator settings from structs it knows
+ * and does not know this one. Without these, Python can select the
+ * integrator and never reach the format.
+ *
+ *   format    CFT_FP64 | CFT_FP128 | CFT_FP256
+ *   epsilon   as REBOUND's: 0 is a fixed step
+ *   max_iter  the corrector's pass cap; 0 means the default for the
+ *             format, which is REBOUND's 12 at binary64 and more above
+ *             it because the corrector needs about 6 passes at
+ *             binary128 and 18-22 at binary256 - see docs/VALIDATION.md
+ *
+ * Returns 0, or non-zero if r is not using this integrator or a value
+ * is not one this integrator accepts. Settings that are refused leave
+ * the state unchanged; nothing is applied partially. */
+int cft_ias15_configure(struct reb_simulation *r, int format,
+                        double epsilon, int max_iter);
+
+/* "fp64", "fp128", "fp256" to the matching CFT_FP* value, or -1.
+ * So a ctypes caller need not hard-code an enumerator that belongs to
+ * libcft and could be renumbered there. */
+int cft_ias15_format_code(const char *name);
+
 /* --------------------------------------------------------------------
  * Two things the state struct cannot carry
  *

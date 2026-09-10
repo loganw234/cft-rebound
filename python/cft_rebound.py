@@ -73,6 +73,42 @@ def load(path):
     return ctypes.CDLL(os.fspath(path))
 
 
+def configure(lib, sim, format="fp64", epsilon=0.0, max_iter=0):
+    """Set the wide format and step control on a simulation.
+
+    ``sim`` must already be using the integrator (``sim.integrator =
+    "ias15_cft"``). REBOUND exposes a built-in integrator's settings as
+    ``sim.ri_<name>``, generated from a struct it knows; it does not
+    know this one, so there is no attribute to assign and this is how
+    the format is chosen from Python.
+
+    ``lib`` is the handle ``load()`` returned. ``format`` is "fp64",
+    "fp128" or "fp256". ``epsilon`` follows REBOUND: 0.0 is a fixed
+    step. ``max_iter`` 0 means the default for the format - REBOUND's
+    12 at binary64, more above it, because the corrector needs about 6
+    passes at binary128 and 18-22 at binary256.
+
+    Raises ValueError if the simulation is not using the integrator or
+    a setting is refused.
+    """
+    code = lib.cft_ias15_format_code(format.encode("ascii"))
+    if code < 0:
+        raise ValueError("unknown format %r; use fp64, fp128 or fp256" % format)
+
+    lib.cft_ias15_configure.argtypes = [
+        ctypes.c_void_p, ctypes.c_int, ctypes.c_double, ctypes.c_int]
+    lib.cft_ias15_configure.restype = ctypes.c_int
+    rc = lib.cft_ias15_configure(
+        ctypes.byref(sim), code, ctypes.c_double(epsilon), int(max_iter))
+    if rc:
+        raise ValueError(
+            {1: "the simulation is not using this integrator; set "
+                "sim.integrator = 'ias15_cft' first",
+             2: "format %r is not one this integrator has" % format,
+             3: "epsilon must not be negative",
+             4: "max_iter must not be negative"}.get(rc, "refused (%d)" % rc))
+
+
 def registered():
     """The integrator names this process's REBOUND will accept.
 

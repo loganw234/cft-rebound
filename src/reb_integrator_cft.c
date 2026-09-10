@@ -561,6 +561,36 @@ struct cft_ias15_state *cft_ias15_get_state(struct reb_simulation *r){
     return r->integrator.state;
 }
 
+int cft_ias15_format_code(const char *name){
+    if (!name) return -1;
+    if (!strcmp(name, "fp64"))  return CFT_FP64;
+    if (!strcmp(name, "fp128")) return CFT_FP128;
+    if (!strcmp(name, "fp256")) return CFT_FP256;
+    return -1;
+}
+
+int cft_ias15_configure(struct reb_simulation *r, int format,
+                        double epsilon, int max_iter){
+    struct cft_ias15_state *st = cft_ias15_get_state(r);
+    if (!st) return 1;
+    if (format != CFT_FP64 && format != CFT_FP128 && format != CFT_FP256) return 2;
+    if (epsilon < 0.0) return 3;
+    if (max_iter < 0) return 4;
+    if (max_iter == 0){
+        /* The same defaults src/cft_rebound_run.c picks, and for the
+         * same reason: REBOUND's 12 is right at binary64 and is reached
+         * on essentially every step above it, which truncates the
+         * corrector rather than converging it. */
+        max_iter = (format == CFT_FP256) ? 60
+                 : (format == CFT_FP128) ? 24
+                 : 12;
+    }
+    st->format   = format;
+    st->epsilon  = epsilon;
+    st->max_iter = max_iter;
+    return 0;
+}
+
 void cft_ias15_reserve(size_t n){ reserve_N = n; }
 void cft_ias15_set_artifact(const char *path){ artifact_path = path; }
 void cft_ias15_set_pc_tol_shift(int shift){ pc_tol_shift = shift; }

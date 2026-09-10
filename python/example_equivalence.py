@@ -43,18 +43,24 @@ def read_problem(path):
     return G, bodies
 
 
-def run(integrator, G, bodies, dt, steps):
+def run(integrator, G, bodies, dt, steps, lib=None, format="fp64"):
     import rebound
 
     sim = rebound.Simulation()
     sim.G = G
     sim.integrator = integrator
     sim.dt = dt
-    try:
-        sim.integrator.epsilon = 0.0  # REBOUND's convention for a fixed step
-    except AttributeError:
-        print("  note: %r has no 'epsilon' field; step control is its own"
-              % str(sim.integrator))
+
+    # Both runs must have the SAME step control or the comparison is
+    # between two different integrations and says nothing about
+    # arithmetic. REBOUND's own integrators expose it as an attribute;
+    # this one is configured through the library, because REBOUND
+    # generates those attributes from structs it knows.
+    if lib is not None:
+        cft_rebound.configure(lib, sim, format=format, epsilon=0.0)
+        print("  configured through the library: %s, fixed step" % format)
+    else:
+        sim.ri_ias15.epsilon = 0.0   # REBOUND's convention for a fixed step
     for m, x, y, z, vx, vy, vz in bodies:
         sim.add(m=m, x=x, y=y, z=z, vx=vx, vy=vy, vz=vz)
     sim.steps(steps)
@@ -69,6 +75,12 @@ def main():
     ap.add_argument("--library", default=os.environ.get("CFT_REBOUND_LIB"),
                     help="the shared library that registers the integrator")
     ap.add_argument("--integrator", default="ias15_cft")
+    ap.add_argument("--format", default="fp64",
+                    choices=("fp64", "fp128", "fp256"),
+                    help="the wide format for the registered integrator. "
+                         "Only fp64 can be identical to REBOUND; the wider "
+                         "ones are expected to differ, and by how much is "
+                         "the point of running them.")
     ap.add_argument("--problem",
                     default=os.path.join(ROOT, "data", "problems", "kepler.txt"))
     ap.add_argument("--dt", default="0.05")
@@ -83,7 +95,7 @@ def main():
     print("rebound %s (%s)" % (rebound.__version__, rebound.__githash__))
     print("librebound %s" % cft_rebound.library_path())
 
-    cft_rebound.load(args.library)
+    lib = cft_rebound.load(args.library)
     names = cft_rebound.registered()
     print("loaded %s; registered integrators: %s" % (args.library, " ".join(names)))
     if args.integrator not in names:
@@ -104,7 +116,7 @@ def main():
     print("REBOUND's own ias15:")
     a = run("ias15", G, bodies, dt, args.steps)
     print("  %s:" % args.integrator)
-    b = run(args.integrator, G, bodies, dt, args.steps)
+    b = run(args.integrator, G, bodies, dt, args.steps, lib=lib, format=args.format)
 
     labels = ["t"] + ["p%d.%s" % (i, c) for i in range(len(bodies))
                       for c in ("x", "y", "z", "vx", "vy", "vz")]
