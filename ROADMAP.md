@@ -135,7 +135,12 @@ struct cft_ias15_state {
 
     /* the wide state: byte blobs, archived as REB_POINTER with
      * element_size = W. Lengths are 3N or 3N*E elements. */
-    unsigned char *x0, *v0, *a0;      /* position, velocity, acceleration */
+    unsigned char *x, *v;             /* the LIVE coordinates: what a restart
+                                       * continues from. Missing from the first
+                                       * version of this struct - see the note
+                                       * at the end of this file. */
+    unsigned char *x0, *v0, *a0;      /* the step's starting copy, refreshed
+                                       * from x/v at the top of every step */
     unsigned char *csx, *csv, *csa0;  /* compensated-summation carries */
     unsigned char *g[7], *b[7], *e[7], *br[7], *er[7], *csb[7];
     size_t   n_elem;           /* 3N, or 3NE for an ensemble */
@@ -351,3 +356,59 @@ not carry `b` and `e` is not the same run, it is a nearby one. It is
 why the state struct lists them, why the archive has to persist them,
 and why parcel B's restart gate compares all 48 blobs rather than just
 the particles.
+
+---
+
+## What integration found, and what it costs to state a struct twice
+
+The four parcels landed and every gate passed, and a checkpoint through
+the registered integrator still did not work. Recorded here because the
+cause is a property of how this document split the work, not of any one
+parcel.
+
+**The struct above was the shared contract, and it was wrong in one
+place.** It lists `x0`, `v0`, `a0` as "position, velocity,
+acceleration". They are not: `step_attempt()` copies `x` into `x0` at
+the top of a step and leaves the advanced position in `x`, so after a
+completed step `x0` is the *previous* step's start. The live coordinates
+are `x` and `v`, and this document never mentioned them, so neither
+parcel archived them. At binary64 that is invisible - `r->particles`
+carry the same bits and the step re-promotes them - and at binary128 and
+binary256 it silently truncated a checkpoint to binary64. The struct
+now carries `x` and `v`, and the blob count is 50.
+
+**Two parcels each implemented half of one thing, and the halves never
+met.** Parcel A's brief said `src/cft_ias15_fields.c` is "PARCEL B's
+file"; parcel B put its descriptor lists in `src/cft_archive.c` as
+file-scope statics and never touched A's file. Both were faithful to
+this document. The result was an integrator registered with a list
+holding nothing but its terminator, so REBOUND could not resolve a
+single `cft_` field on read - and because `cft_archive_finish_load()`
+validates the FILE rather than what was restored, it returned "restored
+exactly" for a restore that had not happened. A silent wrong answer,
+which is the one outcome this repository is built to prevent.
+
+**Where a shared fact appeared twice, the copies drifted.** The state
+struct was defined in both A's and B's headers (caught at merge, found
+byte-identical). The descriptor lists were in two files. The
+index-to-member walker over the blobs was in two files. The blob count
+48 was written out by hand in four places, and the set of blob names a
+fifth. Growing the list from 48 to 50 broke every one of those copies
+in a different way: a refused load, three crashed gates, and a passing
+gate that printed "only 50 of 48".
+
+**The rule this suggests for a next round.** A parcel brief may name a
+shared fact, but exactly one parcel must own the file that states it,
+and the others must be told to include it rather than restate it. Where
+a count or a name list can be derived from a definition, derive it: blob
+identity now comes from the descriptor list, and the count from
+`CFT_N_BLOBS` in the header that defines the macros.
+
+**The gate that would have caught all of it** is 190 lines and takes
+under a second: 30 steps straight against 20 steps, save, free, load,
+10 more, compared bit for bit. It is `tests/gate_real.c`. Neither
+parcel was asked for it, because it belongs to no parcel - it tests the
+seam. A round split into parcels should name the seam tests too, and
+give them to the integrator.
+
+See docs/VALIDATION.md entry 25 for the measurements.
