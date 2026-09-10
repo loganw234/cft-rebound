@@ -538,6 +538,31 @@ enum cft_archive_status cft_archive_finish_load(struct reb_simulation *r,
      * NOTE 3 at the top of this file. */
     s->n_elem = (size_t)info->n_elem;
 
+    /* Did the load actually happen? Everything above was read out of
+     * the file by cft_archive_probe() and says nothing about what
+     * reached memory. REBOUND allocates a REB_POINTER field's buffer
+     * only when it reads that field, so a NULL blob here means the
+     * loader never saw it - a descriptor list that does not match the
+     * file. That is exactly the state this function used to certify
+     * as "restored exactly" (docs/VALIDATION.md entry 25), and a
+     * wrong answer reported as a right one is the one outcome this
+     * repository refuses. */
+    {
+        int i;
+        for (i = 0; i < CFT_N_BLOBS; i++){
+            unsigned char **b = cft_archive_state_blob(s, i);
+            if (!b || !*b){
+                fprintf(stderr,
+                        "cft-rebound: the archive names %d wide blobs and blob %d did not "
+                        "reach memory. The integrator was registered with a field "
+                        "descriptor list that does not match this file, so the state "
+                        "was not restored; refusing rather than continuing from "
+                        "defaults.\n", info->n_blobs_seen, i);
+                return CFT_ARCHIVE_BAD;
+            }
+        }
+    }
+
     if (cft_archive_bind(r)) return CFT_ARCHIVE_BAD;
     return CFT_ARCHIVE_EXACT;
 }
