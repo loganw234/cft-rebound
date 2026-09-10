@@ -9,6 +9,8 @@
 #   make constants        re-derive and re-check the IAS15 constants
 #   make check            the gates: constants, and the port at binary64
 #                         against REBOUND's own IAS15, bit for bit
+#   make archive          the Simulationarchive gate programs
+#   make check-archive    just those gates (seconds)
 #
 # On Windows (MSYS2 mingw64 gcc from Git Bash) the same traps as
 # cft-fp256's host/Makefile apply, and they are passed through here:
@@ -88,6 +90,34 @@ $(B)/ias15_cft$(EXE): src/ias15_cft.c src/ias15_constants.h src/hexfloat.h $(CFT
 constants:
 	$(PYTHON) tools/gen_constants.py
 
+# --- Simulationarchive support and its gates -------------------------
+# The archive module is compiled against BOTH upstreams: REBOUND for the
+# field descriptors and the loader, libcft for the wide formats.
+ARCHIVE_SRC := src/cft_archive.c src/cft_archive.h src/cft_ias15_state.h
+ARCH_CFLAGS := $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -I$(REB) -I$(CFT)/include -Isrc -Itests
+ARCHIVE_GATES := $(B)/gate_restart$(EXE) $(B)/gate_write$(EXE) \
+                 $(B)/gate_stock$(EXE) $(B)/gate_promote$(EXE)
+
+$(B)/gate_restart$(EXE): tests/gate_restart.c tests/cft_shim_stub.c tests/cft_shim_stub.h $(ARCHIVE_SRC) $(B)/librebound.a $(CFTLIB)
+	$(CC) $(ARCH_CFLAGS) -o $@ tests/gate_restart.c tests/cft_shim_stub.c src/cft_archive.c $(B)/librebound.a $(CFTLIB) $(LIBS)
+
+$(B)/gate_write$(EXE): tests/gate_write.c tests/cft_shim_stub.c tests/cft_shim_stub.h $(ARCHIVE_SRC) $(B)/librebound.a $(CFTLIB)
+	$(CC) $(ARCH_CFLAGS) -o $@ tests/gate_write.c tests/cft_shim_stub.c src/cft_archive.c $(B)/librebound.a $(CFTLIB) $(LIBS)
+
+$(B)/gate_promote$(EXE): tests/gate_promote.c tests/cft_shim_stub.c tests/cft_shim_stub.h $(ARCHIVE_SRC) $(B)/librebound.a $(CFTLIB)
+	$(CC) $(ARCH_CFLAGS) -o $@ tests/gate_promote.c tests/cft_shim_stub.c src/cft_archive.c $(B)/librebound.a $(CFTLIB) $(LIBS)
+
+# Deliberately links the pinned upstream librebound and NOTHING of
+# cft-rebound's: this program is a stock REBOUND reader.
+$(B)/gate_stock$(EXE): tests/gate_stock.c $(B)/librebound.a
+	$(CC) $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -I$(REB) -o $@ tests/gate_stock.c $(B)/librebound.a $(LIBS)
+
+.PHONY: archive check-archive
+archive: $(ARCHIVE_GATES)
+
+check-archive: $(ARCHIVE_GATES)
+	$(PYTHON) tools/check_archive.py --build $(B)
+
 # The sequencer programs: generated as text, assembled by the pinned
 # clone's own assembler (built here from its sources).
 ASM := $(CFT)/cft-asm$(EXE)
@@ -101,21 +131,23 @@ programs: $(ASM)
 	@for f in programs/*.cfta; do b=$$(basename $$f .cfta); $(ASM) $$f -o programs/out/$$b.cftp || exit 1; done
 	@echo "assembled $$(ls programs/out/*.cftp | wc -l) programs"
 
-check: all programs
+check: all programs $(ARCHIVE_GATES)
 	$(PYTHON) tools/gen_constants.py --no-write
 	$(PYTHON) tools/check_equivalence.py --build $(B)
 	$(PYTHON) tools/check_program_engine.py --build $(B)
 	$(PYTHON) tools/check_records.py --build $(B)
 	$(PYTHON) tools/check_ensemble.py --build $(B)
+	$(PYTHON) tools/check_archive.py --build $(B)
 
 # the same gates at binary64 only, in a few minutes
 .PHONY: check-quick
-check-quick: all programs
+check-quick: all programs $(ARCHIVE_GATES)
 	$(PYTHON) tools/gen_constants.py --no-write
 	$(PYTHON) tools/check_equivalence.py --build $(B) --quick
 	$(PYTHON) tools/check_program_engine.py --build $(B) --formats fp64
 	$(PYTHON) tools/check_records.py --build $(B) --quick
 	$(PYTHON) tools/check_ensemble.py --build $(B) --quick
+	$(PYTHON) tools/check_archive.py --build $(B)
 
 clean:
 	rm -rf $(B)
