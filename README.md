@@ -150,6 +150,8 @@ Nothing is vendored by hand.
     python/cft_rebound.py    the loader: puts a registered integrator within reach
                              of REBOUND's Python package
     python/example_equivalence.py  the binary64 equivalence gate, from Python
+    src/cft_ias15_shared.c   the constructor that registers the integrator
+                             when the shared library is loaded
     ROADMAP.md               what is left before this is usable, and the two
                              REBOUND extension points that make it cheap
 
@@ -226,6 +228,39 @@ Add `cft_archive.h` and a `cft_archive_bind(r)` before
 wide state, so a run can stop and be picked up later at full width.
 `examples/dropin.c` is all of that in one runnable file, built against
 the install rather than against the source tree.
+
+### From Python
+
+    make python-lib          # build/libcft_ias15.so (.dylib on macOS)
+    make check-python        # REBOUND's own ias15 against it, from Python
+
+Then, with the `rebound` package installed:
+
+    import sys, rebound
+    sys.path.insert(0, "python")
+    import cft_rebound
+
+    lib = cft_rebound.load("build/libcft_ias15.so")
+
+    sim = rebound.Simulation()
+    sim.dt = 0.05
+    sim.add(m=1.0)
+    sim.add(m=1e-3, x=1.0, vy=1.0)
+    sim.integrator = "ias15_cft"
+    cft_rebound.configure(lib, sim, format="fp256", epsilon=0.0)
+    sim.steps(1000)
+
+The library registers itself when it loads, so the name is selectable
+immediately. The `configure` call is not optional if you want anything
+but the default: REBOUND builds `sim.integrator.epsilon` and its
+siblings from structs it knows and does not know this integrator's, so
+that is where the format is chosen. At binary64 the run is REBOUND's
+own, bit for bit, which is what `make check-python` checks.
+
+The pinned REBOUND and the installed wheel must be the same source, or
+the two sides of every call disagree about how `struct reb_simulation`
+is laid out. `make python-lib` compares them and refuses if they
+differ. Windows is not supported yet and docs/PYTHON.md says why.
 
 ### The subprocess API
 
