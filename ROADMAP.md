@@ -332,6 +332,26 @@ suspicions.
   here does.
 - **Integrator names must be lowercase.** The Python layer lowercases
   on assignment. `ias15_cft` is safe.
+- **`reb_binarydata_diff` writes a field header with no data for a field
+  that has disappeared.** The not-found branch (`binarydata.c:325-333`)
+  emits `write_to_stream(&field1)` and `write_to_stream(name1)` and
+  stops: no third call for the data. So a field present in the old
+  snapshot and absent from the new one lands in the diff claiming a
+  `size_data` it did not write, and a reader trusting that length walks
+  into the middle of the next record's header. Reproduced minimally
+  against the function, and end to end as an **0xC0000005** in
+  `gate_real --fp64` when this port let its alias family vanish once a
+  regrow levelled the mark. The fix here is that a family, once
+  published, keeps being published for the life of the binding.
+
+  **A consequence for this repository's own archives.** The same defect
+  makes mixing builds across the round-2 commit unsafe in one
+  direction: an archive written by a build that has the three new
+  scalars and appended by one that does not loses them from the diff,
+  emits `cft_iterations_max_exceeded` with `size_data=8` and no data,
+  and the snapshot will not load — REBOUND itself reports "The binary
+  file seems to be corrupted." Old-written and new-appended is fine.
+  Do not mix builds across that commit within one archive.
 - **A body-count change re-reads IAS15's coefficient levels at a
   different offset.** All seven share one flat allocation, and
   `dpcast(ias15->b, N3)` slices it at the *current* `3N` on every step
@@ -492,6 +512,20 @@ See docs/VALIDATION.md entry 25 for the measurements.
 
 ## What the collision work leaves open, across a checkpoint
 
+**Closed by round 2's parcel P4 — kept for the reasoning, which still
+explains why the archive is shaped as it is.** The high-water mark, the
+stranded tail and the counters all travel now; `gate_real`'s second
+sequence is remove → save → resume → regrow, and it fails without the
+fix. Two things the section below did not know, both measured while
+closing it: the stranded tail is **not** confined to the seven
+coefficient levels — `csx` and `csv` strand one too, and the predictor
+reads it before writing it — and a remove → checkpoint → regrow at
+`state->accurate = 1` is still not exact, because that mode shifts the
+wide state rather than aliasing it, so the tail sits in the live arrays
+rather than in the shadow. What follows is the original statement of the
+problem.
+
+
 Reproducing REBOUND's coefficient re-slice (see the upstream-defects
 section) needs the part of its buffer that a shrink strands above the
 live region: no stride reaches it while the count is small, and a
@@ -518,3 +552,21 @@ needs a removal, a save, a resume and a regrow that stays under a mark
 the resumed process cannot see, and every other removal path - a merge,
 a bare `reb_simulation_remove_particle`, a regrow within one process -
 is bit-identical and gated.
+
+## What round 2 leaves open: the wide clock
+
+`t` is carried across a checkpoint as the binary64 view and as the
+unevaluated pair the record prints, but **the engine's wide clock is
+not archived**. Measured while verifying parcel P4: a plain checkpoint
+at binary128 differs from the straight run by one binary64 ulp in `t`
+for 2 of 40 step splits tried, and the same at binary256. It reproduces
+on a build from before that parcel, so it is not something the parcel
+introduced — but for work titled "state completeness across a
+checkpoint" it is a piece of wide state that still does not survive one,
+and it was recorded nowhere until now.
+
+It is narrow: the particles, the coefficients and the compensations all
+survive exactly, so a resumed run continues on the right trajectory and
+only its clock differs, in the last bit, on some splits. Closing it
+means archiving the wide `t` as a blob, which is one more field and one
+more line in the descriptor list.

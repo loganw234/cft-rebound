@@ -74,6 +74,7 @@
 #include "cft_ias15.h"
 #include "cft_archive.h"
 #include "cft_ias15_fields.h"
+#include "ias15_limits.h"    /* CFT_DIGEST_SEED, so the seed is not retyped */
 
 /* How many strings REBOUND's r->messages holds. Taken from the symbol
  * rather than written down here: it is a plain const in rebound.c and
@@ -174,7 +175,7 @@ static unsigned char *snap(struct reb_simulation *r, size_t *len){
  * the dump say what the state is rather than what it rounds to. */
 static uint64_t wide_digest(struct reb_simulation *r){
     struct cft_ias15_state *s = (struct cft_ias15_state*)r->integrator.state;
-    uint64_t h = 1469598103934665603ULL;
+    uint64_t h = CFT_DIGEST_SEED;   /* src/ias15_limits.h, not retyped */
     size_t w;
     if (!s) return 0;
     w = cft_format_size((cft_format)s->format);

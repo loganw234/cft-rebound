@@ -329,6 +329,27 @@ int cft_rebound_steps(struct reb_simulation *r, long nsteps,
             k += sprintf(cmd + k, " --min-dt %s", mb);
         }
         }
+        /* The step criterion. It comes from the SIMULATION rather than
+         * from opt, the way epsilon and max_iter do, because it is
+         * REBOUND's own ias15 setting and cft_rebound_check() already
+         * reads it there to decide whether to refuse it.
+         *
+         * It was not forwarded at all until 2026-09-11, which made the
+         * refusal check a liar: a simulation asking for AARSETH85 was
+         * accepted and then integrated at PRS23, with nothing saying
+         * so. The default is 2 and passing it explicitly costs nothing,
+         * so it goes across unconditionally rather than only when it
+         * differs - a flag that is sometimes absent is a flag whose
+         * absence has to mean something. */
+        {
+            int am = 2;
+            if (r->integrator.state && r->integrator.name &&
+                strcmp(r->integrator.name, "ias15") == 0){
+                const struct reb_integrator_ias15_state *s = r->integrator.state;
+                am = s->adaptive_mode;
+            }
+            k += sprintf(cmd + k, " --adaptive-mode %d", am);
+        }
         if (art) k += sprintf(cmd + k, " --artifact \"%s\"", art);
         k += sprintf(cmd + k, " > \"%s\"", recpath);
         (void)k;

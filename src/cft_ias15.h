@@ -222,9 +222,20 @@ struct cft_ias15_state {
      *
      * hiwater_n_elem is 0, and every pointer NULL, whenever the mark is
      * the live count - which is every run that never shrank. REBOUND's
-     * writer skips a REB_POINTER field whose length is zero, so such an
-     * archive is byte for byte what this project wrote before these
-     * members existed, and the mark is then n_elem/3 by construction. */
+     * writer skips a REB_POINTER field whose length is zero (its test is
+     * on size_data, derived from offset_N, not on the pointer:
+     * binarydata.c:584), so such an archive carries none of the 44 alias
+     * blobs and the mark is n_elem/3 by construction.
+     *
+     * It is NOT byte for byte what this project wrote before these
+     * members existed, which an earlier draft of this comment claimed
+     * and a verifier disproved with the bytes: the three SCALARS are
+     * written unconditionally, so a whole snapshot grew by exactly 193
+     * bytes and from 62 named cft_ fields to 65. What does hold, and is
+     * the half that matters, is that 123 fields are byte-identical, the
+     * shared-name order is unchanged, and an archive written before this
+     * commit resumes under it bit-identically including the wide
+     * digest. */
     unsigned char *alias[6][7];   /* g, b, e, csb, er, br - THAT order */
     unsigned char *alias_csx, *alias_csv;
     size_t   hiwater_n_elem;      /* 3*N_allocated, or 0 - see above */

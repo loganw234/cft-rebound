@@ -28,4 +28,16 @@
 
 #define CFT_MAX_BODIES 1024
 
+/* The seed of the FNV-STYLE hash this project digests wide bytes with -
+ * the constants at ias15_cft.c's digest_constants(), the state at
+ * gate_real.c's wide_digest(). FNV-style, not FNV-1a: the prime is
+ * FNV's, the offset basis is FNV-1a's 14695981039346656037 with its
+ * last decimal digit missing. Kept rather than corrected, because the
+ * constants digest is ARCHIVED and correcting the seed would change
+ * every stored value to no purpose - nothing compares it against an
+ * independent implementation. It is here rather than in either file
+ * because it was in both, three hours after this repository wrote down
+ * the rule against that. */
+#define CFT_DIGEST_SEED 1469598103934665603ULL
+
 #endif /* IAS15_LIMITS_H */

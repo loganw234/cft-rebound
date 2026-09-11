@@ -336,27 +336,24 @@ static void say_ensemble(const struct cft_support_ctx *c, char *b, size_t n){
  * what is left to refuse there is a number that is not one of them.
  *
  * The subprocess path is NOT widened with it, and that is the row
- * carrying a fact rather than an oversight: cft_rebound_steps() hands
- * the run to the standalone ias15_cft program and does not pass
- * --adaptive-mode, so whatever the simulation asks for, the program
- * runs its own default. Accepting 0 or 1 there would mean accepting
- * them and then silently running PRS23. (The same is already true of
- * AARSETH85; this row leaves that exactly as it found it, because
- * changing it is a change to cft_rebound_run.c's command line and not
- * to this table. PARCELS.md P3's report says so.) */
+ * carrying a fact rather than an oversight, until the fact changed:
+ * cft_rebound_steps() used not to pass --adaptive-mode at all, so
+ * whatever the simulation asked for, the program ran its own default,
+ * and accepting a mode there would have meant accepting it and then
+ * silently running PRS23. That was already true of AARSETH85 and had
+ * been since AARSETH85 landed - the refusal check read the mode to
+ * decide whether to refuse it and then threw it away.
+ *
+ * It forwards now, unconditionally, so both paths honour all four
+ * criteria and this row refuses only a number that names none of them.
+ * tests/gate_subprocess.c is what holds that down: it runs each mode
+ * through cft_rebound_steps() against REBOUND's own ias15 and requires
+ * the four to disagree with each other, which is the only way to tell
+ * a forwarded flag from a dropped one. */
 static int hit_adaptive_mode(const struct cft_support_ctx *c){
-    if (c->have_state) return c->adaptive_mode < 0 || c->adaptive_mode > 3;
-    return c->adaptive_mode != 2 && c->adaptive_mode != 3;
+    return c->adaptive_mode < 0 || c->adaptive_mode > 3;
 }
 static void say_adaptive_mode(const struct cft_support_ctx *c, char *b, size_t n){
-    if (!c->have_state){
-        snprintf(b, n, "adaptive_mode %d is not supported by this API. This path runs "
-                       "the standalone ias15_cft program, whose command line does not "
-                       "carry the step criterion, so only the criteria that program "
-                       "defaults to can be honoured; the drop-in integrator implements "
-                       "all four of REBOUND's.", c->adaptive_mode);
-        return;
-    }
     snprintf(b, n, "adaptive_mode %d is not one of REBOUND's: INDIVIDUAL (0), "
                    "GLOBAL (1), PRS23 (2, its default since January 2024) or "
                    "AARSETH85 (3).", c->adaptive_mode);

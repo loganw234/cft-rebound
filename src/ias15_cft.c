@@ -99,11 +99,17 @@ static void die(const char *fmt, ...){
 
 #define CERT_FLAGS (CFT_FLAG_INVALID | CFT_FLAG_DIVBYZERO | CFT_FLAG_OVERFLOW | CFT_FLAG_UNDERFLOW)
 
+/* Which of those actually stop the run. CERT_FLAGS until the step
+ * criterion is known, then narrowed for the two that raise some of
+ * them by design - see the note at dtnew_legacy() and where this is
+ * set, after the arguments are parsed. */
+static uint32_t cert_flags = CERT_FLAGS;
+
 static void note(cft_status st, uint32_t fl, const char *what){
     ncalls++;
     if (st != CFT_OK) die("%s: %s (%s)", what, cft_strerror(st), cft_last_error());
     flags_union |= fl;
-    if (flag_abort && (fl & CERT_FLAGS))
+    if (flag_abort && (fl & cert_flags))
         die("%s raised 0x%02x - this workload can only raise inexact; invalid, "
             "divide-by-zero, overflow or underflow means the integration or the "
             "port is wrong (pass --no-flag-abort to continue anyway)", what, fl);
@@ -1789,6 +1795,23 @@ int main(int argc, char **argv){
     }
     if (engine_program && !arith_fma) die("--engine program needs --arith fma: a correctly rounded divide is not a sequencer program (cft-fp256 docs/ORBITS.md)");
     if (engine_program && cs_augmented) die("--engine program carries Kahan's add_cs only; --cs augmented is a host operation");
+    /* The criterion is known by now, so narrow what aborts. INDIVIDUAL
+     * divides by at[k] for every coordinate and GLOBAL by |x|^2, and
+     * both quantities are legitimately zero - a planar problem, a
+     * particle at the origin. REBOUND gets an infinity or a NaN,
+     * isnormal() rejects it, and the coordinate drops out of the
+     * maximum: its own estimate showing through, not a fault here.
+     * dtnew_legacy() has the detail.
+     *
+     * Aborting on those made these two modes unusable on most
+     * problems, which is not what "implemented" should mean. Only
+     * INVALID and DIVBYZERO are dropped, and only for these two: an
+     * overflow or an underflow here would still be a real fault and
+     * still stops the run, and flags_seen in the trailer still
+     * reports every flag raised. Only the abort changes. */
+    if (ADAPTIVE_MODE == 0 || ADAPTIVE_MODE == 1)
+        cert_flags &= ~(uint32_t)(CFT_FLAG_INVALID | CFT_FLAG_DIVBYZERO);
+
     read_problem(problem);
     make_constants(tol_shift, quiet);
     alloc_state();
@@ -1982,10 +2005,24 @@ unsigned long long ias15_engine_calls(void){ return ncalls; }
 uint64_t ias15_engine_constants_digest(void){ return eng_digest; }
 unsigned long long ias15_engine_max_exceeded(void){ return eng_open && max_exceeded ? (unsigned long long)max_exceeded[0] : 0; }
 
-/* FNV-1a over the exact bytes of the derived Gauss-Radau arrays at this
- * format: what the run actually used, not what a table says it used. */
+/* A 64-bit FNV-STYLE hash over the exact bytes of the derived
+ * Gauss-Radau arrays at this format: what the run actually used, not
+ * what a table says it used.
+ *
+ * FNV-style and not FNV-1a, which this comment used to claim. The
+ * prime is FNV's 1099511628211; the offset basis is NOT - FNV-1a's is
+ * 14695981039346656037 and the seed below has its last decimal digit
+ * missing. Found by a verifier, and left alone deliberately: the value
+ * is archived as cft_constants_digest, so correcting the seed would
+ * change every digest a stored archive carries, to no end. Nothing
+ * here ever compares against an independent implementation - the
+ * digest's whole job is to match itself across a save and a load. So
+ * the name is what was wrong, not the number.
+ *
+ * The seed lives in src/ias15_limits.h because it is now needed in two
+ * files, and a constant written twice is a constant that drifts. */
 static uint64_t digest_constants(void){
-    uint64_t h = 1469598103934665603ULL;
+    uint64_t h = CFT_DIGEST_SEED;
     V sets[4 + 8 + 28 + 21 + 21];
     size_t n = 0;
     for (int i = 0; i < 8;  i++) sets[n++] = KH[i];

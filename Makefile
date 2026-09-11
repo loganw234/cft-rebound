@@ -326,7 +326,17 @@ ARCHIVE_SRC := src/cft_archive.c src/cft_archive.h src/cft_ias15_state.h src/cft
 ARCH_CFLAGS := $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -I$(REB) -I$(CFT)/include -Isrc -Itests
 ARCHIVE_GATES := $(B)/gate_restart$(EXE) $(B)/gate_write$(EXE) \
                  $(B)/gate_stock$(EXE) $(B)/gate_promote$(EXE) \
-                 $(B)/gate_real$(EXE)
+                 $(B)/gate_real$(EXE) $(B)/gate_subprocess$(EXE)
+
+# The subprocess API's gate. It links libcft_rebound.a rather than the
+# sources, so what it exercises is what a caller linking the shipped
+# archive would get, and it needs the standalone program at run time
+# because spawning it is the whole of what that API does.
+$(B)/gate_subprocess$(EXE): tests/gate_subprocess.c src/cft_supported.h \
+                            $(B)/libcft_rebound.a $(B)/librebound.a $(CFTLIB) \
+                            $(B)/ias15_cft$(EXE)
+	$(CC) $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -Iinclude -Isrc -I$(REB) -I$(CFT)/include \
+	      -o $@ tests/gate_subprocess.c $(B)/libcft_rebound.a $(B)/librebound.a $(CFTLIB) $(LIBS)
 
 $(B)/gate_restart$(EXE): tests/gate_restart.c tests/cft_shim_stub.c tests/cft_shim_stub.h $(ARCHIVE_SRC) $(B)/librebound.a $(CFTLIB)
 	$(CC) $(ARCH_CFLAGS) -o $@ tests/gate_restart.c tests/cft_shim_stub.c src/cft_archive.c src/cft_ias15_fields.c $(B)/librebound.a $(CFTLIB) $(LIBS)
@@ -384,6 +394,7 @@ check: all programs $(ARCHIVE_GATES)
 	$(B)/gate_real$(EXE) --fp64
 	$(B)/gate_real$(EXE) --fp128
 	$(B)/gate_real$(EXE) --fp256
+	$(B)/gate_subprocess$(EXE) --build $(B)
 	$(PYTHON) tools/check_checkpoint.py --build $(B)
 
 # the same gates at binary64 only, in a few minutes
@@ -401,6 +412,7 @@ check-quick: all programs $(ARCHIVE_GATES)
 	$(B)/gate_real$(EXE) --fp64
 	$(B)/gate_real$(EXE) --fp128
 	$(B)/gate_real$(EXE) --fp256
+	$(B)/gate_subprocess$(EXE) --build $(B)
 	$(PYTHON) tools/check_checkpoint.py --build $(B) --quick
 
 # The worked round trip, built in the tree and run against the

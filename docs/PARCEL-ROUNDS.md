@@ -9,6 +9,16 @@ Written to be copied into other repositories. Where it cites this one,
 that is evidence rather than context — every rule below is here because
 something broke without it.
 
+**This is the working copy, and it is no longer the canonical one.**
+The method was lifted into a standalone repository - `ParcelRound`,
+with the project-specific parts turned into templates - so it could be
+reused and handed to other people. That leaves one document in two
+places, which is exactly what "exactly one file owns each shared fact"
+forbids, and saying so is better than pretending the copies will stay
+in step. When `ParcelRound` has a published home this file becomes a
+pointer to it; until then, where the two differ, the standalone copy
+is right.
+
 ---
 
 ## When this is worth it
@@ -424,6 +434,21 @@ files the merge message named, ran `git add -A`, and committed a
 third file still holding its conflict — along with eight agent
 worktrees as embedded repositories. Both are one command to check.
 
+**Never merge while a suite is running.** This looks safe — the suite
+built its binaries at the start, so a source edit cannot reach it — and
+it is wrong for any part of the suite that is *interpreted*. The lead
+merged a parcel mid-run on exactly that reasoning; the run then reached
+a Python checker, read the merged parcel's **new** checker off disk, and
+drove it against the **old** compiled gate, producing three failures
+that were entirely self-inflicted. A suite is only as prebuilt as its
+least-compiled component, and scripts are never prebuilt.
+
+Two corollaries. A failure you cannot immediately attribute deserves a
+timestamp check before a diagnosis: comparing the build time of the
+binary against the mtime of the script settled this one in a single
+command. And never report such a failure as a defect, or as a false
+alarm, until a clean re-run says which it was.
+
 **Read the log, not the exit code.** A background wrapper in this
 session reported exit 0 for a run whose log said `Error 1`, because a
 trailing `echo` succeeded. If a claim of green rests on a status code
@@ -517,6 +542,7 @@ At each merge:
 - [ ] A seam test exercises this parcel against an already-merged one.
 - [ ] Conflicts were enumerated from git, and no marker survived
       into the commit.
-- [ ] The full suite was run by the lead, and the log read.
+- [ ] The full suite was run by the lead, on a tree nothing was
+      merged into while it ran, and the log read.
 - [ ] Anything the merge taught the lead went into the ledger, for
       the parcels still running.

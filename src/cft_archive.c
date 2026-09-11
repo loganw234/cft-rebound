@@ -119,8 +119,14 @@
  * They are written only when the mark is ABOVE the live count, which is
  * the only time they hold anything a live blob does not. REBOUND's
  * writer skips a REB_POINTER field of zero length, so an archive from a
- * run that never shrank carries none of them and is byte for byte what
- * this project wrote before they existed.
+ * run that never shrank carries none of them.
+ *
+ * It is not, however, byte for byte what this project wrote before they
+ * existed - the three new SCALARS are unconditional, and measuring it
+ * gives 10590 bytes against 10783 and 62 named cft_ fields against 65.
+ * The compatibility that does hold is the useful one: the shared names
+ * keep their order and their bytes, and an older archive resumes here
+ * bit-identically.
  *
  * NOTE 4. cft_x and cft_v have no counterpart in REBOUND's list because
  * REBOUND's live coordinates are in r->particles, which it archives as
