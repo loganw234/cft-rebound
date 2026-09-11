@@ -61,7 +61,7 @@
  *             [--arith rebound|fma] [--engine loop|program] [--programs DIR]
  *             [--no-flag-abort] [--artifact PATH] [--dump-constants] [--quiet]
  *             [--member K] [--dt-file FILE] [--dt-out FILE]
- *             [--softening S] [--min-dt M]
+ *             [--softening S] [--min-dt M] [--adaptive-mode 2|3]
  *
  * --artifact opens a tile instead of the software backend; with no flag
  * the program falls back to $CFT_REBOUND_ARTIFACT, which is how the
@@ -357,6 +357,11 @@ static size_t L;           /* lanes per system, 3N */
 static size_t PS, P;       /* pairs per system, pairs in all */
 static V mass;             /* NB */
 static V G;                /* broadcast */
+/* REBOUND's ias15->adaptive_mode. 2 is PRS23, its default since
+ * January 2024 and this port's; 3 is AARSETH85, which shares every
+ * sum with it and differs in one expression. 0 and 1 take REBOUND's
+ * other branch and are not implemented. */
+static int ADAPTIVE_MODE = 2;
 static V SMINDT;           /* broadcast: the step-size floor, +0 by
                             * default - and at +0 the comparison below
                             * is false, so nothing is ever selected and
@@ -863,11 +868,11 @@ static int s7_stale = 1;
  * control's call count is therefore independent of E. */
 static void choose_timestep(void){
     static V sq, tmp, y[6], a0i, ts2, mints2, num, den, INVB;
-    static V y1m, y2m, y3m, mim, r, dtnA, dtnB, dtnF, ad, rr, ar, P0, PR, PL, PI; static uint8_t *cls, *cls2, *clsm;
+    static V y1m, y2m, y3m, y4m, mim, r, dtnA, dtnB, dtnF, ad, rr, ar, P0, PR, PL, PI; static uint8_t *cls, *cls2, *clsm;
     if (!sq){
         sq = valloc(N3); tmp = valloc(N3); for (int i = 0; i < 6; i++) y[i] = valloc(NB); a0i = valloc(NB); ts2 = valloc(NB);
         mints2 = valloc(E); num = valloc(NB); den = valloc(NB); cls = cbytes(NB); cls2 = cbytes(NB); clsm = cbytes(E);
-        y1m = valloc(NB); y2m = valloc(NB); y3m = valloc(NB); mim = valloc(E); r = valloc(E); dtnA = valloc(E); dtnB = valloc(E); dtnF = valloc(E);
+        y1m = valloc(NB); y2m = valloc(NB); y3m = valloc(NB); y4m = valloc(NB); mim = valloc(E); r = valloc(E); dtnA = valloc(E); dtnB = valloc(E); dtnF = valloc(E);
         ad = valloc(E); rr = valloc(E); ar = valloc(E); P0 = valloc(E); PR = valloc(E); PL = valloc(E); PI = valloc(E);
         if (!cls || !cls2 || !clsm) die("out of memory");
         /* 1/safety_factor depends on nothing at all: once, the same bits every step */
@@ -906,11 +911,21 @@ static void choose_timestep(void){
      * its lane is never read */
     vclass(cls, a0i, NB);
     for (size_t p = 0; p < NB; p++){
-        if (is_normal_class(cls[p])){ memcpy(E(y1m, p), E(y[1], p), ESZ); memcpy(E(y2m, p), E(y[2], p), ESZ); memcpy(E(y3m, p), E(y[3], p), ESZ); }
-        else { memcpy(E(y1m, p), K1, ESZ); memcpy(E(y2m, p), K1, ESZ); memcpy(E(y3m, p), K1, ESZ); }
+        if (is_normal_class(cls[p])){ memcpy(E(y1m, p), E(y[1], p), ESZ); memcpy(E(y2m, p), E(y[2], p), ESZ); memcpy(E(y3m, p), E(y[3], p), ESZ); memcpy(E(y4m, p), E(y[4], p), ESZ); }
+        else { memcpy(E(y1m, p), K1, ESZ); memcpy(E(y2m, p), K1, ESZ); memcpy(E(y3m, p), K1, ESZ); memcpy(E(y4m, p), K1, ESZ); }
     }
-    vmul(num, K2, y1m, NB);
-    vmul(tmp, y3m, y1m, NB); vsqrt(tmp, tmp, NB); vadd(den, y2m, tmp, NB);
+    if (ADAPTIVE_MODE == 3){
+        /* AARSETH85: (sqrt(y2*y4) + y3) / (sqrt(y3*y5) + y4), in this
+         * file's names (y1m is REBOUND's y2, y2m its y3, y3m its y4,
+         * y4m its y5). Every sum it needs was already computed for
+         * PRS23; only y5 was going unread. */
+        vmul(tmp, y1m, y3m, NB); vsqrt(tmp, tmp, NB); vadd(num, tmp, y2m, NB);
+        vmul(tmp, y2m, y4m, NB); vsqrt(tmp, tmp, NB); vadd(den, tmp, y3m, NB);
+    }else{
+        /* PRS23: 2*y2 / (y3 + sqrt(y4*y2)) */
+        vmul(num, K2, y1m, NB);
+        vmul(tmp, y3m, y1m, NB); vsqrt(tmp, tmp, NB); vadd(den, y2m, tmp, NB);
+    }
     vdiv(ts2, num, den, NB);
     vclass(cls2, ts2, NB);
     /* the minimum within each system over the particles REBOUND looks
@@ -1230,6 +1245,16 @@ int main(int argc, char **argv){
         else if (!strcmp(argv[i], "--epsilon") && i + 1 < argc) eps_txt = argv[++i];
         else if (!strcmp(argv[i], "--softening") && i + 1 < argc) soft_txt = argv[++i];
         else if (!strcmp(argv[i], "--min-dt") && i + 1 < argc) mindt_txt = argv[++i];
+        else if (!strcmp(argv[i], "--adaptive-mode") && i + 1 < argc){
+            ADAPTIVE_MODE = atoi(argv[++i]);
+            /* Validated here rather than left to fall into the PRS23 arm:
+             * an unimplemented mode that silently ran a different one is
+             * exactly the shape of wrong answer this program refuses. */
+            if (ADAPTIVE_MODE != 2 && ADAPTIVE_MODE != 3)
+                die("--adaptive-mode %d: only PRS23 (2) and AARSETH85 (3) are "
+                    "implemented; INDIVIDUAL (0) and GLOBAL (1) take REBOUND's "
+                    "other error estimate entirely", ADAPTIVE_MODE);
+        }
         else if (!strcmp(argv[i], "--steps") && i + 1 < argc) steps = atol(argv[++i]);
         else if (!strcmp(argv[i], "--sample") && i + 1 < argc) sample = atol(argv[++i]);
         else if (!strcmp(argv[i], "--cs") && i + 1 < argc){ const char *m = argv[++i]; if (!strcmp(m, "kahan")) cs_augmented = 0; else if (!strcmp(m, "augmented")) cs_augmented = 1; else die("--cs kahan|augmented"); }
@@ -1546,6 +1571,10 @@ void ias15_engine_set_G_f64(double g_){
 /* softening SQUARED, taken in the run's format. At binary64 that is
  * REBOUND's own fl64(s*s); above it, the more accurate square, which
  * is what a caller asking for a wide format is asking for. */
+/* 2 = PRS23, 3 = AARSETH85. Anything else is refused by the caller;
+ * this only records it. */
+void ias15_engine_set_adaptive_mode(int mode){ ADAPTIVE_MODE = mode; }
+
 /* REBOUND's ias15->min_dt: a floor on |dt|, 0 to disable, which is
  * REBOUND's own default and the value every gate here runs. */
 void ias15_engine_set_min_dt_f64(double m_){

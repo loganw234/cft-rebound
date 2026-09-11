@@ -76,6 +76,8 @@ static double soften = 0.0;          /* applied by build() to BOTH sides, so
                                       * the softening case compares like with
                                       * like; set and reset around it */
 static double min_dt = 0.0;          /* the same, for IAS15's step floor */
+static int adaptive_mode = 2;        /* and for the step criterion: 2 PRS23,
+                                      * 3 AARSETH85 */
 
 static struct reb_simulation *build(const struct body *bs, size_t n, double dt, double epsilon,
                                     int use_cft){
@@ -90,11 +92,13 @@ static struct reb_simulation *build(const struct body *bs, size_t n, double dt, 
         s->epsilon = epsilon;
         s->format = wide_format;
         s->min_dt = min_dt;
+        s->adaptive_mode = adaptive_mode;
     }else{
         struct reb_integrator_ias15_state *s = reb_simulation_set_integrator(r, "ias15");
         if (!s){ fprintf(stderr, "check_dropin: ias15 missing\n"); exit(2); }
         s->epsilon = epsilon;
         s->min_dt = min_dt;
+        s->adaptive_mode = adaptive_mode;
     }
     for (size_t i = 0; i < n; i++){
         struct reb_particle p = {0};
@@ -458,6 +462,20 @@ int main(int argc, char **argv){
     case_steps("kepler, floored at 0.5",      kepler, 2,      8.0,  1e-9, 200);
     case_steps("pythagorean, floored at 0.5", pythagorean, 3, 5.0,  1e-9, 200);
     min_dt = 0.0;
+
+    /* AARSETH85. It shares every sum with PRS23 and differs in one
+     * expression, so the risk is not that it is wrong but that it is
+     * never reached - a mode the port ignored would leave these cases
+     * passing as PRS23 against PRS23. The program-side check beside
+     * this file measures that the two criteria choose different steps;
+     * here the assertion is the usual one, that whichever REBOUND
+     * picks, the port picks the same bits. */
+    printf("\nwith IAS15's AARSETH85 step criterion (adaptive_mode 3):\n");
+    adaptive_mode = 3;
+    case_steps("kepler, A85",        kepler, 2,      0.05, 1e-9, 400);
+    case_steps("pythagorean, A85",   pythagorean, 3, 0.01, 1e-9, 400);
+    case_steps("five bodies, A85",   five, 5,        0.5,  1e-9, 300);
+    adaptive_mode = 2;
 
     case_refusals();
 

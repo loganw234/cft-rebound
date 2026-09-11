@@ -173,9 +173,11 @@ static int supported(struct reb_simulation *r, struct cft_ias15_state *st){
         refuse(r, "ias15_cft: state->E is %zu. An ensemble is E independent systems in "
                   "one run and a reb_simulation is one system; use the standalone "
                   "ias15_cft program for ensembles (docs/ENSEMBLE.md).", st->E); return 0; }
-    if (st->adaptive_mode != 2){
-        refuse(r, "ias15_cft: adaptive_mode %d is not implemented; only PRS23 (2), "
-                  "REBOUND's default since January 2024, is.", st->adaptive_mode); return 0; }
+    if (st->adaptive_mode != 2 && st->adaptive_mode != 3){
+        refuse(r, "ias15_cft: adaptive_mode %d is not implemented. PRS23 (2), "
+                  "REBOUND's default since January 2024, and AARSETH85 (3) are; "
+                  "INDIVIDUAL (0) and GLOBAL (1) take REBOUND's other error "
+                  "estimate entirely and are not.", st->adaptive_mode); return 0; }
     if (st->format != CFT_FP64 && st->format != CFT_FP128 && st->format != CFT_FP256){
         refuse(r, "ias15_cft: format %d is not one of CFT_FP64 (%d), CFT_FP128 (%d) or "
                   "CFT_FP256 (%d).", st->format, CFT_FP64, CFT_FP128, CFT_FP256); return 0; }
@@ -409,6 +411,7 @@ static void cft_ias15_step(struct reb_simulation *r, void *p){
      * rather than what the first step saw. */
     ias15_engine_set_softening_f64(r->softening);
     ias15_engine_set_min_dt_f64(st->min_dt);
+    ias15_engine_set_adaptive_mode(st->adaptive_mode);
 
     /* --- the particles ------------------------------------------------
      * The wide state is the truth. r->particles are re-promoted only if

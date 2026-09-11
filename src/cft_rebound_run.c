@@ -175,8 +175,9 @@ int cft_rebound_check(const struct reb_simulation *r, char *why, size_t n){
         say(why, n, b); return 1; }
     if (r->integrator.state && r->integrator.name && strcmp(r->integrator.name, "ias15") == 0){
         const struct reb_integrator_ias15_state *s = r->integrator.state;
-        if (s->adaptive_mode != 2){
-            say(why, n, "only IAS15's PRS23 step criterion (adaptive_mode 2) is ported"); return 1; }
+        if (s->adaptive_mode != 2 && s->adaptive_mode != 3){
+            say(why, n, "only IAS15's PRS23 (adaptive_mode 2) and AARSETH85 (3) "
+                        "step criteria are ported"); return 1; }
     }
     say(why, n, "");
     return 0;

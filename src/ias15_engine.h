@@ -76,6 +76,10 @@ void   ias15_engine_set_max_iter(int n);
 void   ias15_engine_set_arith_fma(int on);
 
 void   ias15_engine_set_G_f64(double G);
+/* IAS15's adaptive_mode: 2 (PRS23) or 3 (AARSETH85). They share every
+ * sum and differ in one expression; 0 and 1 are REBOUND's other
+ * branch and are not implemented. */
+void   ias15_engine_set_adaptive_mode(int mode);
 /* IAS15's min_dt, a floor on |dt|. 0 disables it, which is REBOUND's
  * default: at 0 the comparison is false and nothing is selected. */
 void   ias15_engine_set_min_dt_f64(double min_dt);
