@@ -332,10 +332,32 @@ static void p_boundary(struct reb_simulation *r){ r->boundary = REB_BOUNDARY_PER
 static void p_testp(struct reb_simulation *r){ r->N_active = 1; }
 static void p_var(struct reb_simulation *r){ reb_simulation_add_variation_1st_order(r, -1); }
 static void p_megno(struct reb_simulation *r){ r->calculate_megno = 1; }
+/* The inverse of refused(): a feature this integrator must ACCEPT.
+ * Worth its own helper because "the clock moved and nothing errored"
+ * is the whole assertion, and writing it inline three times would
+ * invite one of them to be written differently. */
+static int accepted(const char *what, void (*prepare)(struct reb_simulation *)){
+    struct reb_simulation *r = build(kepler, 2, 0.05, 1e-9, 1);
+    prepare(r);
+    double t_before = r->t;
+    r->integrator.callbacks.step(r, r->integrator.state);
+    int ok = (r->status != REB_STATUS_GENERIC_ERROR) &&
+             (memcmp(&t_before, &r->t, sizeof(double)) != 0);
+    int status = (int)r->status;
+    reb_simulation_free(r);
+    if (ok){ printf("  ok   %s accepted, the clock moved\n", what); return 0; }
+    printf("  FAIL %s: status %d, and the clock did not move\n", what, status);
+    failures++;
+    return 1;
+}
+
 static void nop_gravity(struct reb_simulation *r){ (void)r; }
 static void p_gravcustom(struct reb_simulation *r){ r->gravity_custom = nop_gravity; }
 /* Through REBOUND's own constructor, so N_odes is set the way a user
- * would set it. The ODE is never stepped - that is the point. */
+ * would set it. reb_simulation_step() integrates it with its own
+ * Bulirsch-Stoer state because this integrator is not named "bs",
+ * exactly as it does under REBOUND's ias15 - so this must be
+ * accepted, not refused. */
 static void p_odes(struct reb_simulation *r){ reb_ode_create(r, 1); }
 static void p_mindt(struct reb_simulation *r){ cft_ias15_get_state(r)->min_dt = 1e-8; }
 static void p_mode(struct reb_simulation *r){ cft_ias15_get_state(r)->adaptive_mode = 0; }
@@ -349,7 +371,6 @@ static void case_refusals(void){
     refused("REB_GRAVITY_COMPENSATED",   p_gravity);
     refused("the tree code",             p_tree);
     refused("a custom gravity routine",  p_gravcustom);
-    refused("attached ODE sets",         p_odes);
     refused("collision detection",       p_collision);
     refused("periodic boundaries",       p_boundary);
     refused("test particles (N_active)", p_testp);
@@ -357,6 +378,10 @@ static void case_refusals(void){
     refused("MEGNO",                     p_megno);
     refused("min_dt",                    p_mindt);
     refused("adaptive_mode != PRS23",    p_mode);
+
+    /* And one that must NOT be refused. It was, for one day, on a
+     * premise that was not true. */
+    accepted("an attached ODE set",      p_odes);
 }
 
 /* ------------------------------------------------------------------ */

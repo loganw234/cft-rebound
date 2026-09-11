@@ -46,7 +46,20 @@
  * changed, so a callback that edits a coordinate is honoured here.
  * cft_rebound_check() refuses them because the subprocess API cannot
  * see a callback at all - it writes a problem file and runs a program.
- * That is a capability this path has, not a check it is missing.
+ * That is a capability this path has, not a check it is missing -
+ * AT BINARY64. Above it, read the warning below before using one.
+ *
+ * WARNING, and it is not a small one. r->particles are binary64 and
+ * always will be, so a callback that edits a coordinate makes the step
+ * re-promote from them - and the guard is one comparison over the
+ * whole array while the promote covers all 3N coordinates, so EVERY
+ * coordinate's wide tail is discarded, not only the edited one. At
+ * CFT_FP256 a REBOUNDx operator that nudges one coordinate therefore
+ * truncates the entire state to binary64 on every step: binary256
+ * arithmetic over binary64 state, at binary256 prices, silently. Use
+ * the hooks at CFT_FP64, where the promotion is exact and costs
+ * nothing, and treat a wide run with a coordinate-writing callback as
+ * a binary64 run until a selective promote exists.
  * r->gravity_custom and r->N_odes were in that sentence too until
  * 2026-09-10 and should not have been: the engine computes gravity
  * itself and the wide state carries particles only, so each would have

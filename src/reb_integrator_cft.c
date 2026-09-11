@@ -125,10 +125,15 @@ static int supported(struct reb_simulation *r, struct cft_ias15_state *st){
                   "issues REBOUND's basic pairwise gravity itself, so r->gravity_custom "
                   "would never be called and the run would answer a different "
                   "problem."); return 0; }
-    if (r->N_odes != 0){
-        refuse(r, "ias15_cft: attached ODE sets are not supported (r->N_odes = %zu). The "
-                  "wide state carries the particles only, so the ODEs would not be "
-                  "integrated at all.", r->N_odes); return 0; }
+    /* r->N_odes is NOT refused, and the refusal this replaces was wrong.
+     * reb_simulation_step() integrates attached ODE sets itself, with a
+     * private Bulirsch-Stoer state, for every integrator whose name is
+     * not "bs" (simulation.c, "Integrate other ODEs") - so they are
+     * integrated here exactly as they are under REBOUND's own ias15,
+     * at binary64 and decoupled from the particles, over the
+     * r->dt_last_done this integrator sets. Refusing them made this
+     * port stricter than REBOUND for no reason, on a premise that was
+     * not true. */
     if (r->N_var || r->particles_var){
         refuse(r, "ias15_cft: variational particles are not supported (r->N_var = %zu). "
                   "The wide state carries the real particles only.", r->N_var); return 0; }
