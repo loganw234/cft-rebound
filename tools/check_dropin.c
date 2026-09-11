@@ -83,7 +83,13 @@ static void p_gravity(struct reb_simulation *r){ r->gravity = REB_GRAVITY_COMPEN
 static void p_tree(struct reb_simulation *r){ r->gravity = REB_GRAVITY_TREE; }
 static void p_collision(struct reb_simulation *r){ r->collision = REB_COLLISION_DIRECT; }
 static void p_boundary(struct reb_simulation *r){ r->boundary = REB_BOUNDARY_PERIODIC; }
-static void p_testp(struct reb_simulation *r){ r->N_active = 1; }
+/* r->N_active = 1 was the poison here until the engine learned
+ * REBOUND's two gravity loops; test particles are a drop-in capability
+ * now and tools/cases_pairs.c runs them against REBOUND's own ias15.
+ * What is left of the row on this path is the one value that means
+ * nothing - more active particles than particles - which REBOUND does
+ * not check and answers with a read past the end of r->particles. */
+static void p_testp(struct reb_simulation *r){ r->N_active = r->N + 3; }
 static void p_var(struct reb_simulation *r){ reb_simulation_add_variation_1st_order(r, -1); }
 static void p_megno(struct reb_simulation *r){ r->calculate_megno = 1; }
 /* The inverse of refused(): a feature this integrator must ACCEPT.
@@ -193,7 +199,7 @@ static void case_refusals(void){
     refused("gravity_module", "the tree code",                p_tree);
     refused("gravity_custom", "a custom gravity routine",     p_gravcustom);
     refused("boundary",       "periodic boundaries",          p_boundary);
-    refused("test_particles", "test particles (N_active)",    p_testp);
+    refused("test_particles", "N_active greater than N",      p_testp);
     refused("particle_map",   "r->map",                       p_map);
     refused("variational",    "variational particles",        p_var);
     refused("megno",          "MEGNO",                        p_megno);
@@ -241,6 +247,7 @@ int main(int argc, char **argv){
     cases_core();
     /* A parcel's topic goes here, one line, beside its own file. */
     cases_forces();
+    cases_pairs();
     case_refusals();
 
     printf("\n");

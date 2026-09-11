@@ -308,7 +308,8 @@ dropin: $(B)/libcft_ias15.a $(B)/check_dropin$(EXE)
 # cases_*.c. A parcel adds its file here and nowhere else -
 # tools/dropin_cases.h says how.
 CASES_SRC := tools/check_dropin.c tools/dropin_common.c \
-             tools/cases_core.c tools/cases_wide.c tools/cases_forces.c
+             tools/cases_core.c tools/cases_wide.c tools/cases_forces.c \
+             tools/cases_pairs.c
 
 $(B)/check_dropin$(EXE): $(CASES_SRC) tools/dropin_cases.h src/cft_supported.h $(DROPIN_OBJ) $(B)/librebound.a $(CFTLIB)
 	$(CC) $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -Isrc -I$(CFT)/include -I$(REB) \

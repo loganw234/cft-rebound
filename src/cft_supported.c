@@ -130,13 +130,21 @@ static void say_gravity_module(const struct cft_support_ctx *c, char *b, size_t 
              (int)c->r->gravity, which);
 }
 
-static int hit_ignore_terms(const struct cft_support_ctx *c){
-    return c->r->gravity_ignore_terms != REB_GRAVITY_IGNORE_TERMS_NONE;
-}
-static void say_ignore_terms(const struct cft_support_ctx *c, char *b, size_t n){
-    (void)c;
-    snprintf(b, n, "r->gravity_ignore_terms must be NONE; this port computes every pair.");
-}
+/* r->gravity_ignore_terms had a row here, on the subprocess path, until
+ * the pair list stopped being the whole triangle. It is gone, and not
+ * because the port now honours the field: under IAS15 the field cannot
+ * be honoured by anybody. reb_integrator_ias15_step() writes
+ * REB_GRAVITY_IGNORE_TERMS_NONE over it at the top of EVERY step
+ * (integrator_ias15.c:875) before the step loop runs, so no value a
+ * user sets survives to reach gravity. Both paths here are IAS15 - the
+ * integrator_name row is what makes that true of the subprocess API -
+ * so both compute NONE, which is what REBOUND computes, and refusing a
+ * setting that changes nothing was refusing a run that would have been
+ * right. The engine takes the value anyway
+ * (ias15_engine_set_active()'s third argument) and reproduces all three
+ * bounds, so the mechanism exists and tools/cases_pairs.c measures it
+ * against REBOUND's own gravity; what does not exist is a way for
+ * IAS15 to deliver a value other than NONE to it. */
 
 /* Two behaviours, one capability, and the row keeps them together
  * rather than splitting into two rows the gate would have to know
@@ -197,20 +205,78 @@ static void say_boundary(const struct cft_support_ctx *c, char *b, size_t n){
              (int)c->r->boundary);
 }
 
+/* The map is a DIFFERENT question from N_active, and the reason it
+ * stays refused while test particles do not.
+ *
+ * N_active is a setting of gravity: it changes which pairs are summed,
+ * and every particle is still integrated. The map is a setting of the
+ * INTEGRATOR: IAS15 runs its whole state over N_map elements indexed
+ * through map[] (integrator_ias15.c:287-289 and :314), while gravity
+ * knows nothing about it and still runs over all r->N - gravity.c has
+ * no map in it. A mapped step therefore has an integrated set and a
+ * gravity set of different lengths, and this engine's x, v, b, e and
+ * every scratch vector in the step are one array at 3N used as both.
+ *
+ * Nothing is lost by refusing it. r->map is set by MERCURIUS and TRACE
+ * for their close-encounter sub-steps (integrator_mercurius.c:404,
+ * integrator_trace.c:749), and both set r->gravity = REB_GRAVITY_CUSTOM
+ * in the same breath - which the gravity_module row refuses first. */
 static int hit_particle_map(const struct cft_support_ctx *c){
     return c->r->map != NULL || c->r->N_map != 0;
 }
 static void say_particle_map(const struct cft_support_ctx *c, char *b, size_t n){
     (void)c;
-    snprintf(b, n, "r->map (integrating a subset of the particles) is not supported.");
+    snprintf(b, n, "r->map is not supported. It integrates a SUBSET of the particles "
+                   "while gravity still runs over all of them, so the integrated set "
+                   "and the gravity set have different lengths; this engine holds one "
+                   "3N state that is both. Test particles are a different setting and "
+                   "ARE supported: r->N_active with r->testparticle_type. r->map is "
+                   "REBOUND's own hook for MERCURIUS and TRACE, which select "
+                   "REB_GRAVITY_CUSTOM with it and are refused for that first.");
 }
 
+/* Two different questions on the two paths, which is why the row stayed
+ * instead of being deleted when the drop-in learned test particles.
+ *
+ * The DROP-IN computes them: ias15_engine_set_active() gives the engine
+ * REBOUND's own two loops, so N_active and testparticle_type select
+ * which pairs are summed and in which order, exactly as gravity.c:167
+ * does. All that is left to refuse is the one value that has no meaning
+ * - more active particles than there are particles. REBOUND does not
+ * refuse that; reb_gravity_basic_calculate_acceleration() runs its
+ * outer loop to N_active and reads past the end of r->particles. There
+ * is no bit-identity to claim against a heap overread, so it is named
+ * here instead.
+ *
+ * r->testparticle_type needs no row of its own on EITHER path. On the
+ * drop-in it is computed. On the subprocess path it only means anything
+ * when some particle is inactive, and the next line refuses that.
+ *
+ * The SUBPROCESS API still refuses any inactive particle: the run is
+ * written out as a problem file and handed to the standalone ias15_cft
+ * program, and that file carries masses and coordinates - there is
+ * nowhere in it to say that a particle is present for gravity but not
+ * as a source. */
 static int hit_test_particles(const struct cft_support_ctx *c){
-    return c->r->N_active != (size_t)-1 && c->r->N_active != c->r->N;
+    if (c->r->N_active == (size_t)-1) return 0;
+    if (!c->have_state) return c->r->N_active != c->r->N;
+    return c->r->N_active > c->r->N;
 }
 static void say_test_particles(const struct cft_support_ctx *c, char *b, size_t n){
-    snprintf(b, n, "test particles are not supported (r->N_active = %zu of %zu). "
-                   "Every particle in the engine's pair list is active.",
+    if (c->have_state){
+        snprintf(b, n, "r->N_active is %zu and there are %zu particles. Test particles "
+                       "ARE supported - set N_active to the number of massive ones, "
+                       "which must be at or below r->N. REBOUND itself does not check "
+                       "this: its gravity loop runs to N_active and reads past the end "
+                       "of r->particles, so there is no behaviour here to reproduce.",
+                 c->r->N_active, c->r->N);
+        return;
+    }
+    snprintf(b, n, "test particles are not supported by this API (r->N_active = %zu of "
+                   "%zu): the run is written out as a problem file for the standalone "
+                   "ias15_cft program, and that file has no way to say that a particle "
+                   "is present for gravity but is not a source. The drop-in integrator "
+                   "supports them, with r->testparticle_type.",
              c->r->N_active, c->r->N);
 }
 
@@ -305,7 +371,7 @@ static void say_max_iter(const struct cft_support_ctx *c, char *b, size_t n){
  * forces and velocity-dependent forces, all of which need something
  * running in THIS process between or during the steps; the subprocess
  * API refuses those and also refuses timestep modifications,
- * ignore-terms, a foreign integrator and a body count past the cap;
+ * a foreign integrator and a body count past the cap;
  * MEGNO, the ensemble count, the format and max_iter are settings only
  * the drop-in has.
  */
@@ -320,7 +386,6 @@ const struct cft_support_row cft_support_rows[] = {
     { "timestep_mods",     CFT_PATH_SUBPROCESS, hit_timestep_mods,     say_timestep_mods     },
     { "veldep_forces",     CFT_PATH_SUBPROCESS, hit_veldep,            say_veldep            },
     { "gravity_module",    CFT_PATH_BOTH,       hit_gravity_module,    say_gravity_module    },
-    { "ignore_terms",      CFT_PATH_SUBPROCESS, hit_ignore_terms,      say_ignore_terms      },
     { "collision",         CFT_PATH_BOTH,       hit_collision,         say_collision         },
     { "ghost_boxes",       CFT_PATH_BOTH,       hit_ghost_boxes,       say_ghost_boxes       },
     { "boundary",          CFT_PATH_BOTH,       hit_boundary,          say_boundary          },
