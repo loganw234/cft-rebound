@@ -15,7 +15,15 @@
 #   make check-archive    just those gates (seconds)
 #   make dropin           the drop-in library and its gate
 #   make python-lib       the shared library for Python; check-python
-#                         runs the equivalence gate through it
+#                         runs the equivalence gate through it and
+#                         check-python-control is its negative control.
+#                         Linux, macOS and Windows - but Windows obeys
+#                         a different rule and LINKS the wheel's
+#                         librebound, so the DLL is tied to one Python
+#                         minor version. docs/PYTHON.md, "The Windows
+#                         rule".
+#   make install-python-lib  that library into LIBDIR. Separate from
+#                         install because it needs a REBOUND wheel.
 #   make example          build the two worked examples and run them
 #   make install          headers and libraries where a REBOUND build
 #                         can find them; PREFIX and DESTDIR as usual
@@ -34,6 +42,13 @@
 # TMP/TEMP must be MAKE variables (gcc's subprocesses do not see a
 # shell export from Git Bash), OS=Windows_NT selects libcft's dllexport
 # branch, and PYTHON must be an interpreter with mpmath.
+#
+# The same trap catches PYTHONPATH, and python-lib and check-python are
+# the targets that care: MSYS2 make strips the environment it hands a
+# recipe, so a rebound reachable only through PYTHONPATH or a conda
+# activation is invisible to $(PYTHON) here. Pass it the same way -
+# `make PYTHONPATH=... python-lib`. A wheel installed into the
+# interpreter named by PYTHON= needs none of this.
 
 CC      ?= gcc
 PYTHON  ?= python3
@@ -82,18 +97,63 @@ else
   CFT_MAKEVARS :=
 endif
 
-# The shared library for Python. POSIX only: a Windows DLL may not
-# carry undefined symbols, so it would have to link against the
-# wheel's librebound rather than leave REBOUND's symbols to the
-# loader, and that is a different rule - see docs/PYTHON.md.
-ifeq ($(shell uname -s 2>/dev/null),Darwin)
-  SHLIB     := libcft_ias15.dylib
-  SHFLAGS   := -dynamiclib -Wl,-install_name,@rpath/libcft_ias15.dylib
-  CFT_SHLIB := $(CFT)/libcft.dylib
+# The shared library for Python. Three platforms, and Windows obeys a
+# different rule from the other two - see docs/PYTHON.md, "The Windows
+# rule". In short: a DLL may not carry undefined symbols, so it LINKS
+# the wheel's librebound instead of leaving REBOUND's symbols to the
+# loader, and libcft goes in as the archive rather than as a second
+# shared object.
+#
+#   SHLIB      what to build
+#   SHFLAGS    how to link it
+#   SHPIC      -fPIC, where that means something
+#   CFT_SHLIB  the libcft this depends on (a prerequisite)
+#   CFT_SHLINK how to put that libcft on the link line
+#   SHRPATH    how the result finds libcft at run time
+ifeq ($(OS),Windows_NT)
+  SHLIB      := libcft_ias15.dll
+  # Every global is exported. Nothing in our sources is marked
+  # __declspec(dllexport) - cft.h's CFT_API is plain unless
+  # CFT_BUILD_SHARED is defined and we do not define it - so ld would
+  # auto-export anyway; saying it means a header that grows an export
+  # mark later cannot silently turn cft_ias15_configure into a symbol
+  # ctypes can no longer find.
+  SHFLAGS    := -shared -Wl,--export-all-symbols
+  SHPIC      :=
+  # libcft goes in as the ARCHIVE, and can here for the reason it
+  # cannot on POSIX: the member that stops a .so is backend_xrt.o, C++,
+  # and it is only built when XRT=1 - XRT is Linux-only, so a Windows
+  # libcft.a is fifteen C objects. The DLL is therefore one file with
+  # no libcft.dll to find beside it.
+  CFT_SHLIB  := $(CFTLIB)
+  CFT_SHLINK := $(CFTLIB)
+  SHRPATH    :=
+  # Nothing extra beside the DLL: the archive is inside it.
+  CFT_SHLIB_EXTRA :=
+else ifeq ($(shell uname -s 2>/dev/null),Darwin)
+  SHLIB      := libcft_ias15.dylib
+  SHFLAGS    := -dynamiclib -Wl,-install_name,@rpath/libcft_ias15.dylib
+  SHPIC      := -fPIC
+  CFT_SHLIB  := $(CFT)/libcft.dylib
+  CFT_SHLINK := -L$(CFT) -lcft
+  SHRPATH    := -Wl,-rpath,@loader_path -Wl,-rpath,$(abspath $(CFT))
+  CFT_SHLIB_EXTRA := $(CFT_SHLIB)
 else
-  SHLIB     := libcft_ias15.so
-  SHFLAGS   := -shared
-  CFT_SHLIB := $(CFT)/libcft.so
+  SHLIB      := libcft_ias15.so
+  SHFLAGS    := -shared
+  SHPIC      := -fPIC
+  CFT_SHLIB  := $(CFT)/libcft.so
+  CFT_SHLINK := -L$(CFT) -lcft
+  SHRPATH    := -Wl,-rpath,'$$ORIGIN' -Wl,-rpath,$(abspath $(CFT))
+  CFT_SHLIB_EXTRA := $(CFT_SHLIB)
+endif
+
+# What to hand cft_rebound.load(). MSYS/Cygwin make gives recipes POSIX
+# paths and a native Windows Python cannot open /c/..., so convert.
+ifeq ($(OS),Windows_NT)
+  SHLIB_PATH := $(shell cygpath -m '$(CURDIR)' 2>/dev/null || echo '$(CURDIR)')/$(B)/$(SHLIB)
+else
+  SHLIB_PATH := $(CURDIR)/$(B)/$(SHLIB)
 endif
 
 # An XRT build of libcft.a carries backend_xrt.o, which is C++ and needs
@@ -217,11 +277,21 @@ $(B)/libcft_ias15.a: $(DROPIN_OBJ) $(B)/cft_archive.o
 # carries src/cft_ias15_shared.c, whose constructor registers the
 # integrator at dlopen time. A C caller linking the archive calls
 # cft_ias15_register() itself and must not get a constructor doing it
-# behind their back.
+# behind their back. (mingw runs the same __attribute__((constructor))
+# from DllMain's DLL_PROCESS_ATTACH, so the DLL registers itself at
+# LoadLibrary time exactly as the .so does at dlopen time.)
+#
+# $(REB_USEFLAGS) is deliberately absent, and on Windows that is
+# load bearing rather than an omission: rebound.h marks its API
+# __declspec(dllimport) unless BUILDINGLIBREBOUND is defined, and
+# dllimport is precisely what this library wants - it imports those
+# symbols from the librebound already in the process. Everything else
+# in this Makefile links REBOUND statically and therefore does define
+# it.
 PIC_OBJ := $(B)/pic/ias15_cft_lib.o $(B)/pic/reb_integrator_cft.o \
            $(B)/pic/cft_ias15_fields.o $(B)/pic/cft_archive.o \
            $(B)/pic/cft_ias15_shared.o $(B)/pic/cft_supported.o
-PICFLAGS := $(CSTD) $(CFLAGS) $(WARN) -fPIC -Isrc -I$(CFT)/include -I$(REB)
+PICFLAGS := $(CSTD) $(CFLAGS) $(WARN) $(SHPIC) -Isrc -I$(CFT)/include -I$(REB)
 
 $(B)/pic/ias15_cft_lib.o: src/ias15_cft.c src/ias15_constants.h src/ias15_engine.h src/ias15_limits.h
 	@mkdir -p $(B)/pic
@@ -247,39 +317,79 @@ $(B)/pic/cft_supported.o: src/cft_supported.c src/cft_supported.h src/ias15_limi
 	@mkdir -p $(B)/pic
 	$(CC) -c $(PICFLAGS) -o $@ src/cft_supported.c
 
-# REBOUND's symbols are deliberately NOT linked: the caller's process
-# already has librebound loaded and python/cft_rebound.py promotes it
-# to RTLD_GLOBAL before opening this. Linking a second copy would give
-# a second integrator list and a name that can never be selected.
-# libcft.a will NOT go into a shared object: backend_xrt.o is C++ and
-# carries relocations a shared object cannot use (R_X86_64_PC32 against
-# a GLIBCXX symbol). cft-fp256 builds a proper shared libcft from its
-# own PIC objects, so use that. Two rpaths: $$ORIGIN for an installed
-# layout where the two sit together, and the tree for running it in
-# place without an install.
+# On POSIX, REBOUND's symbols are deliberately NOT linked: the caller's
+# process already has librebound loaded and python/cft_rebound.py
+# promotes it to RTLD_GLOBAL before opening this. Linking a second copy
+# would give a second integrator list and a name that can never be
+# selected.
+#
+# libcft.a will NOT go into a POSIX shared object: backend_xrt.o is C++
+# and carries relocations a shared object cannot use (R_X86_64_PC32
+# against a GLIBCXX symbol). cft-fp256 builds a proper shared libcft
+# from its own PIC objects, so use that. Two rpaths: $$ORIGIN for an
+# installed layout where the two sit together, and the tree for running
+# it in place without an install.
+#
+# On Windows both halves of that are different, and the Windows rule is
+# below. Only build cft-fp256's shared library where we actually want
+# one - on Windows CFT_SHLIB is the archive, which already has a rule.
+ifneq ($(CFT_SHLIB),$(CFTLIB))
 $(CFT_SHLIB):
 	$(MAKE) -C $(CFT) CC=$(CC) PYTHON=$(PYTHON) $(CFT_MAKEVARS) $(notdir $(CFT_SHLIB))
+endif
 
-$(B)/$(SHLIB): $(PIC_OBJ) $(CFT_SHLIB)
-	$(CC) $(SHFLAGS) -o $@ $(PIC_OBJ) -L$(CFT) -lcft \
-	    -Wl,-rpath,'$$ORIGIN' -Wl,-rpath,$(abspath $(CFT)) $(LIBS)
+ifeq ($(OS),Windows_NT)
+# A Windows DLL may not carry undefined symbols. So this one LINKS the
+# librebound it is going to be loaded into - the wheel's .pyd, asked of
+# the interpreter that will load it - and the import table then names
+# that one exact file. That is the whole cost of the Windows port and
+# it is not hideable: a DLL built for cp312 cannot be loaded by cp313,
+# and python/cft_rebound.py says so by name rather than letting the
+# loader say "The specified module could not be found."
+#
+# Nothing has to be on the link line for libcft: unlike the .so, the
+# DLL swallows the archive whole (CFT_SHLINK above says why).
+$(B)/$(SHLIB): $(PIC_OBJ) $(CFT_SHLIB) | check-rebound-match
+	@pyd=`$(PYTHON) -c 'import rebound;print(rebound.__libpath__)' 2>/dev/null`; \
+	if [ -z "$$pyd" ]; then \
+	    echo "$@: no rebound importable by $(PYTHON)." >&2; \
+	    echo "  A Windows DLL may not carry undefined symbols, so this library must" >&2; \
+	    echo "  link the librebound it will be loaded into, and there is none to link." >&2; \
+	    echo "      $(PYTHON) -m pip install rebound" >&2; \
+	    exit 1; \
+	fi; \
+	echo "$(CC) $(SHFLAGS) -o $@ \$$(PIC_OBJ) $(CFT_SHLINK) $$pyd $(LIBS)"; \
+	$(CC) $(SHFLAGS) -o $@ $(PIC_OBJ) $(CFT_SHLINK) "$$pyd" $(LIBS)
+	@command -v objdump >/dev/null 2>&1 && \
+	    echo "$@ imports: `objdump -p $@ | sed -n 's/.*DLL Name: //p' | sort -u | tr '\n' ' '`" || true
+else
+$(B)/$(SHLIB): $(PIC_OBJ) $(CFT_SHLIB) | check-rebound-match
+	$(CC) $(SHFLAGS) -o $@ $(PIC_OBJ) $(CFT_SHLINK) $(SHRPATH) $(LIBS)
+endif
 
 .PHONY: python-lib check-python
-python-lib: $(B)/$(SHLIB) check-rebound-match
+python-lib: $(B)/$(SHLIB)
 	@echo
 	@echo "built $(B)/$(SHLIB). From Python:"
 	@echo "    import cft_rebound"
-	@echo "    cft_rebound.load('$(CURDIR)/$(B)/$(SHLIB)')"
+	@echo "    cft_rebound.load(r'$(SHLIB_PATH)')"
 
 # The library is compiled against the pinned REBOUND headers and is
 # loaded into a process running the WHEEL's REBOUND, so the two must be
 # the same source or struct reb_simulation is laid out differently on
 # each side of the call and nothing says so. They are identical for
-# rebound 5.1.1 and the pinned bdfda4bd; this refuses to build a
-# library that would be quietly wrong if that ever stops being true.
+# rebound 5.1.1 and the pinned bdfda4bd - on Windows too, where the
+# wheel is MSVC-built and the library is not - and this refuses to
+# build a library that would be quietly wrong if that ever stops being
+# true. It is an order-only prerequisite of $(B)/$(SHLIB), so it now
+# runs BEFORE the link rather than beside it, and check-python gets it
+# too; order-only means a phony prerequisite cannot force a relink.
+#
+# chr(92) rather than a backslash literal: the path the wheel reports
+# on Windows is C:\..., and MSYS cmp is handed it as a shell word.
 .PHONY: check-rebound-match
 check-rebound-match:
-	@w=`$(PYTHON) -c 'import rebound,os;print(os.path.dirname(rebound.__libpath__))' 2>/dev/null`; \
+	@w=`$(PYTHON) -c 'import rebound,os;print(os.path.dirname(rebound.__libpath__).replace(chr(92),"/"))' 2>/dev/null`; \
 	if [ -z "$$w" ]; then \
 	    echo "check-rebound-match: no rebound wheel importable by $(PYTHON); skipping the comparison"; \
 	elif [ ! -f "$$w/src/rebound.h" ]; then \
@@ -296,9 +406,23 @@ check-rebound-match:
 	fi
 
 # The Python gate: REBOUND's own ias15 against the registered one,
-# from Python, on the same problem and the same fixed step.
+# from Python, on the same problem and the same fixed step. The same 13
+# values on every platform, and the same claim: at binary64 they are
+# identical or the gate has failed. $(SHLIB_PATH) rather than
+# $(CURDIR)/... because MSYS make hands recipes /c/... and a native
+# Windows Python cannot open that.
 check-python: $(B)/$(SHLIB)
-	$(PYTHON) python/example_equivalence.py --library $(CURDIR)/$(B)/$(SHLIB)
+	$(PYTHON) python/example_equivalence.py --library '$(SHLIB_PATH)'
+
+# The control for it. The same run at binary128 MUST differ: if a
+# format change leaves 13 values identical then the format is being
+# accepted and ignored, and check-python above is comparing binary64
+# against binary64 and passing against itself. --expect-differ inverts
+# the exit status, so this fails loudly when nothing moved.
+.PHONY: check-python-control
+check-python-control: $(B)/$(SHLIB)
+	$(PYTHON) python/example_equivalence.py --library '$(SHLIB_PATH)' \
+	    --format fp128 --expect-differ
 
 .PHONY: dropin
 dropin: $(B)/libcft_ias15.a $(B)/check_dropin$(EXE)
@@ -445,8 +569,28 @@ install: all $(CFTLIB)
 	@echo "installed into $(DESTDIR)$(PREFIX). Two lines in your own build:"
 	@echo "    CFLAGS  += -I$(INCLUDEDIR)"
 	@echo "    LDLIBS  += -L$(LIBDIR) -lcft_rebound -lcft"
+	@echo
+	@echo "The Python integrator is NOT part of this: it is built against the"
+	@echo "REBOUND wheel a particular interpreter has, so it cannot be a"
+	@echo "system-wide artifact the way these are. \`make install-python-lib\`"
+	@echo "if you want it in $(LIBDIR) anyway; docs/PYTHON.md says why there"
+	@echo "is no pip package."
+
+# Deliberately separate from install, and not a prerequisite of it: it
+# needs a REBOUND wheel, which on Windows it must LINK, so folding it in
+# would make `make install` fail for every C-only caller without one.
+.PHONY: install-python-lib
+install-python-lib: $(B)/$(SHLIB)
+	$(INSTALL) -d $(DESTDIR)$(LIBDIR)
+	$(INSTALL) -m 755 $(B)/$(SHLIB) $(DESTDIR)$(LIBDIR)/
+	@test -z "$(CFT_SHLIB_EXTRA)" || \
+	    $(INSTALL) -m 755 $(CFT_SHLIB_EXTRA) $(DESTDIR)$(LIBDIR)/
+	@echo
+	@echo "    cft_rebound.load('$(LIBDIR)/$(SHLIB)')"
 
 uninstall:
+	rm -f $(DESTDIR)$(LIBDIR)/$(SHLIB) \
+	      $(if $(CFT_SHLIB_EXTRA),$(DESTDIR)$(LIBDIR)/$(notdir $(CFT_SHLIB_EXTRA)))
 	rm -f $(DESTDIR)$(INCLUDEDIR)/cft_rebound.h
 	rm -f $(DESTDIR)$(INCLUDEDIR)/cft.h $(DESTDIR)$(INCLUDEDIR)/cft_config.h $(DESTDIR)$(INCLUDEDIR)/cft.hpp
 	rm -f $(DESTDIR)$(LIBDIR)/libcft_rebound.a $(DESTDIR)$(LIBDIR)/libcft_ias15.a \
