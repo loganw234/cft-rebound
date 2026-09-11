@@ -41,15 +41,23 @@ sys.path.insert(0, here)
 from check_equivalence import compare, run   # noqa: E402
 
 
+CAP_HEADER = os.path.join("src", "ias15_limits.h")
+
+
 def cap_from_source():
-    """CFT_MAX_BODIES as src/ias15_cft.c defines it - read, not
-    transcribed, so this test cannot drift from the program."""
-    path = os.path.join(root, "src", "ias15_cft.c")
+    """CFT_MAX_BODIES as the source defines it - read, not transcribed,
+    so this test cannot drift from the program.
+
+    It used to read src/ias15_cft.c, which is where the engine's copy
+    was until the subprocess API's second copy of 1024 was collapsed
+    into one header. This failing on that move is the check doing its
+    job: a transcribed cap would have gone on testing a stale number."""
+    path = os.path.join(root, CAP_HEADER)
     with open(path, encoding="utf-8") as f:
         for line in f:
             if line.startswith("#define CFT_MAX_BODIES"):
                 return int(line.split()[2])
-    raise SystemExit("check_bodycount: no #define CFT_MAX_BODIES in src/ias15_cft.c")
+    raise SystemExit("check_bodycount: no #define CFT_MAX_BODIES in " + CAP_HEADER)
 
 
 def make_problem(n, outdir):

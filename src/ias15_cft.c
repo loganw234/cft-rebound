@@ -69,6 +69,7 @@
  */
 #include "cft.h"
 #include "ias15_constants.h"
+#include "ias15_limits.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -348,8 +349,10 @@ static void make_constants(int tol_shift, int quiet){
  * ordinary workstation. Time is the tighter constraint in practice:
  * one fixed binary64 step on that host, the program's own clock, was
  * 1.130 s at N = 64, 13.598 s at 256, 51.067 s at 512 and 195.546 s
- * at 1024. README "Scope" states both. */
-#define CFT_MAX_BODIES 1024
+ * at 1024. README "Scope" states both.
+ *
+ * The number itself is src/ias15_limits.h, because the subprocess API
+ * checks it too and a cap written in two files is a cap that drifts. */
 
 static size_t E = 1;       /* systems in this run */
 static size_t N, NB, N3;   /* bodies per system, bodies in all, coordinates in all */

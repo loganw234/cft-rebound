@@ -28,6 +28,7 @@
  */
 
 #include "cft_rebound.h"
+#include "cft_supported.h"
 #include "hexfloat.h"
 #include "cft.h"
 
@@ -50,11 +51,6 @@
 #ifndef CFT_REBOUND_IAS15_DEFAULT
 #define CFT_REBOUND_IAS15_DEFAULT "ias15_cft"
 #endif
-
-/* Kept in step with CFT_MAX_BODIES in src/ias15_cft.c. The program is
- * the authority and refuses on its own; this is here so that the
- * refusal arrives before a temporary file is written. */
-#define CFT_REBOUND_MAX_BODIES 1024
 
 const char *cft_rebound_format_name(enum cft_rebound_format f){
     switch (f){
@@ -113,74 +109,41 @@ static void say(char *why, size_t n, const char *msg){
 /* ------------------------------------------------------------------ */
 /* The refusal list                                                    */
 /* ------------------------------------------------------------------ */
-/* The force model here is basic pairwise Newtonian gravity, full stop.
- * Everything below computes something DIFFERENT from what the port
- * would compute, so each is refused by name rather than silently
- * ignored. README "Scope" is this list in prose. */
+/* The list itself is src/cft_supported.c, shared with the registered
+ * integrator. The two paths still refuse different sets - this one has
+ * no REBOUND driver running between its steps, so collisions and
+ * attached ODE sets are out where the drop-in takes them - and that
+ * difference is now one column of the table rather than the emergent
+ * result of two functions written months apart. README "Scope" is the
+ * same list in prose. */
 int cft_rebound_check(const struct reb_simulation *r, char *why, size_t n){
     if (!r){ say(why, n, "no simulation"); return 1; }
 
-    if (r->N_var != 0){
-        say(why, n, "variational particles are not supported (r->N_var != 0)"); return 1; }
-    {   size_t N = r->N;
-        if (N < 1){ say(why, n, "no particles"); return 1; }
-        if (N > CFT_REBOUND_MAX_BODIES){
-            char b[160];
-            sprintf(b, "%lu particles, and the port's limit is %d per system"
-                       " (memory and time grow as N^2)",
-                    (unsigned long)N, CFT_REBOUND_MAX_BODIES);
-            say(why, n, b); return 1;
-        }
-    }
-    if (r->N_active != (size_t)-1 && r->N_active != r->N){
-        say(why, n, "test particles are not supported (r->N_active is set):"
-                    " they change which pairs are computed"); return 1; }
-    if (r->map != NULL || r->N_map != 0){
-        say(why, n, "a particle map is not supported (r->map != NULL)"); return 1; }
-    if (r->additional_forces != NULL){
-        say(why, n, "additional forces are not supported (r->additional_forces is set)"); return 1; }
-    if (r->pre_timestep_modifications != NULL || r->post_timestep_modifications != NULL){
-        say(why, n, "timestep modifications are not supported (REBOUNDx and the like)"); return 1; }
-    if (r->force_is_velocity_dependent){
-        say(why, n, "velocity-dependent forces are not supported"); return 1; }
-    if (r->gravity != REB_GRAVITY_BASIC){
-        say(why, n, r->gravity == REB_GRAVITY_TREE
-                ? "the tree code is not supported (r->gravity = TREE); this port is direct summation"
-                : (r->gravity == REB_GRAVITY_COMPENSATED
-                   ? "r->gravity = COMPENSATED is a different summation from the one ported; use BASIC"
-                   : "only r->gravity = BASIC is supported"));
-        return 1; }
-    if (r->gravity_custom != NULL){
-        say(why, n, "a custom gravity routine is not supported"); return 1; }
-    if (r->gravity_ignore_terms != REB_GRAVITY_IGNORE_TERMS_NONE){
-        say(why, n, "r->gravity_ignore_terms must be NONE; this port computes every pair"); return 1; }
-    if (r->collision != REB_COLLISION_NONE){
-        say(why, n, "collision detection is not supported by this API"
-                    " (r->collision != NONE); the drop-in integrator supports it,"
-                    " because REBOUND's own driver runs the search between steps"
-                    " there and this one does not"); return 1; }
-    if (r->boundary != REB_BOUNDARY_NONE){
-        say(why, n, "boundary conditions are not supported (r->boundary != NONE)"); return 1; }
-    if (r->N_ghost_x || r->N_ghost_y || r->N_ghost_z){
-        say(why, n, "ghost boxes are not supported (r->N_ghost_* != 0)"); return 1; }
-    /* No check on r->OMEGA. It reaches the dynamics only through the
-     * shearing sheet (boundary SHEAR) or the SEI integrator, both
-     * refused above, and REBOUND initialises r->OMEGAZ to -1 as a
-     * sentinel meaning "use OMEGA" - so a test on either of them
-     * refuses every default simulation, which this one did until the
-     * worked example ran. */
-    if (r->N_odes != 0){
-        say(why, n, "attached ODE sets are not supported"); return 1; }
-    if (r->integrator.name && strcmp(r->integrator.name, "ias15") != 0){
-        char b[160];
-        sprintf(b, "the simulation's integrator is \"%.80s\"; this port is IAS15 only",
-                r->integrator.name);
-        say(why, n, b); return 1; }
-    if (r->integrator.state && r->integrator.name && strcmp(r->integrator.name, "ias15") == 0){
+    struct cft_support_ctx c;
+    memset(&c, 0, sizeof c);
+    c.r          = r;
+    c.have_state = 0;            /* no cft_ias15_state on this path */
+    c.E          = 1;
+    /* The step criterion the run will actually use, when it can be read
+     * at all. This path hands the problem to the standalone program,
+     * which takes REBOUND's own ias15 settings; a simulation whose
+     * integrator is not "ias15" has none to take, and gets 2 (PRS23) -
+     * a supported value, so it refuses nothing and the integrator_name
+     * row refuses the simulation first. */
+    c.adaptive_mode = 2;
+    if (r->integrator.state && r->integrator.name &&
+        strcmp(r->integrator.name, "ias15") == 0){
         const struct reb_integrator_ias15_state *s = r->integrator.state;
-        if (s->adaptive_mode != 2 && s->adaptive_mode != 3){
-            say(why, n, "only IAS15's PRS23 (adaptive_mode 2) and AARSETH85 (3) "
-                        "step criteria are ported"); return 1; }
+        c.adaptive_mode = s->adaptive_mode;
+    }
+
+    const struct cft_support_row *row =
+        cft_support_first_refusal(&c, CFT_PATH_SUBPROCESS);
+    if (row){
+        char b[768];
+        row->say(&c, b, sizeof b);
+        say(why, n, b);
+        return 1;
     }
     say(why, n, "");
     return 0;

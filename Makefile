@@ -154,15 +154,15 @@ $(B)/bindir.stamp: FORCE
 .PHONY: FORCE
 FORCE:
 
-$(B)/cft_rebound_run.o: src/cft_rebound_run.c include/cft_rebound.h src/hexfloat.h $(B)/bindir.stamp
+$(B)/cft_rebound_run.o: src/cft_rebound_run.c include/cft_rebound.h src/hexfloat.h src/cft_supported.h $(B)/bindir.stamp
 	@mkdir -p $(B)
 	$(CC) -c $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -Iinclude -Isrc -I$(REB) -I$(CFT)/include \
 	    -DCFT_REBOUND_IAS15_DEFAULT='"$(BINDIR)/ias15_cft$(EXE)"' -o $@ src/cft_rebound_run.c
 
-$(B)/libcft_rebound.a: $(B)/cft_rebound_run.o
+$(B)/libcft_rebound.a: $(B)/cft_rebound_run.o $(B)/cft_supported.o
 	ar rcs $@ $^
 
-$(B)/ias15_cft$(EXE): src/ias15_cft.c src/ias15_constants.h src/hexfloat.h $(CFTLIB)
+$(B)/ias15_cft$(EXE): src/ias15_cft.c src/ias15_constants.h src/hexfloat.h src/ias15_limits.h $(CFTLIB)
 	$(CC) $(CSTD) $(CFLAGS) $(WARN) -I$(CFT)/include -o $@ src/ias15_cft.c $(CFTLIB) $(LIBS)
 
 # ---------------------------------------------------------------------
@@ -175,15 +175,22 @@ $(B)/ias15_cft$(EXE): src/ias15_cft.c src/ias15_constants.h src/hexfloat.h $(CFT
 # It was a placeholder holding only its terminator until 2026-09-10,
 # which meant REBOUND could resolve no cft_ field on read - see
 # docs/VALIDATION.md entry 25.
-DROPIN_OBJ := $(B)/ias15_cft_lib.o $(B)/reb_integrator_cft.o $(B)/cft_ias15_fields.o
+DROPIN_OBJ := $(B)/ias15_cft_lib.o $(B)/reb_integrator_cft.o $(B)/cft_ias15_fields.o \
+              $(B)/cft_supported.o
 
-$(B)/ias15_cft_lib.o: src/ias15_cft.c src/ias15_constants.h src/ias15_engine.h
+$(B)/ias15_cft_lib.o: src/ias15_cft.c src/ias15_constants.h src/ias15_engine.h src/ias15_limits.h
 	@mkdir -p $(B)
 	$(CC) -c $(CSTD) $(CFLAGS) $(WARN) -DIAS15_CFT_LIBRARY -Isrc -I$(CFT)/include -o $@ src/ias15_cft.c
 
-$(B)/reb_integrator_cft.o: src/reb_integrator_cft.c src/cft_ias15.h src/ias15_engine.h
+$(B)/reb_integrator_cft.o: src/reb_integrator_cft.c src/cft_ias15.h src/ias15_engine.h src/cft_supported.h
 	@mkdir -p $(B)
 	$(CC) -c $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -Isrc -I$(CFT)/include -I$(REB) -o $@ src/reb_integrator_cft.c
+
+# The refusal list, as data: one table both entry points walk, so it
+# goes into libcft_ias15.a and libcft_rebound.a alike.
+$(B)/cft_supported.o: src/cft_supported.c src/cft_supported.h src/ias15_limits.h
+	@mkdir -p $(B)
+	$(CC) -c $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -Isrc -I$(CFT)/include -I$(REB) -o $@ src/cft_supported.c
 
 # The header carries the macros the lists are generated from, so an
 # added blob has to rebuild this object as well as cft_archive.o.
@@ -213,10 +220,10 @@ $(B)/libcft_ias15.a: $(DROPIN_OBJ) $(B)/cft_archive.o
 # behind their back.
 PIC_OBJ := $(B)/pic/ias15_cft_lib.o $(B)/pic/reb_integrator_cft.o \
            $(B)/pic/cft_ias15_fields.o $(B)/pic/cft_archive.o \
-           $(B)/pic/cft_ias15_shared.o
+           $(B)/pic/cft_ias15_shared.o $(B)/pic/cft_supported.o
 PICFLAGS := $(CSTD) $(CFLAGS) $(WARN) -fPIC -Isrc -I$(CFT)/include -I$(REB)
 
-$(B)/pic/ias15_cft_lib.o: src/ias15_cft.c src/ias15_constants.h src/ias15_engine.h
+$(B)/pic/ias15_cft_lib.o: src/ias15_cft.c src/ias15_constants.h src/ias15_engine.h src/ias15_limits.h
 	@mkdir -p $(B)/pic
 	$(CC) -c $(PICFLAGS) -DIAS15_CFT_LIBRARY -o $@ src/ias15_cft.c
 
@@ -235,6 +242,10 @@ $(B)/pic/cft_archive.o: src/cft_archive.c src/cft_archive.h src/cft_ias15_fields
 $(B)/pic/cft_ias15_shared.o: src/cft_ias15_shared.c src/cft_ias15.h
 	@mkdir -p $(B)/pic
 	$(CC) -c $(PICFLAGS) -o $@ src/cft_ias15_shared.c
+
+$(B)/pic/cft_supported.o: src/cft_supported.c src/cft_supported.h src/ias15_limits.h
+	@mkdir -p $(B)/pic
+	$(CC) -c $(PICFLAGS) -o $@ src/cft_supported.c
 
 # REBOUND's symbols are deliberately NOT linked: the caller's process
 # already has librebound loaded and python/cft_rebound.py promotes it
@@ -292,8 +303,16 @@ check-python: $(B)/$(SHLIB)
 .PHONY: dropin
 dropin: $(B)/libcft_ias15.a $(B)/check_dropin$(EXE)
 
-$(B)/check_dropin$(EXE): tools/check_dropin.c $(DROPIN_OBJ) $(B)/librebound.a $(CFTLIB)
-	$(CC) $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -Isrc -I$(CFT)/include -I$(REB) 	      -o $@ tools/check_dropin.c $(DROPIN_OBJ) $(B)/librebound.a $(CFTLIB) $(LIBS)
+# The gate is a file per topic now: main() and the refusals in
+# check_dropin.c, the scaffolding in dropin_common.c, the cases in
+# cases_*.c. A parcel adds its file here and nowhere else -
+# tools/dropin_cases.h says how.
+CASES_SRC := tools/check_dropin.c tools/dropin_common.c \
+             tools/cases_core.c tools/cases_wide.c
+
+$(B)/check_dropin$(EXE): $(CASES_SRC) tools/dropin_cases.h src/cft_supported.h $(DROPIN_OBJ) $(B)/librebound.a $(CFTLIB)
+	$(CC) $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -Isrc -I$(CFT)/include -I$(REB) \
+	      -o $@ $(CASES_SRC) $(DROPIN_OBJ) $(B)/librebound.a $(CFTLIB) $(LIBS)
 
 constants:
 	$(PYTHON) tools/gen_constants.py

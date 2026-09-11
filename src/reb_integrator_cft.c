@@ -39,6 +39,7 @@
 #include "rebound.h"
 #include "cft.h"
 #include "cft_ias15.h"
+#include "cft_supported.h"
 #include "ias15_engine.h"
 
 /* ------------------------------------------------------------------ */
@@ -49,7 +50,9 @@
  * at the top of their loops. The user's process is not killed and the
  * simulation is left exactly as it was: nothing was computed. */
 static void refuse(struct reb_simulation *r, const char *fmt, ...){
-    char buf[512];
+    /* Wide enough for the longest row in src/cft_supported.c plus the
+     * "ias15_cft: " prefix. The collision row alone is over 400. */
+    char buf[1024];
     va_list ap; va_start(ap, fmt);
     vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
@@ -123,106 +126,47 @@ static void view_alloc(size_t n){
 /* ------------------------------------------------------------------ */
 /* What this integrator does not do                                    */
 /* ------------------------------------------------------------------ */
+/* The list is src/cft_supported.h - one table both entry points walk,
+ * so that removing a refusal is one row rather than the same edit in
+ * four files. ROADMAP.md's last section is the record of what the other
+ * arrangement costs.
+ *
+ * What stays here is this path's half: the state, the one fixup that is
+ * a write rather than a question, and the "ias15_cft: " prefix, which
+ * belongs to the integrator and not to the fact. */
 static int supported(struct reb_simulation *r, struct cft_ias15_state *st){
-    if (!st){ refuse(r, "ias15_cft: no integrator state (was reb_simulation_set_integrator called?)"); return 0; }
+    if (!st){ refuse(r, "ias15_cft: no integrator state (was "
+                        "reb_simulation_set_integrator called?)"); return 0; }
 
-    /* The simulation */
-    if (r->gravity_custom != NULL){
-        refuse(r, "ias15_cft: a custom gravity routine is not supported. The engine "
-                  "issues REBOUND's basic pairwise gravity itself, so r->gravity_custom "
-                  "would never be called and the run would answer a different "
-                  "problem."); return 0; }
-    /* r->N_odes is NOT refused, and the refusal this replaces was wrong.
-     * reb_simulation_step() integrates attached ODE sets itself, with a
-     * private Bulirsch-Stoer state, for every integrator whose name is
-     * not "bs" (simulation.c, "Integrate other ODEs") - so they are
-     * integrated here exactly as they are under REBOUND's own ias15,
-     * at binary64 and decoupled from the particles, over the
-     * r->dt_last_done this integrator sets. Refusing them made this
-     * port stricter than REBOUND for no reason, on a premise that was
-     * not true. */
-    if (r->N_var || r->particles_var){
-        refuse(r, "ias15_cft: variational particles are not supported (r->N_var = %zu). "
-                  "The wide state carries the real particles only.", r->N_var); return 0; }
-    if (r->additional_forces){
-        refuse(r, "ias15_cft: r->additional_forces is not supported. The engine issues "
-                  "REBOUND's basic pairwise gravity and nothing else."); return 0; }
-    if (r->force_is_velocity_dependent){
-        refuse(r, "ias15_cft: velocity-dependent forces are not supported "
-                  "(r->force_is_velocity_dependent = 1)."); return 0; }
-    if (r->gravity != REB_GRAVITY_BASIC){
-        refuse(r, "ias15_cft: only REB_GRAVITY_BASIC is supported, r->gravity is %d "
-                  "(the tree code, the compensated and the Jacobi modules and a custom "
-                  "gravity routine all are not).", (int)r->gravity); return 0; }
-    /* Collisions are REBOUND's driver's work: the search and the
-     * resolver run after this callback returns, and all this
-     * integrator owes is to survive the removal the way REBOUND does.
-     * Which is not by keeping a stale polynomial, as this comment
-     * once said. REBOUND's seven coefficient levels share one flat
-     * buffer that dpcast() re-slices every step at the CURRENT N3
-     * (integrator_ias15.c:217), so a removal shortens the stride and
-     * every level above 0 is read at an offset short by
-     * old_N3 - new_N3 - level 1 reading the tail of level 0, and so on
-     * up. Measured on a merge from three bodies to two: level 0 is
-     * unchanged, and REBOUND's b1[3] IS this port's b1[0]. The
-     * polynomial is not stale, it is aliased, and
-     * ias15_engine_alias_resize() performs that reading rather than
-     * approximating it.
-     *
-     * So accurate = 0 is REBOUND across a removal too, at binary64.
-     * Above it the cost is elsewhere: the removal shifts r->particles,
-     * which are binary64, and accurate = 0 re-promotes the wide state
-     * from them. accurate = 1 shifts the wide state instead and keeps
-     * each survivor its own polynomial - correct, and not REBOUND. */
-    if (r->collision != REB_COLLISION_NONE && st->format != CFT_FP64 && !st->accurate){
-        refuse(r, "ias15_cft: collision detection at %s needs state->accurate = 1. "
-                  "A removal shifts r->particles, which are binary64, so at "
-                  "accurate = 0 - where this port reproduces REBOUND exactly, "
-                  "aliased coefficient levels and all - the wide state is "
-                  "re-promoted from them and every coordinate loses its tail. "
-                  "accurate = 1 shifts the wide state instead, which is more "
-                  "accurate than REBOUND and therefore not bit-identical to it.",
-               cft_format_name((cft_format)st->format));
-        return 0; }
-    if (r->N_ghost_x || r->N_ghost_y || r->N_ghost_z){
-        refuse(r, "ias15_cft: ghost boxes are not supported (N_ghost = %d, %d, %d). "
-                  "The engine's pair term uses a ghost-box offset of exactly +0.",
-                  r->N_ghost_x, r->N_ghost_y, r->N_ghost_z); return 0; }
-    if (r->boundary != REB_BOUNDARY_NONE){
-        refuse(r, "ias15_cft: only REB_BOUNDARY_NONE is supported, r->boundary is %d.",
-               (int)r->boundary); return 0; }
-    if (r->map){
-        refuse(r, "ias15_cft: r->map (integrating a subset of the particles) is not "
-                  "supported."); return 0; }
-    if (r->N_active != (size_t)-1 && r->N_active != r->N){
-        refuse(r, "ias15_cft: test particles are not supported (r->N_active = %zu of "
-                  "%zu). Every particle in the engine's pair list is active.",
-               r->N_active, r->N); return 0; }
-    if (r->calculate_megno){
-        refuse(r, "ias15_cft: MEGNO is not supported; it needs variational particles."); return 0; }
+    /* Not a question, so not a row: 0 means "the default for this
+     * format", which create() cannot resolve because the caller chooses
+     * the format afterwards. Written back, so the state - and any
+     * archive of it - carries the number actually used rather than the
+     * sentinel. Guarded on a valid format because it used to sit after
+     * the format check and an invalid format must still be refused by
+     * name rather than by max_iter. */
+    if (st->max_iter == 0 &&
+        (st->format == CFT_FP64 || st->format == CFT_FP128 || st->format == CFT_FP256))
+        st->max_iter = cft_ias15_default_max_iter(st->format);
 
-    /* The integrator's own settings */
-    if (st->E != 1){
-        refuse(r, "ias15_cft: state->E is %zu. An ensemble is E independent systems in "
-                  "one run and a reb_simulation is one system; use the standalone "
-                  "ias15_cft program for ensembles (docs/ENSEMBLE.md).", st->E); return 0; }
-    if (st->adaptive_mode != 2 && st->adaptive_mode != 3){
-        refuse(r, "ias15_cft: adaptive_mode %d is not implemented. PRS23 (2), "
-                  "REBOUND's default since January 2024, and AARSETH85 (3) are; "
-                  "INDIVIDUAL (0) and GLOBAL (1) take REBOUND's other error "
-                  "estimate entirely and are not.", st->adaptive_mode); return 0; }
-    if (st->format != CFT_FP64 && st->format != CFT_FP128 && st->format != CFT_FP256){
-        refuse(r, "ias15_cft: format %d is not one of CFT_FP64 (%d), CFT_FP128 (%d) or "
-                  "CFT_FP256 (%d).", st->format, CFT_FP64, CFT_FP128, CFT_FP256); return 0; }
-    /* 0 means "the default for this format", which cannot be resolved in
-     * create() because the caller chooses the format afterwards. Written
-     * back, so the state - and any archive of it - carries the number
-     * that was actually used rather than the sentinel. */
-    if (st->max_iter == 0) st->max_iter = cft_ias15_default_max_iter(st->format);
-    if (st->max_iter < 1){
-        refuse(r, "ias15_cft: max_iter = %d. Use 0 for the default at this format, "
-                  "or a positive cap; REBOUND uses 12 and binary256 needs about 22.",
-               st->max_iter); return 0; }
+    struct cft_support_ctx c;
+    memset(&c, 0, sizeof c);
+    c.r             = r;
+    c.have_state    = 1;
+    c.format        = st->format;
+    c.accurate      = st->accurate;
+    c.max_iter      = st->max_iter;
+    c.E             = st->E;
+    c.adaptive_mode = st->adaptive_mode;
+
+    const struct cft_support_row *row =
+        cft_support_first_refusal(&c, CFT_PATH_DROPIN);
+    if (row){
+        char why[768];
+        row->say(&c, why, sizeof why);
+        refuse(r, "ias15_cft: %s", why);
+        return 0;
+    }
     return 1;
 }
 

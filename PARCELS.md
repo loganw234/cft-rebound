@@ -55,32 +55,52 @@ So **P0 comes first, is mine, and lands before any parcel starts.**
 
 ---
 
-## P0 — one support table (integrator, before dispatch)
+## P0 — one support table — **DONE**
 
-**Two structural changes, no behaviour change, and the full suite green
-on both sides of it.**
+Landed before dispatch, with the full suite green on both sides of it.
+What a parcel now finds:
 
-**(a) The support list becomes one table.** A new `src/cft_supported.h`
-holds one row per capability: the name, a bitmask of which paths refuse
-it (drop-in, subprocess, or both), the predicate, and the message.
-`supported()` and `cft_rebound_check()` both walk it.
+**(a) The refusal list is one table.** [src/cft_supported.h](src/cft_supported.h)
+declares it and [src/cft_supported.c](src/cft_supported.c) holds the 21
+rows: a name, a mask of which paths refuse it, a predicate, a message.
+`supported()` and `cft_rebound_check()` are each now a context fill plus
+one call to `cft_support_first_refusal()` — the loop exists once, and so
+does every message.
 
-`case_refusals()` keeps its own poison functions — a table cannot
-carry those without dragging the gate's test scaffolding into the
-library — but it **walks the table and fails on any row it did not
-exercise**, by name. So a capability can be added without a test, or
-removed without its test being retired, exactly once: the next run
-says which row. After this, **a parcel unlocking a capability changes
-one row**, and the gate tells it if it forgot the case.
+**Unlocking a capability is deleting one row.** Nothing else in `src/`
+states the list.
 
-**(b) `tools/check_dropin.c` stops being one file everybody edits.**
-Its case functions move behind a header the integrator owns; each
-parcel adds `tools/cases_<topic>.c` with one entry point, and `main()`
-calls the entry points. **No parcel edits `main()`, `case_refusals()`,
-or another parcel's cases.**
+`case_refusals()` keeps its own poison functions, but every
+`refused()` / `accepted()` call names the row it exercises, and
+`coverage_report()` walks the table afterwards and **fails by name** on
+any drop-in row no case named — and on any case naming a row that is
+gone, which is what catches a test left behind after a refusal is
+removed. Verified with a negative control: a dummy row makes the gate
+fail with `coverage: cft_support_rows has "control_row" and no case
+exercises it`.
 
-Expected: ~2 hours, including a full `make check` before and after to
-prove the refactor moved nothing.
+It earned its keep on the first run. Four rows — the particle map, the
+ensemble count, the format and `max_iter` — had never been poisoned by
+anything, and are now.
+
+**(b) The gate is a file per topic.**
+
+| file | what |
+|---|---|
+| [tools/dropin_cases.h](tools/dropin_cases.h) | the scaffolding, declared once, and the instructions for adding a topic |
+| [tools/dropin_common.c](tools/dropin_common.c) | the problems, `build()`, `compare()` |
+| [tools/cases_core.c](tools/cases_core.c) | the binary64 equivalence set |
+| [tools/cases_wide.c](tools/cases_wide.c) | the binary128 smoke tests |
+| [tools/check_dropin.c](tools/check_dropin.c) | `main()`, the refusals, the coverage check |
+
+**A parcel writes `tools/cases_<topic>.c`, declares one entry point in
+`dropin_cases.h`, adds it to `CASES_SRC` in the Makefile, and adds one
+call in `main()`.** Four small edits outside its own file, none of them
+in another parcel's territory.
+
+One more shared fact collapsed on the way past: the body-count cap was
+1024 in two files with a comment saying they were "kept in step". It is
+[src/ias15_limits.h](src/ias15_limits.h) now.
 
 ---
 
@@ -104,22 +124,62 @@ plumbing.
 **Unlocks:** `r->additional_forces`, `r->force_is_velocity_dependent`,
 `r->pre_timestep_modifications`, `r->post_timestep_modifications`.
 
-**The shape.** REBOUND's IAS15 calls `reb_simulation_update_acceleration()`
-at every Gauss-Radau node: gravity, then the user's routine adding into
-`particles[i].ax/ay/az`. The port must do the same — round `x`, `v` and
-`a` out to `r->particles` at each node, call the routine, promote
-`ax/ay/az` back. Promotion from binary64 is exact, so the total is
-wide gravity plus an exact binary64 addend, correctly rounded.
+**Scope is smaller than it looks — two of the four already work.**
+`pre_` and `post_timestep_modifications` are called by REBOUND's
+*driver*, not by IAS15: `simulation.c:523` and `:564`, around the step
+callback. They edit `r->particles` between steps, and the shim already
+re-promotes any coordinate that changed under it. So they need a **gate
+case, not a mechanism** — and the row that refuses them is on the
+subprocess path only, so there is nothing to delete for them either.
 
-**Gate** (`tools/cases_forces.c`):
+The mechanism is for `additional_forces`, and velocity-dependent forces
+come with it for free: IAS15's predictor supplies `v` at every node, so
+that refusal is inherited rather than required.
+
+**The shape.** `reb_simulation_update_acceleration()` (`simulation.c:643`)
+is gravity followed by `r->additional_forces(r)`, and IAS15 calls it at
+every Gauss-Radau node — `integrator_ias15.c:461` — then reads
+`particles[mk].ax/ay/az` straight back into `at[]` at `:467`. So the
+port needs, after each wide `gravity()`: round the node's `x`, `v` and
+`a` out to `r->particles`, call the routine, promote `ax/ay/az` back.
+Promotion from binary64 is exact, so the total is wide gravity plus an
+exact binary64 addend, correctly rounded.
+
+**`r->t` moves at every node, and this is the part to get right.**
+`integrator_ias15.c:408` sets `r->t = t_beginning + r->dt * h[n]` before
+each call and restores `t_beginning` at `:608`. A time-dependent force —
+most of REBOUNDx — reads it. For bit-identity the shim must compute that
+same binary64 expression from REBOUND's own `h[n]`, **not** round the
+wide clock: the two differ in the last bits, and a force that sees a
+different time computes a different acceleration. The port's derived
+`KH[8]` rounds to REBOUND's `h` literals bit for bit at binary64
+(`tools/gen_constants.py` checks all 78), so exposing `h[n]` as a double
+from the engine is enough.
+
+**The engine may not include `rebound.h`.** `src/ias15_cft.c` builds
+both as the standalone program and, under `-DIAS15_CFT_LIBRARY`, as a
+library half that knows nothing about REBOUND — that separation is load
+bearing and must survive. So the hook is a plain callback with the
+rounded buffers, registered by the shim; the engine never sees a
+`struct reb_simulation`. `ias15_engine_remove_body()` and
+`ias15_engine_alias_resize()` are the shape to follow.
+
+**Gate** — a new `tools/cases_forces.c`, wired as P0's table above describes:
 - a constant additional acceleration, against REBOUND's own ias15 with
   the same routine — bit for bit at binary64;
+- a **time-dependent** force, which is the case that catches a wrong
+  `r->t` at the nodes and which nothing else here would;
 - a **velocity-dependent** drag force, same assertion, which is what
   retires that refusal rather than merely deleting it;
 - a `post_timestep_modifications` routine that edits a coordinate;
 - **the no-force path is unchanged**: every existing case in the gate
   still passes, which is the regression this parcel is most likely to
-  cause (8 round-trips per attempt on the hot path).
+  cause — 8 round-trips per attempt land on the hot path, and the
+  no-force branch must not pay for them.
+
+**Negative control.** A force routine that does nothing must leave the
+run bit-identical to no force routine at all; and the constant-force
+case must differ from the no-force run, or it is a pass against itself.
 
 **State in the brief:** the user's force is evaluated at **binary64**
 even in a binary256 run, because `r->particles` are binary64 and that is
@@ -144,7 +204,7 @@ change. Bit-identity requires reproducing its `(i, j<i)` loop under the
 skip, not reproducing the sum. The existing ascending-partner scatter
 at line 576 is where that lands.
 
-**Gate** (`tools/cases_pairs.c`): test particles bit-identical at
+**Gate** — a new `tools/cases_pairs.c`: test particles bit-identical at
 binary64 on at least two problems; each `gravity_ignore_terms` value;
 a particle map. Plus the control this repo has needed twice before —
 **prove the skip actually changed something**, or the case is a
@@ -161,7 +221,7 @@ pass against itself.
 REBOUND's other error estimate entirely. PRS23 (2) and AARSETH85 (3)
 are already there and must not move.
 
-**Gate** (`tools/cases_modes.c`): both modes bit-identical against
+**Gate** — a new `tools/cases_modes.c`: both modes bit-identical against
 REBOUND on the existing problem set — **and a control that each mode
 chooses a different step sequence from PRS23 on the same problem.**
 AARSETH85 needed exactly this control: a mode the port silently ignored
@@ -238,7 +298,7 @@ refusing a mismatched wheel.
 
 | when | who | what |
 |---|---|---|
-| first | integrator | P0, suite green before and after |
+| ~~first~~ | integrator | ~~P0~~ **done**, suite green before and after |
 | then, in parallel | P1 · P2 · P3 · P4 · P5 | five worktrees, no shared owned file |
 | as each lands | integrator | merge, seam test, full suite |
 | last | integrator | README support table, COMPATIBILITY, VALIDATION |
