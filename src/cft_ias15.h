@@ -161,7 +161,99 @@ struct cft_ias15_state {
     /* provenance, so a reader knows what produced the wide bytes */
     char     cft_abi[16];      /* e.g. "0.11" */
     uint64_t constants_digest; /* the Gauss-Radau set the run used */
+
+    /* ---- appended 2026-09-11 ---------------------------------------
+     * APPEND ONLY. src/cft_ias15_fields.c points its descriptors at
+     * these with offsetof and an archive already written names each
+     * field by NAME, so a member may be added here but an existing one
+     * may never be reordered, renamed or removed.
+     *
+     * ROADMAP.md's "What the collision work leaves open, across a
+     * checkpoint" and PARCELS.md's P4 are the three gaps these close. */
+
+    /* REBOUND's ias15->iterations_max_exceeded: how many times THIS
+     * simulation's predictor-corrector loop ran out of passes
+     * (integrator_ias15.c:394). Per-simulation and monotonic, so it is
+     * accumulated as a DELTA from the engine's own counter, which is
+     * process-global and which ias15_engine_reset_state() zeroes. The
+     * shim fires REBOUND's warning off it at the same threshold and,
+     * as REBOUND does, exactly once - on the increment that reaches
+     * ten, so a restart above ten never fires it again. */
+    uint64_t iterations_max_exceeded;
+
+    /* THE HIGH-WATER MARK, and everything that lives above the live
+     * region because of it.
+     *
+     * REBOUND's reb_integrator_ias15_alloc() reallocates only when 3N
+     * exceeds N_allocated, so a shrink leaves every array at its old
+     * length with its old contents, and a regrow under the mark reads
+     * those contents straight back. Two kinds of array are affected:
+     *
+     *  - the six seven-level coefficient families. REBOUND keeps each
+     *    as ONE allocation of 7*N_allocated doubles that dpcast()
+     *    re-slices at the CURRENT 3N every step, so a shrink strands a
+     *    tail no stride reaches. ias15_engine_alias_resize() keeps that
+     *    in a flat shadow; alias[f][m] is family f's level m read at
+     *    the MARK's stride, which is what REBOUND's own buffer holds.
+     *
+     *  - the compensated-summation carries csx and csv, the only two
+     *    flat arrays whose value above the live region is read before
+     *    it is written. x0, v0, a0, csa0, csb and g are all written at
+     *    the top of every attempt, and x and v are re-promoted from
+     *    r->particles whenever the body count changes, so their tails
+     *    are dead; measured, not assumed - tests/gate_real.c's second
+     *    sequence differs in the last bit of exactly the coordinates a
+     *    stale carry would touch when they are missing.
+     *
+     * This port stores each level as its own blob of 3N and had no
+     * N_allocated at all, so until 2026-09-11 a run that removed a
+     * particle, checkpointed, resumed and then added one back below the
+     * ORIGINAL mark diverged twice over: the resumed run took r->N for
+     * its mark, so it zeroed where REBOUND aliases, and it would have
+     * read zeros where REBOUND reads the tail even if the mark had been
+     * right. ROADMAP.md, "What the collision work leaves open, across a
+     * checkpoint".
+     *
+     * hiwater_n_elem is 3*N_allocated, in elements - so the mark itself
+     * is hiwater_n_elem/3 bodies. REBOUND recovers its own N_allocated
+     * exactly this way: its descriptor list archives no N_allocated
+     * field, every pointer names it as offset_N, and the reader divides
+     * size_data by element_size.
+     *
+     * hiwater_n_elem is 0, and every pointer NULL, whenever the mark is
+     * the live count - which is every run that never shrank. REBOUND's
+     * writer skips a REB_POINTER field whose length is zero, so such an
+     * archive is byte for byte what this project wrote before these
+     * members existed, and the mark is then n_elem/3 by construction. */
+    unsigned char *alias[6][7];   /* g, b, e, csb, er, br - THAT order */
+    unsigned char *alias_csx, *alias_csv;
+    size_t   hiwater_n_elem;      /* 3*N_allocated, or 0 - see above */
+
+    /* How the wide bytes in this state arrived: one of the
+     * cft_ias15_provenance values below. Until this existed only the
+     * return value of cft_archive_finish_load() said whether a state
+     * had been restored exactly or promoted from binary64, and a
+     * caller may discard a return value (ROADMAP.md line 404).
+     *
+     * It describes the state IN MEMORY, and cft_archive_finish_load()
+     * writes it last on every load, so it is always about THIS load
+     * rather than a lineage. The copy that reaches an archive is
+     * therefore how the WRITING run's state had arrived, which is the
+     * one thing a probe of the file could not otherwise know. */
+    int      provenance;
 };
+
+/* What cft_ias15_state.provenance holds. */
+enum cft_ias15_provenance {
+    CFT_PROV_NONE     = 0,  /* created here: the run is its own origin */
+    CFT_PROV_EXACT    = 1,  /* an archive carried the wide bytes and they were restored */
+    CFT_PROV_PROMOTED = 2   /* no cft_ fields: REBOUND's binary64 state was promoted */
+};
+
+/* "created here", "restored exactly", "promoted from binary64", or "?".
+ * Defined in src/cft_ias15_fields.c, which every target holding a state
+ * links; src/cft_archive.c is not one of them. */
+const char *cft_ias15_provenance_str(int provenance);
 
 /* --------------------------------------------------------------------
  * The integrator

@@ -2059,16 +2059,33 @@ static void alias_zero(size_t n3){
         if (alias_flat[f]) vzero(alias_flat[f], 7 * n3 < alias_flat_n ? 7 * n3 : alias_flat_n);
 }
 
+/* The shadow, allocated at its full extent the first time anything
+ * needs it. Factored out of alias_resize() unchanged so that
+ * ias15_engine_alias_view() can hand the same buffers to the archive;
+ * the allocation, its size and the zero it starts from are exactly what
+ * alias_resize() did inline. */
+static void alias_need(void){
+    if (alias_flat[0] || !eng_cap) return;
+    alias_flat_n = 7 * 3 * eng_cap;         /* valloc is calloc: REBOUND's buffer starts zeroed */
+    for (int f = 0; f < 6; f++) alias_flat[f] = valloc(alias_flat_n);
+}
+
+void ias15_engine_alias_view(struct ias15_engine_alias_view *o, int create){
+    memset(o, 0, sizeof *o);
+    if (create) alias_need();
+    if (!alias_flat[0]) return;             /* never resized, or not allocated yet */
+    for (int f = 0; f < 6; f++) o->flat[f] = alias_flat[f];
+    o->n_elem = alias_flat_n;
+    o->elem_size = ESZ;
+}
+
 void ias15_engine_alias_resize(size_t n_new){
     if (E != 1 || !eng_cap) return;         /* REBOUND has no ensembles */
     if (n_new < 1 || n_new > eng_cap) return;
     const size_t s_old = N3, s_new = 3 * n_new;
     if (s_new == s_old) return;
     V *fam[6] = { g, b, e, csb, er, br };
-    if (!alias_flat[0]){
-        alias_flat_n = 7 * 3 * eng_cap;     /* valloc is calloc: REBOUND's buffer starts zeroed */
-        for (int f = 0; f < 6; f++) alias_flat[f] = valloc(alias_flat_n);
-    }
+    alias_need();
     for (int f = 0; f < 6; f++){
         for (int m = 0; m < 7; m++) vcopy(E(alias_flat[f], (size_t)m * s_old), fam[f][m], s_old);
         for (int m = 0; m < 7; m++) vcopy(fam[f][m], E(alias_flat[f], (size_t)m * s_new), s_new);

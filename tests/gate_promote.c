@@ -83,6 +83,21 @@ int main(int argc, char **argv){
                cs->n_elem, cs->format, N3, CFT_FP128);
         fail = 1;
     }
+    /* The return value said "promoted from binary64" and the STATE has
+     * to say so too: a caller may discard a return value, and a state
+     * that was narrowed to binary64 and one restored bit for bit are
+     * otherwise indistinguishable from the inside. ROADMAP.md line 404. */
+    if (cs->provenance != CFT_PROV_PROMOTED){
+        printf("gate 3: FAIL  the load returned %s and the state's provenance is \"%s\"\n",
+               cft_archive_status_str(st), cft_ias15_provenance_str(cs->provenance));
+        fail = 1;
+    }
+    /* A promoted state is at its own mark by definition. */
+    if (cs->hiwater_n_elem){
+        printf("gate 3: FAIL  a promoted state carries cft_hiwater_n_elem %zu\n",
+               cs->hiwater_n_elem);
+        fail = 1;
+    }
 
     /* Promotion must be EXACT: binary64 is a subset of binary128, so
      * rounding the wide bytes back must give the very same doubles. */
@@ -125,10 +140,11 @@ int main(int argc, char **argv){
         }
     if (bad) fail = 1;
     printf("  promotion of REBOUND's binary64 IAS15 state into %s: %s "
-           "(epsilon %g, adaptive_mode %d, abi \"%s\")\n",
+           "(epsilon %g, adaptive_mode %d, abi \"%s\", provenance \"%s\")\n",
            cft_format_name((cft_format)cs->format),
            bad ? "NOT EXACT" : "exact, every value round-trips",
-           cs->epsilon, cs->adaptive_mode, cs->cft_abi);
+           cs->epsilon, cs->adaptive_mode, cs->cft_abi,
+           cft_ias15_provenance_str(cs->provenance));
     free(back); free(pos); free(vel);
     reb_simulation_free(ref);
     reb_simulation_free(r);

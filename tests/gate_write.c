@@ -71,10 +71,13 @@ int main(int argc, char **argv){
     if (cft_archive_probe(bin, 0, &info)) return 2;
     if (cft_archive_probe(bin2, -1, &info2)) return 2;
     printf("gate 2 (write): %s at %s, integrator \"%s\", %d cft_ fields, "
-           "%d/%d blobs, %llu B a blob, n_elem %llu, abi \"%s\"\n",
+           "%d/%d blobs, %llu B a blob, n_elem %llu, abi \"%s\", "
+           "%d/%d high-water blobs (cft_hiwater_n_elem %llu)\n",
            bin, cft_format_name(CFT_FP128), info.integrator, info.n_cft_fields,
            info.n_blobs_seen, CFT_N_BLOBS, (unsigned long long)info.blob_bytes,
-           (unsigned long long)info.n_elem, info.abi);
+           (unsigned long long)info.n_elem, info.abi,
+           info.n_alias_blobs_seen, CFT_N_ALIAS_BLOBS,
+           (unsigned long long)info.hiwater_n_elem);
     printf("                %s, %lld snapshots, last one probes to n_elem %llu at %s\n",
            bin2, (long long)info2.n_snapshots, (unsigned long long)info2.n_elem,
            cft_format_name((cft_format)info2.format));

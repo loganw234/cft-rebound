@@ -74,7 +74,37 @@ struct cft_archive_info {
     char     abi[17];          /* cft_abi, NUL terminated */
     uint64_t constants_digest;
     int64_t  n_snapshots;
+
+    /* The alias family, counted apart from the blobs above because its
+     * length is a different member (see CFT_FD_A in
+     * src/cft_ias15_fields.h). Every one of them is 0 for an archive
+     * written by a run that never removed a particle - and so for every
+     * archive this project wrote before 2026-09-11, which is why the
+     * family is optional on read rather than required. */
+    uint64_t hiwater_n_elem;   /* cft_hiwater_n_elem: 3*N_allocated */
+    int      has_hiwater;      /* the field is NAMED, whatever its value.
+                                * A zero value and an absent field are
+                                * different facts: an appended snapshot is
+                                * a diff, so a mark that has risen back to
+                                * the live count writes a 0 there while the
+                                * base snapshot's blobs stay in the file. */
+    uint64_t alias_blob_bytes; /* size_data of cft_alias_g0 */
+    int      n_alias_blobs_seen;
+    int      alias_lengths_agree;
+
+    /* What the WRITING run's state said about itself. provenance is a
+     * cft_ias15_provenance; -1 when the archive names no such field,
+     * which every archive written before 2026-09-11 does. */
+    int      provenance;
+    uint64_t iterations_max_exceeded;
 };
+
+/* The high-water body count an archive implies: hiwater_n_elem/3 when
+ * it carries the alias family, and otherwise the live count, which is
+ * what it means for the family to be absent. One place, because the
+ * shim and the gates both need it and REBOUND recovers its own
+ * N_allocated by exactly this division. */
+uint64_t cft_archive_hiwater_N(const struct cft_archive_info *info);
 
 /* Read one snapshot's field table. Returns 0 on success. */
 int cft_archive_probe(const char *filename, int64_t snapshot,
@@ -99,6 +129,12 @@ int cft_archive_bind(struct reb_simulation *r);
  * past the end. The one walker: anything that iterates the blobs uses
  * this, so a list that grows cannot leave a second copy behind. */
 unsigned char **cft_archive_state_blob(struct cft_ias15_state *s, int i);
+
+/* The i'th blob of the ALIAS family, by the order of CFT_FD_ALIAS, or
+ * NULL past the end: alias[0][0..6] through alias[5][0..6], then
+ * alias_csx and alias_csv. These are sized by hiwater_n_elem rather
+ * than by n_elem, which is the whole reason they are a second family. */
+unsigned char **cft_archive_state_alias(struct cft_ias15_state *s, int i);
 
 int  cft_archive_state_alloc(struct cft_ias15_state *s, size_t n_elem);
 void cft_archive_state_free(struct cft_ias15_state *s);

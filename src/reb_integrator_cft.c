@@ -94,6 +94,22 @@ static double engine_eps;
 static int    engine_max_iter;
 static int    engine_arith_fma;
 
+/* The engine's iterations_max_exceeded at the last time it was folded
+ * into the state. The engine's counter is the PROCESS's - a file-scope
+ * static that ias15_engine_reset_state() zeroes - and REBOUND's is the
+ * SIMULATION's and monotonic, so what the state accumulates is the
+ * difference, and this is what it is measured from. Set to 0 wherever
+ * reset_state() is called, which is the only thing that moves the
+ * engine's counter backwards. */
+static unsigned long long engine_mx_seen;
+
+/* Whether this binding has ever had a high-water mark above its live
+ * count - and so whether its archives carry the cft_alias_* family.
+ * Once set it stays set for the life of the binding, because an
+ * appended snapshot is a diff and binarydata.c's diff cannot express a
+ * field that has GONE: see publish_state. */
+static int engine_alias_live;
+
 /* the binary64 view we last wrote into r->particles, r->t and r->dt.
  * If REBOUND or the user has changed one of them since, that value is
  * theirs and is promoted back in; if not, the wide state is the truth
@@ -186,6 +202,97 @@ static void publish_state(struct cft_ias15_state *st){
     st->n_elem = w.n_elem;
     st->E = 1;
     st->constants_digest = ias15_engine_constants_digest();
+
+    /* The high-water mark and what it strands, for the archive.
+     *
+     * REBOUND reallocates only when 3N exceeds N_allocated, so below
+     * the mark every array keeps its old length and its old contents.
+     * The six coefficient families share one allocation apiece that
+     * dpcast() re-slices at the current 3N, so a shrink leaves a tail
+     * above the live region that a regrow under the mark reads straight
+     * back - ias15_engine_alias_resize() keeps that in a flat shadow,
+     * and alias[f][m] is that shadow sliced at the MARK's stride. csx
+     * and csv keep a tail too, and the predictor reads it; they are the
+     * only two flat arrays that do, because everything else is written
+     * at the top of every attempt and x and v are re-promoted from
+     * r->particles on any count change.
+     *
+     * Publishing these and their length is what carries the tail AND
+     * the mark across a save; the mark is hiwater_n_elem/3 bodies.
+     *
+     * Only once the mark has been above the live count - and then for
+     * the rest of the binding, even after a regrow brings the two level
+     * again. Before that the pointers stay NULL and the length 0,
+     * REBOUND's writer skips a zero-length REB_POINTER, and the archive
+     * is what this project wrote before any of this existed.
+     *
+     * The "and then for the rest of the binding" is not tidiness. An
+     * appended snapshot is a DIFF, and binarydata.c's diff writes a
+     * header and a NAME but no data for a field that was in the old
+     * snapshot and is gone from the new one (its REB_FIELD_NOT_FOUND
+     * branch, reb_binarydata_diff). A field that appears and then
+     * vanishes therefore corrupts the append. Appearing is safe - the
+     * diff's second pass writes a new field whole - so these are
+     * allowed to appear, to change length, and never to leave.
+     *
+     * WHAT THIS DOES NOT COVER, said here rather than found later: at
+     * state->accurate = 1 the step does not call alias_resize at all -
+     * ias15_engine_remove_body() shifts the wide state instead, which
+     * is deliberately not REBOUND - so the coefficient tail above the
+     * live count sits in the LIVE b/e/br/er arrays rather than in the
+     * shadow, and those are archived at n_elem. A remove, checkpoint,
+     * resume and regrow under the mark is therefore still not exact at
+     * accurate = 1. The mark itself does travel, so the resumed run
+     * takes the same branch; only the tail it reads back differs, and
+     * at accurate = 1 that tail describes bodies the mode has already
+     * chosen not to inherit from. Closing it means archiving the live
+     * arrays at the mark as REBOUND does, which changes the length of
+     * fields an archive already carries. */
+    {
+        const size_t hi3 = 3 * engine_hiwater_N;
+        const size_t width = cft_format_size((cft_format)st->format);
+        struct ias15_engine_alias_view av;
+        if (hi3 > w.n_elem) engine_alias_live = 1;
+        if (engine_alias_live && width){
+            ias15_engine_alias_view(&av, 1);
+            if (av.flat[0] && av.n_elem >= 7 * hi3){
+                for (int f = 0; f < 6; f++)
+                    for (int m = 0; m < 7; m++)
+                        st->alias[f][m] = av.flat[f] + (size_t)m * hi3 * width;
+                st->alias_csx = w.csx;
+                st->alias_csv = w.csv;
+                st->hiwater_n_elem = hi3;
+                return;
+            }
+        }
+        for (int f = 0; f < 6; f++)
+            for (int m = 0; m < 7; m++) st->alias[f][m] = NULL;
+        st->alias_csx = NULL;
+        st->alias_csv = NULL;
+        st->hiwater_n_elem = 0;
+    }
+}
+
+/* REBOUND's ias15->iterations_max_exceeded, and its warning.
+ *
+ * integrator_ias15.c:394 increments once per predictor-corrector loop
+ * that runs out of passes and fires reb_simulation_warning on the
+ * increment that reaches ten - so the message appears once in the life
+ * of a simulation, and a run resumed above ten never sees it again.
+ * Reproduced by counting UP one at a time rather than by adding the
+ * delta and testing afterwards: one ias15_engine_step() is as many
+ * attempts as it takes to accept a step, so the delta can be more than
+ * one and a test on the total could step over ten without firing. */
+static void fold_max_exceeded(struct reb_simulation *r, struct cft_ias15_state *st){
+    unsigned long long now = ias15_engine_max_exceeded();
+    for (; engine_mx_seen < now; engine_mx_seen++){
+        st->iterations_max_exceeded++;
+        if (st->iterations_max_exceeded == 10)
+            reb_simulation_warning(r, "At least 10 predictor corrector loops in IAS15 did "
+                                      "not converge. This is typically an indication of the "
+                                      "timestep being too large.");
+    }
+    engine_mx_seen = now;
 }
 
 /* A state that came out of an archive owns its blobs: REBOUND's loader
@@ -221,6 +328,11 @@ static int adopt_loaded_state(struct reb_simulation *r, struct cft_ias15_state *
             free(st->g[m]);  free(st->b[m]);  free(st->e[m]);
             free(st->br[m]); free(st->er[m]); free(st->csb[m]);
         }
+        for (int f = 0; f < 6; f++)
+            for (int m = 0; m < 7; m++){ free(st->alias[f][m]); st->alias[f][m] = NULL; }
+        free(st->alias_csx); st->alias_csx = NULL;
+        free(st->alias_csv); st->alias_csv = NULL;
+        st->hiwater_n_elem = 0;
         return 1;
     }
 
@@ -247,6 +359,86 @@ static int adopt_loaded_state(struct reb_simulation *r, struct cft_ias15_state *
         CFT_ADOPT(w.er[m], st->er[m]); CFT_ADOPT(w.csb[m], st->csb[m]);
     }
 #undef CFT_ADOPT
+
+    /* The high-water mark and the tail it strands.
+     *
+     * bind_engine has just set engine_hiwater_N from r->N, which is the
+     * resumed simulation's count - and that is wrong whenever the run
+     * that wrote the file had been LARGER. REBOUND's N_allocated only
+     * rises, so a resume that takes the smaller number zeroes its
+     * coefficient levels where REBOUND would have re-read them, and
+     * reads zeros where REBOUND reads the tail of csx and csv. All of
+     * that is repaired here, from cft_hiwater_n_elem and the
+     * cft_alias_* blobs; an archive that carries neither is one whose
+     * mark WAS its live count, and r->N is then already right.
+     * ROADMAP.md, "What the collision work leaves open, across a
+     * checkpoint". */
+    {
+        const size_t hi3 = st->hiwater_n_elem;             /* 3 * N_allocated */
+        const size_t mark = hi3 / 3;
+        /* The negative control for exactly this half of the restore.
+         * With it set the wide state is still adopted in full and only
+         * the mark and the high-water arrays are dropped, so a
+         * comparison that still matches is one that never tested them. */
+        const int drop = hi3 == 0 || getenv("CFT_REBOUND_NO_ALIAS") != NULL;
+        struct ias15_engine_alias_view av;
+        memset(&av, 0, sizeof av);
+        if (!drop){
+            ias15_engine_alias_view(&av, 1);
+            if (!av.flat[0] || av.n_elem < 7 * hi3 || av.elem_size != width
+                    || mark > ias15_engine_capacity()){
+                refuse(r, "ias15_cft: the archive was written by a run whose high-water "
+                          "particle count was %zu and this engine is allocated for %zu. "
+                          "The arrays REBOUND re-reads across a particle count change are "
+                          "sized by that mark, so they cannot be restored into a smaller "
+                          "engine; call cft_ias15_reserve(%zu) before the first step.",
+                       mark, ias15_engine_capacity(), mark);
+                return 0;
+            }
+            for (int f = 0; f < 6; f++){
+                for (int m = 0; m < 7; m++)
+                    if (st->alias[f][m])
+                        memcpy(av.flat[f] + (size_t)m * hi3 * width,
+                               st->alias[f][m], hi3 * width);
+                /* Above the mark REBOUND has nothing: realloc_dp7 zeroes
+                 * a newly grown buffer and reset_state reproduces that,
+                 * so anything this process left up there must go. */
+                memset(av.flat[f] + 7 * hi3 * width, 0, (av.n_elem - 7 * hi3) * width);
+            }
+            /* csx and csv only ABOVE the live region: the archive
+             * carries the whole allocation, as REBOUND's own fields do,
+             * and cft_csx and cft_csv have already put the live part in
+             * place. The same bytes either way; taking them from one
+             * place makes that impossible to get subtly wrong. */
+            if (st->alias_csx && st->n_elem < hi3){
+                const size_t off = st->n_elem * width, len = (hi3 - st->n_elem) * width;
+                memcpy(w.csx + off, st->alias_csx + off, len);
+                if (st->alias_csv) memcpy(w.csv + off, st->alias_csv + off, len);
+            }
+            engine_hiwater_N = mark;
+            /* The file carries the family, so every snapshot this
+             * binding appends to it must carry it too - see
+             * publish_state on why a field may not vanish from a diff. */
+            engine_alias_live = 1;
+        }
+        /* Released whatever was done with them: these are buffers
+         * REBOUND's loader allocated, and an archive whose mark had
+         * risen back to the live count still carries the base
+         * snapshot's - dead weight that would otherwise leak, because
+         * publish_state is about to repoint every one of them. */
+        for (int f = 0; f < 6; f++)
+            for (int m = 0; m < 7; m++){ free(st->alias[f][m]); st->alias[f][m] = NULL; }
+        /* Guarded the way CFT_ADOPT guards: publish_state points these
+         * at the engine's own csx and csv, and freeing those would take
+         * the engine down. Unreachable while the early return above
+         * holds - a published state has st->x == w.x - and one
+         * comparison is cheaper than depending on that. */
+        if (st->alias_csx != w.csx) free(st->alias_csx);
+        if (st->alias_csv != w.csv) free(st->alias_csv);
+        st->alias_csx = NULL;
+        st->alias_csv = NULL;
+        if (drop) st->hiwater_n_elem = 0;
+    }
 
     /* The clock is REBOUND's own, restored from its own fields, and the
      * engine's copy was not reset with the rest - so write it here
@@ -335,6 +527,11 @@ static int bind_engine(struct reb_simulation *r, struct cft_ias15_state *st){
     /* The first bind is REBOUND's first alloc: N_allocated is 0, so
      * 3N always exceeds it and the polynomial starts from zero. */
     ias15_engine_reset_state();
+    engine_mx_seen = 0;              /* reset_state zeroes the engine's counter */
+    engine_alias_live = 0;           /* a fresh binding carries no mark yet */
+    /* A provisional mark. adopt_loaded_state raises it to the archive's
+     * when the file carries one, which is the half of the checkpoint
+     * corner that is not about the coefficients themselves. */
     engine_hiwater_N = r->N;
     view_alloc(ias15_engine_capacity());
     view_N = r->N;
@@ -450,6 +647,7 @@ static void cft_ias15_step(struct reb_simulation *r, void *p){
          * zeroes the whole array, and nothing below the mark does. */
         if (r->N > engine_hiwater_N){
             ias15_engine_reset_state();
+            engine_mx_seen = 0;          /* reset_state zeroes the engine's counter */
             engine_hiwater_N = r->N;
         }
         view_N = r->N;
@@ -525,6 +723,11 @@ static void cft_ias15_step(struct reb_simulation *r, void *p){
     double dt_done = 0;
     ias15_engine_step(&dt_done);
 
+    /* REBOUND counts a corrector that ran out of passes and warns once
+     * at ten. The engine's counter is the process's; the state's is this
+     * simulation's, monotonic, and archived. */
+    fold_max_exceeded(r, st);
+
     /* --- the binary64 view -------------------------------------------- */
     ias15_engine_get_xv_f64(view_x, view_v);
     ias15_engine_get_a_f64(tmp_a);
@@ -560,6 +763,9 @@ static void *cft_ias15_create(void){
                                       * on the first step */
     st->arith_fma = 0;               /* REBOUND's sequence of roundings */
     st->E = 1;
+    st->iterations_max_exceeded = 0; /* REBOUND's, per simulation and monotonic */
+    st->hiwater_n_elem = 0;          /* the mark is the live count until it is not */
+    st->provenance = CFT_PROV_NONE;  /* this run is its own origin */
     snprintf(st->cft_abi, sizeof st->cft_abi, "%u.%u",
              (unsigned)(cft_abi_version() >> 16), (unsigned)(cft_abi_version() & 0xffff));
     return st;
@@ -568,6 +774,7 @@ static void *cft_ias15_create(void){
 static void cft_ias15_free(void *p){
     struct cft_ias15_state *st = p;
     if (!st) return;
+    const int was_owner = (engine_owner == st);
     if (engine_owner == st){
         /* The engine's buffers are the process's and stay allocated;
          * releasing ownership is what lets the next simulation adopt
@@ -593,6 +800,18 @@ static void cft_ias15_free(void *p){
             free(st->g[m]);  free(st->b[m]);  free(st->e[m]);
             free(st->br[m]); free(st->er[m]); free(st->csb[m]);
         }
+    }
+    /* The alias family, on the same terms as the blobs above and for
+     * the same reason - an owner's point into the engine and must not
+     * be freed, a non-owner's are the loader's and would otherwise
+     * leak. was_owner, because the branch above has already released
+     * ownership by the time this runs. adopt_loaded_state NULLs each
+     * one as it copies it in, so an owner normally has none at all. */
+    if (!was_owner){
+        for (int f = 0; f < 6; f++)
+            for (int m = 0; m < 7; m++) free(st->alias[f][m]);
+        free(st->alias_csx);
+        free(st->alias_csv);
     }
     free(st);
 }

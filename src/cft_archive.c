@@ -77,6 +77,51 @@
  * last so that a whole-snapshot load is self-consistent even before the
  * repair runs.
  *
+ * NOTE 5. cft_alias_g0 .. cft_alias_br6, cft_alias_csx and
+ * cft_alias_csv are the arrays REBOUND holds at N_allocated rather than
+ * at the live 3N:
+ *
+ *   REBOUND                                  here
+ *   x0 v0 a0 csx csv csa0  at N_allocated    cft_alias_csx, cft_alias_csv
+ *   g b csb e br er        at N_allocated    cft_alias_<family><level>
+ *
+ * REBOUND's reb_integrator_ias15_alloc() reallocates only when 3N
+ * exceeds N_allocated, so below the mark nothing moves and nothing is
+ * zeroed. Two consequences, and this port had to reproduce both:
+ *
+ *  - the six coefficient families share one allocation apiece that
+ *    dpcast() re-slices at the CURRENT 3N, so a shrink strands a tail
+ *    no stride reaches and a regrow under the mark reads it straight
+ *    back. ias15_engine_alias_resize() keeps that in a flat shadow;
+ *    cft_alias_<family><level> is that shadow sliced at the MARK's
+ *    stride, which is what REBOUND's buffer holds.
+ *
+ *  - csx and csv keep their values above the live region too, and the
+ *    predictor reads them before writing them. Of REBOUND's flat
+ *    arrays they are the only two that do: x0, v0, a0 and csa0 are all
+ *    written at the top of every attempt, and this port re-promotes x
+ *    and v from r->particles whenever the body count changes. Measured
+ *    rather than argued - without these two, gate_real's second
+ *    sequence differs in the last bit of exactly the coordinates a
+ *    stale carry touches.
+ *
+ * That is the whole of ROADMAP.md's "What the collision work leaves
+ * open, across a checkpoint". Nothing carried the tail across a save,
+ * and nothing carried N_allocated either: the shim set its high-water
+ * mark from r->N when it bound, so a resumed run's mark was the SMALLER
+ * count and a regrow zeroed where REBOUND aliases.
+ *
+ * REBOUND archives no N_allocated field - every one of its pointers
+ * names N_allocated as offset_N and the reader recovers it as
+ * size_data/element_size. Same here: the mark is
+ * cft_hiwater_n_elem/3.
+ *
+ * They are written only when the mark is ABOVE the live count, which is
+ * the only time they hold anything a live blob does not. REBOUND's
+ * writer skips a REB_POINTER field of zero length, so an archive from a
+ * run that never shrank carries none of them and is byte for byte what
+ * this project wrote before they existed.
+ *
  * NOTE 4. cft_x and cft_v have no counterpart in REBOUND's list because
  * REBOUND's live coordinates are in r->particles, which it archives as
  * simulation fields. Here they are the integrator's own: step_attempt()
@@ -111,7 +156,11 @@
  * them. CFT_N_BLOBS is 50: eight flat arrays (x0, v0, a0, csx, csv,
  * csa0 and the live x, v) and six seven-level ones. They were
  * file-scope statics here until 2026-09-10, which meant the registered
- * integrator could not name them - see docs/VALIDATION.md entry 25. */
+ * integrator could not name them - see docs/VALIDATION.md entry 25.
+ *
+ * CFT_N_ALIAS_BLOBS is a second family, sized by hiwater_n_elem rather
+ * than by n_elem and optional on disk - NOTE 5. Every count comes from
+ * src/cft_ias15_fields.h; nothing here writes one down. */
 
 const struct reb_binarydata_field_descriptor *cft_archive_descriptor_list(int format){
     switch (format){
@@ -123,22 +172,29 @@ const struct reb_binarydata_field_descriptor *cft_archive_descriptor_list(int fo
 }
 
 /* A list that has drifted writes the wrong bytes silently, so check its
- * shape rather than trusting it: CFT_N_BLOBS blobs then CFT_N_SCALARS
- * scalars,
+ * shape rather than trusting it: CFT_N_BLOBS blobs of n_elem,
+ * CFT_N_ALIAS_BLOBS of hiwater_n_elem, then CFT_N_SCALARS scalars,
  * every name cft_-prefixed and unique, every blob's element_size the
- * format's width and its offset_N the one member the read path is
- * allowed to scribble on, and cft_n_elem last (NOTE 3). Returns 0 if
- * all three lists are sound, otherwise the number of complaints, each
- * printed. */
+ * format's width and its offset_N one of the two length members the
+ * read path is allowed to scribble on, the alias descriptors landing in
+ * cft_archive_state_alias()'s order, and cft_n_elem last (NOTE 3).
+ * Returns 0 if all three lists are sound, otherwise the number of
+ * complaints, each printed. */
 int cft_archive_selftest(void){
     int bad = 0;
     const int fmts[3] = { CFT_FP64, CFT_FP128, CFT_FP256 };
+    const size_t apfx = sizeof CFT_ALIAS_PREFIX - 1;
+    /* Addresses in a dummy state, so nothing is allocated and nothing
+     * is read; only offsets within it are taken. */
+    struct cft_ias15_state probe;
+    memset(&probe, 0, sizeof probe);
     for (int fi = 0; fi < 3; fi++){
         const struct reb_binarydata_field_descriptor *l = cft_archive_descriptor_list(fmts[fi]);
         size_t w = cft_format_size((cft_format)fmts[fi]);
-        int n = 0, blobs = 0, scalars = 0;
+        int n = 0, blobs = 0, alias = 0, scalars = 0;
         for (; l[n].name[0]; n++){
             const struct reb_binarydata_field_descriptor *f = &l[n];
+            int is_alias_name = !strncmp(f->name, CFT_ALIAS_PREFIX, apfx);
             if (strncmp(f->name, "cft_", 4)){
                 fprintf(stderr, "cft_archive_selftest: \"%s\" is not cft_-prefixed\n", f->name); bad++;
             }
@@ -147,19 +203,50 @@ int cft_archive_selftest(void){
                     fprintf(stderr, "cft_archive_selftest: duplicate name \"%s\"\n", f->name); bad++;
                 }
             if (f->dtype == REB_POINTER){
-                blobs++;
                 if (f->element_size != w){
                     fprintf(stderr, "cft_archive_selftest: %s element_size %zu, want %zu\n",
                             f->name, f->element_size, w); bad++;
                 }
-                if (f->offset_N != CFT_OFF(n_elem)){
-                    fprintf(stderr, "cft_archive_selftest: %s offset_N is not n_elem\n", f->name); bad++;
+                if (f->offset_N == CFT_OFF(n_elem)){
+                    blobs++;
+                    if (is_alias_name){
+                        fprintf(stderr, "cft_archive_selftest: %s is named for the alias "
+                                        "family but its length is n_elem\n", f->name); bad++;
+                    }
+                }else if (f->offset_N == CFT_OFF(hiwater_n_elem)){
+                    /* Each must land on the member cft_archive_state_alias()
+                     * hands back at the same index: nothing else checks
+                     * that the descriptor order and the member order
+                     * agree, and two families swapped would read each
+                     * other's coefficients back without a word. */
+                    unsigned char **m = cft_archive_state_alias(&probe, alias);
+                    size_t want = m ? (size_t)((char*)m - (char*)&probe) : (size_t)-1;
+                    if (!is_alias_name){
+                        fprintf(stderr, "cft_archive_selftest: %s is sized by hiwater_n_elem "
+                                        "and is not named \"%s...\"\n", f->name, CFT_ALIAS_PREFIX);
+                        bad++;
+                    }
+                    if (f->offset != want){
+                        fprintf(stderr, "cft_archive_selftest: alias blob %d (%s) is at offset "
+                                        "%zu, want %zu; CFT_FD_ALIAS and "
+                                        "cft_archive_state_alias() are out of step\n",
+                                alias, f->name, f->offset, want);
+                        bad++;
+                    }
+                    alias++;
+                }else{
+                    fprintf(stderr, "cft_archive_selftest: %s offset_N names neither n_elem "
+                                    "nor hiwater_n_elem\n", f->name); bad++;
                 }
             }else scalars++;
         }
         if (blobs != CFT_N_BLOBS){
             fprintf(stderr, "cft_archive_selftest: %d blobs at %s, want %d\n",
                     blobs, cft_format_name((cft_format)fmts[fi]), CFT_N_BLOBS); bad++;
+        }
+        if (alias != CFT_N_ALIAS_BLOBS){
+            fprintf(stderr, "cft_archive_selftest: %d alias blobs at %s, want %d\n",
+                    alias, cft_format_name((cft_format)fmts[fi]), CFT_N_ALIAS_BLOBS); bad++;
         }
         if (scalars != CFT_N_SCALARS){
             fprintf(stderr, "cft_archive_selftest: %d scalars, want %d\n",
@@ -176,30 +263,40 @@ int cft_archive_selftest(void){
      * index to a member by position, so a blob added to CFT_FD_BLOBS
      * without a matching case would return NULL here - which is how a
      * stale copy of this walker took three gates down with an access
-     * violation rather than a message. Addresses in a dummy state, so
-     * nothing is allocated and nothing is read. */
+     * violation rather than a message. The same for the alias family
+     * and cft_archive_state_alias(). */
     {
-        struct cft_ias15_state probe;
-        unsigned char **seen[CFT_N_BLOBS];
-        memset(&probe, 0, sizeof probe);
-        for (int i = 0; i < CFT_N_BLOBS; i++){
-            unsigned char **b = cft_archive_state_blob(&probe, i);
+        unsigned char **seen[CFT_N_BLOBS + CFT_N_ALIAS_BLOBS];
+        int k = 0;
+        for (int i = 0; i < CFT_N_BLOBS + CFT_N_ALIAS_BLOBS; i++){
+            int in_alias = i >= CFT_N_BLOBS;
+            int idx = in_alias ? i - CFT_N_BLOBS : i;
+            unsigned char **b = in_alias ? cft_archive_state_alias(&probe, idx)
+                                         : cft_archive_state_blob(&probe, idx);
             if (!b){
-                fprintf(stderr, "cft_archive_selftest: blob %d of %d has no member; "
-                                "CFT_FD_BLOBS and cft_archive_state_blob() disagree\n",
-                        i, CFT_N_BLOBS); bad++; seen[i] = NULL; continue;
+                fprintf(stderr, "cft_archive_selftest: %s blob %d of %d has no member; "
+                                "the macro list and the walker disagree\n",
+                        in_alias ? "alias" : "state", idx,
+                        in_alias ? CFT_N_ALIAS_BLOBS : CFT_N_BLOBS);
+                bad++; seen[k++] = NULL; continue;
             }
-            for (int j = 0; j < i; j++){
+            for (int j = 0; j < k; j++){
                 if (seen[j] == b){
                     fprintf(stderr, "cft_archive_selftest: blobs %d and %d are the same "
                                     "member\n", j, i); bad++; break;
                 }
             }
-            seen[i] = b;
+            seen[k++] = b;
         }
         if (cft_archive_state_blob(&probe, CFT_N_BLOBS)){
             fprintf(stderr, "cft_archive_selftest: index %d is past the end and still "
                             "returns a member; CFT_N_BLOBS is too small\n", CFT_N_BLOBS);
+            bad++;
+        }
+        if (cft_archive_state_alias(&probe, CFT_N_ALIAS_BLOBS)){
+            fprintf(stderr, "cft_archive_selftest: alias index %d is past the end and "
+                            "still returns a member; CFT_N_ALIAS_BLOBS is too small\n",
+                    CFT_N_ALIAS_BLOBS);
             bad++;
         }
     }
@@ -231,16 +328,33 @@ int cft_archive_bind(struct reb_simulation *r){
 /* allocation                                                         */
 /* ------------------------------------------------------------------ */
 
-/* Is this the tail of a wide blob's name? Answered from the descriptor
- * list rather than from a second list of names kept in step by hand:
- * a blob is exactly a REB_POINTER field called cft_<tag>. */
-static int is_blob_tag(const char *tag){
+/* Is this the tail of a wide blob's name, and which family is it in?
+ * Answered from the descriptor list rather than from a second list of
+ * names kept in step by hand: a blob is exactly a REB_POINTER field
+ * called cft_<tag>, and its family is which length member it is sized
+ * by - which is the difference that matters and cannot drift from the
+ * list the way a name test could. */
+#define CFT_BLOB_NONE  0
+#define CFT_BLOB_STATE 1    /* n_elem elements: CFT_FD_BLOBS */
+#define CFT_BLOB_ALIAS 2    /* hiwater_n_elem elements: CFT_FD_ALIAS */
+static int blob_class(const char *tag){
     char want[64];
     const struct reb_binarydata_field_descriptor *f;
-    if (snprintf(want, sizeof want, "cft_%s", tag) >= (int)sizeof want) return 0;
-    for (f = cft_fd_fp64; f->name[0]; f++)
-        if (f->dtype == REB_POINTER && strcmp(f->name, want) == 0) return 1;
-    return 0;
+    if (snprintf(want, sizeof want, "cft_%s", tag) >= (int)sizeof want) return CFT_BLOB_NONE;
+    for (f = cft_fd_fp64; f->name[0]; f++){
+        if (f->dtype != REB_POINTER || strcmp(f->name, want)) continue;
+        return f->offset_N == CFT_OFF(hiwater_n_elem) ? CFT_BLOB_ALIAS : CFT_BLOB_STATE;
+    }
+    return CFT_BLOB_NONE;
+}
+
+uint64_t cft_archive_hiwater_N(const struct cft_archive_info *info){
+    /* Three coordinates a body, which is how REBOUND recovers its own
+     * N_allocated from a field length too - see NOTE 5. No alias
+     * family means the mark was the live count, which is what its
+     * absence records. */
+    if (info->hiwater_n_elem) return info->hiwater_n_elem / 3u;
+    return info->n_elem / 3u;
 }
 
 unsigned char **cft_archive_state_blob(struct cft_ias15_state *s, int i){
@@ -271,6 +385,16 @@ unsigned char **cft_archive_state_blob(struct cft_ias15_state *s, int i){
     return NULL;
 }
 
+unsigned char **cft_archive_state_alias(struct cft_ias15_state *s, int i){
+    /* the same order as CFT_FD_ALIAS: six families of seven levels,
+     * then the two flat carries */
+    if (i < 0) return NULL;
+    if (i < 6 * 7) return &s->alias[i / 7][i % 7];
+    if (i == 6 * 7)     return &s->alias_csx;
+    if (i == 6 * 7 + 1) return &s->alias_csv;
+    return NULL;
+}
+
 int cft_archive_state_alloc(struct cft_ias15_state *s, size_t n_elem){
     size_t w = cft_ias15_state_width(s);
     if (!w) return -1;
@@ -280,6 +404,14 @@ int cft_archive_state_alloc(struct cft_ias15_state *s, size_t n_elem){
         *p = calloc(n_elem ? n_elem : 1, w);   /* +0 in every format */
         if (!*p) return -1;
     }
+    /* A freshly allocated state is at its own high-water mark by
+     * definition - nothing has been removed from it - so the alias
+     * family is empty and its absence is what records that. */
+    for (int f = 0; f < CFT_N_ALIAS_BLOBS; f++){
+        unsigned char **p = cft_archive_state_alias(s, f);
+        if (p){ free(*p); *p = NULL; }
+    }
+    s->hiwater_n_elem = 0;
     s->n_elem = n_elem;
     return 0;
 }
@@ -290,6 +422,11 @@ void cft_archive_state_free(struct cft_ias15_state *s){
         free(*p);
         *p = NULL;
     }
+    for (int f = 0; f < CFT_N_ALIAS_BLOBS; f++){
+        unsigned char **p = cft_archive_state_alias(s, f);
+        if (p){ free(*p); *p = NULL; }
+    }
+    s->hiwater_n_elem = 0;
     s->n_elem = 0;
 }
 
@@ -376,11 +513,29 @@ static int cft_probe_one(FILE *f, uint64_t offset, struct cft_archive_info *out)
                 out->format = v;
                 continue;
             }
-            if (strcmp(tag, "n_elem") == 0 || strcmp(tag, "E") == 0){
+            if (strcmp(tag, "n_elem") == 0 || strcmp(tag, "E") == 0
+                    || strcmp(tag, "hiwater_n_elem") == 0){
                 size_t v = 0;
                 if (field.size_data != sizeof v) return -1;
                 if (fread(&v, sizeof v, 1, f) != 1) return -1;
-                if (tag[0] == 'n') out->n_elem = (uint64_t)v; else out->E = (uint64_t)v;
+                if      (!strcmp(tag, "E"))              out->E = (uint64_t)v;
+                else if (!strcmp(tag, "hiwater_n_elem")){ out->hiwater_n_elem = (uint64_t)v;
+                                                          out->has_hiwater = 1; }
+                else                                     out->n_elem = (uint64_t)v;
+                continue;
+            }
+            if (strcmp(tag, "provenance") == 0){
+                int v = 0;
+                if (field.size_data != sizeof v) return -1;
+                if (fread(&v, sizeof v, 1, f) != 1) return -1;
+                out->provenance = v;
+                continue;
+            }
+            if (strcmp(tag, "iterations_max_exceeded") == 0){
+                uint64_t v = 0;
+                if (field.size_data != sizeof v) return -1;
+                if (fread(&v, sizeof v, 1, f) != 1) return -1;
+                out->iterations_max_exceeded = v;
                 continue;
             }
             if (strcmp(tag, "abi_0") == 0 || strcmp(tag, "abi_1") == 0){
@@ -396,11 +551,21 @@ static int cft_probe_one(FILE *f, uint64_t offset, struct cft_archive_info *out)
                 out->constants_digest = v;
                 continue;
             }
-            /* a wide blob: only its length matters here */
-            if (is_blob_tag(tag)){
-                if (out->blob_bytes == 0) out->blob_bytes = (uint64_t)field.size_data;
-                else if (out->blob_bytes != (uint64_t)field.size_data) out->blob_lengths_agree = 0;
-                out->n_blobs_seen++;
+            /* a wide blob: only its length matters here. The two
+             * families are counted apart because their lengths are two
+             * different members - CFT_FD_A in src/cft_ias15_fields.h. */
+            switch (blob_class(tag)){
+                case CFT_BLOB_STATE:
+                    if (out->blob_bytes == 0) out->blob_bytes = (uint64_t)field.size_data;
+                    else if (out->blob_bytes != (uint64_t)field.size_data) out->blob_lengths_agree = 0;
+                    out->n_blobs_seen++;
+                    break;
+                case CFT_BLOB_ALIAS:
+                    if (out->alias_blob_bytes == 0) out->alias_blob_bytes = (uint64_t)field.size_data;
+                    else if (out->alias_blob_bytes != (uint64_t)field.size_data) out->alias_lengths_agree = 0;
+                    out->n_alias_blobs_seen++;
+                    break;
+                default: break;
             }
         }
         if (fseek(f, (long)field.size_data, SEEK_CUR)) return -1;
@@ -411,7 +576,9 @@ int cft_archive_probe(const char *filename, int64_t snapshot,
                       struct cft_archive_info *out){
     memset(out, 0, sizeof *out);
     out->format = -1;
+    out->provenance = -1;              /* no cft_provenance field at all */
     out->blob_lengths_agree = 1;
+    out->alias_lengths_agree = 1;
 
     struct reb_simulationarchive *sa = reb_simulationarchive_create_from_file(filename);
     if (!sa) return -1;
@@ -430,21 +597,60 @@ int cft_archive_probe(const char *filename, int64_t snapshot,
         struct cft_archive_info over;
         memset(&over, 0, sizeof over);
         over.format = -1;
+        over.provenance = -1;
         over.blob_lengths_agree = 1;
+        over.alias_lengths_agree = 1;
         memcpy(over.integrator, out->integrator, sizeof over.integrator);
         err = cft_probe_one(f, sa->offset[snapshot], &over);
         if (!err){
             if (over.integrator[0]) memcpy(out->integrator, over.integrator, sizeof out->integrator);
             if (over.format >= 0)   out->format = over.format;
+            if (over.provenance >= 0) out->provenance = over.provenance;
             if (over.n_elem)        out->n_elem = over.n_elem;
             if (over.E)             out->E = over.E;
             if (over.abi[0])        memcpy(out->abi, over.abi, sizeof out->abi);
             if (over.constants_digest) out->constants_digest = over.constants_digest;
-            if (over.blob_bytes){
+            if (over.iterations_max_exceeded) out->iterations_max_exceeded = over.iterations_max_exceeded;
+            /* A blob's effective length is the overlay's where the
+             * overlay carries it and the base's where it does not, so
+             * the two lengths have to agree only when the overlay
+             * carries SOME of them. When it carries all of them - which
+             * is what a particle count change produces, because
+             * reb_binarydata_diff emits every field whose size_data
+             * differs - the base's lengths are all superseded and a
+             * disagreement with them is not one. Reading it as one
+             * refused every appended snapshot taken after a removal. */
+            if (over.n_blobs_seen == CFT_N_BLOBS){
+                out->blob_bytes = over.blob_bytes;
+                out->blob_lengths_agree = over.blob_lengths_agree;
+            }else if (over.blob_bytes){
                 if (out->blob_bytes && out->blob_bytes != over.blob_bytes) out->blob_lengths_agree = 0;
                 out->blob_bytes = over.blob_bytes;
+                if (!over.blob_lengths_agree) out->blob_lengths_agree = 0;
             }
-            if (!over.blob_lengths_agree) out->blob_lengths_agree = 0;
+            /* The alias family. cft_hiwater_n_elem is a scalar like any
+             * other and a diff omits it when it has not changed, so an
+             * ABSENT field means "unchanged" while a field carrying 0
+             * means the mark has risen back to the live count and the
+             * base snapshot's blobs are now dead weight. Those are two
+             * different facts and has_hiwater is what tells them apart;
+             * reading a present 0 as "unchanged" would refuse a
+             * perfectly good append. */
+            if (over.has_hiwater){
+                out->hiwater_n_elem = over.hiwater_n_elem;
+                out->has_hiwater = 1;
+            }
+            if (over.n_alias_blobs_seen == CFT_N_ALIAS_BLOBS){
+                out->alias_blob_bytes = over.alias_blob_bytes;
+                out->alias_lengths_agree = over.alias_lengths_agree;
+            }else if (over.alias_blob_bytes){
+                if (out->alias_blob_bytes && out->alias_blob_bytes != over.alias_blob_bytes)
+                    out->alias_lengths_agree = 0;
+                out->alias_blob_bytes = over.alias_blob_bytes;
+                if (!over.alias_lengths_agree) out->alias_lengths_agree = 0;
+            }
+            if (over.n_alias_blobs_seen > out->n_alias_blobs_seen)
+                out->n_alias_blobs_seen = over.n_alias_blobs_seen;
             out->has_cft |= over.has_cft;
             out->n_cft_fields += over.n_cft_fields;
         }
@@ -565,8 +771,14 @@ enum cft_archive_status cft_archive_finish_load(struct reb_simulation *r,
 
     if (!info->has_cft){
         int want = (want_format >= 0) ? want_format : CFT_FP64;
+        enum cft_archive_status st;
         if (!cft_format_size((cft_format)want)) return CFT_ARCHIVE_BAD;
-        return promote(r, want, dev);
+        st = promote(r, want, dev);
+        if (st == CFT_ARCHIVE_PROMOTED){
+            struct cft_ias15_state *ps = (struct cft_ias15_state*)r->integrator.state;
+            if (ps) ps->provenance = CFT_PROV_PROMOTED;
+        }
+        return st;
     }
 
     if (!r->integrator.name || strcmp(r->integrator.name, CFT_IAS15_INTEGRATOR_NAME) != 0)
@@ -594,6 +806,34 @@ enum cft_archive_status cft_archive_finish_load(struct reb_simulation *r,
      * NOTE 3 at the top of this file. */
     s->n_elem = (size_t)info->n_elem;
 
+    /* The alias family, on the same terms and for the same reason. It
+     * is OPTIONAL: an archive written by a run whose mark was its live
+     * count carries none of it, and neither does any archive written
+     * before 2026-09-11, so its absence means a mark of n_elem/3 and
+     * an empty shadow - which is what a load did before these fields
+     * existed, and still the right answer. NOTE 5. */
+    if (info->hiwater_n_elem){
+        if (info->n_alias_blobs_seen != CFT_N_ALIAS_BLOBS) return CFT_ARCHIVE_COUNT_MISMATCH;
+        if (!info->alias_lengths_agree)                    return CFT_ARCHIVE_COUNT_MISMATCH;
+        if (info->alias_blob_bytes != info->hiwater_n_elem * (uint64_t)w)
+            return CFT_ARCHIVE_COUNT_MISMATCH;
+        /* three coordinates a body, and a high-water mark that cannot
+         * be BELOW the live count - it only ever rises, and REBOUND's
+         * N_allocated is the same. */
+        if (info->hiwater_n_elem % 3u)                     return CFT_ARCHIVE_COUNT_MISMATCH;
+        if (info->hiwater_n_elem < info->n_elem)           return CFT_ARCHIVE_COUNT_MISMATCH;
+        s->hiwater_n_elem = (size_t)info->hiwater_n_elem;
+    }else{
+        /* Blobs with no field naming their length is a file that
+         * disagrees with itself. Blobs with a length of ZERO are not:
+         * that is an appended snapshot whose mark has risen back to the
+         * live count, so what the base snapshot wrote is dead weight
+         * and is dropped rather than refused. */
+        if (info->n_alias_blobs_seen && !info->has_hiwater)
+            return CFT_ARCHIVE_COUNT_MISMATCH;
+        s->hiwater_n_elem = 0;
+    }
+
     /* Did the load actually happen? Everything above was read out of
      * the file by cft_archive_probe() and says nothing about what
      * reached memory. REBOUND allocates a REB_POINTER field's buffer
@@ -617,9 +857,30 @@ enum cft_archive_status cft_archive_finish_load(struct reb_simulation *r,
                 return CFT_ARCHIVE_BAD;
             }
         }
+        /* The alias family, by the same argument: the file names six of
+         * them, so six must have reached memory. */
+        if (s->hiwater_n_elem){
+            for (i = 0; i < CFT_N_ALIAS_BLOBS; i++){
+                unsigned char **b = cft_archive_state_alias(s, i);
+                if (!b || !*b){
+                    fprintf(stderr,
+                            "cft-rebound: the archive names %d high-water coefficient blobs "
+                            "and blob %d did not reach memory. The integrator was registered "
+                            "with a field descriptor list that does not match this file, so "
+                            "the state was not restored; refusing rather than continuing "
+                            "from defaults.\n", info->n_alias_blobs_seen, i);
+                    return CFT_ARCHIVE_BAD;
+                }
+            }
+        }
     }
 
     if (cft_archive_bind(r)) return CFT_ARCHIVE_BAD;
+    /* Last, so that it is about THIS load and not about the run that
+     * wrote the file - whose own provenance arrived in the cft_ field
+     * and has just been overwritten. cft_archive_probe() is where to
+     * read the writer's. */
+    s->provenance = CFT_PROV_EXACT;
     return CFT_ARCHIVE_EXACT;
 }
 
@@ -669,10 +930,13 @@ struct reb_simulation *cft_archive_load(const char *filename, int64_t snapshot,
                 snprintf(detail, sizeof detail,
                     "cft_n_elem is %" PRIu64 " and cft_E is %" PRIu64 ", but the archive holds "
                     "%d of %d wide blobs and each is %" PRIu64 " bytes, against %zu N particles "
-                    "at %zu bytes an element.",
+                    "at %zu bytes an element; and cft_hiwater_n_elem is %" PRIu64 " against "
+                    "%d of %d high-water blobs of %" PRIu64 " bytes.",
                     info.n_elem, info.E ? info.E : 1, info.n_blobs_seen, CFT_N_BLOBS,
                     info.blob_bytes, r->N,
-                    cft_format_size((cft_format)info.format));
+                    cft_format_size((cft_format)info.format),
+                    info.hiwater_n_elem, info.n_alias_blobs_seen, CFT_N_ALIAS_BLOBS,
+                    info.alias_blob_bytes);
                 refuse(filename, snapshot, "its element count does not add up", detail);
                 break;
             case CFT_ARCHIVE_FORMAT_MISMATCH:
