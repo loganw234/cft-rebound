@@ -28,26 +28,44 @@
  * same program with "ias15" and with "ias15_cft" must agree on every
  * particle value bit for bit.
  *
- * WHAT IS REFUSED. Additional forces, velocity-dependent forces,
- * collisions, ghost boxes, non-trivial boundaries, any gravity module
- * but REB_GRAVITY_BASIC, non-zero softening, test particles (N_active),
- * r->map subsets, variational particles and MEGNO are out of scope. The
- * step detects each of them, names it in a REBOUND error message and
- * stops the integration rather than compute something wrong. So are
- * four of the state's own settings: an adaptive_mode other than PRS23
- * (2), a non-zero min_dt, a format that is not one of the three, and a
- * max_iter below 0 (0 itself means the default for the format); and an
- * E other than 1, because an ensemble is E
- * independent systems and a reb_simulation is one (docs/ENSEMBLE.md).
+ * WHAT IS REFUSED. The list is not here, because a list in a comment
+ * is a list that drifts: it is cft_support_rows in src/cft_supported.c,
+ * one row per capability, and both entry points walk it. This paragraph
+ * says only which rows apply HERE, and every row names itself in a
+ * REBOUND error message rather than computing something wrong.
  *
- * ONE thing the subprocess API refuses and this deliberately does not:
- * pre_/post_timestep_modifications. The step compares r->particles
- * against the view it last wrote and re-promotes anything that
- * changed, so a callback that edits a coordinate is honoured here.
- * cft_rebound_check() refuses them because the subprocess API cannot
- * see a callback at all - it writes a problem file and runs a program.
- * That is a capability this path has, not a check it is missing -
- * AT BINARY64. Above it, read the warning below before using one.
+ * Of the simulation's settings the drop-in refuses: a custom gravity
+ * routine, any gravity module but REB_GRAVITY_BASIC, ghost boxes,
+ * non-trivial boundaries, r->map subsets, variational particles, MEGNO,
+ * an N_active GREATER than r->N (REBOUND itself reads past the end of
+ * r->particles there, so there is no behaviour to reproduce), and a
+ * collision above CFT_FP64 when accurate = 0 - see `accurate` below for
+ * why that one is conditional. Of the state's own settings: an
+ * adaptive_mode that is not one of REBOUND's four, a format that is not
+ * one of the three, a max_iter below 0 (0 itself means the default for
+ * the format), an E other than 1 (an ensemble is E independent systems
+ * and a reb_simulation is one, docs/ENSEMBLE.md), and arith_fma = 1
+ * together with a velocity-dependent force routine (the fma_veldep row
+ * says why).
+ *
+ * WHAT THIS PATH DOES AND THE SUBPROCESS API DOES NOT. Everything that
+ * needs something running in THIS process between or during the steps:
+ * r->additional_forces and velocity-dependent forces, called at every
+ * Gauss-Radau node exactly where REBOUND's IAS15 calls them;
+ * pre_/post_timestep_modifications; collisions, because REBOUND's own
+ * driver runs the search between steps here; and attached ODE sets,
+ * which reb_simulation_step() integrates itself for every integrator
+ * whose name is not "bs". cft_rebound_check() refuses all of those
+ * because it writes a problem file and runs a program in another
+ * process, which can see none of them.
+ *
+ * Test particles (r->N_active with r->testparticle_type), non-zero
+ * softening, a non-zero min_dt and all four adaptive_mode criteria are
+ * computed here too, and were on the refusal list until 2026-09-11.
+ *
+ * The callback hooks are a capability this path has, not a check it is
+ * missing - AT BINARY64. Above it, read the warning below before using
+ * one that writes a coordinate.
  *
  * WARNING, and it is not a small one. r->particles are binary64 and
  * always will be, so a callback that edits a coordinate makes the step
@@ -60,10 +78,17 @@
  * the hooks at CFT_FP64, where the promotion is exact and costs
  * nothing, and treat a wide run with a coordinate-writing callback as
  * a binary64 run until a selective promote exists.
- * r->gravity_custom and r->N_odes were in that sentence too until
- * 2026-09-10 and should not have been: the engine computes gravity
- * itself and the wide state carries particles only, so each would have
- * been silently ignored. Both are refused above now.
+ * r->gravity_custom was in that sentence too until 2026-09-10 and
+ * should not have been: the engine issues REBOUND's basic pairwise
+ * gravity itself, so a custom routine would never be called and the run
+ * would answer a different problem. It is refused now.
+ *
+ * r->N_odes was in that sentence as well, and that was wrong in the
+ * other direction: attached ODE sets are neither ignored nor refused on
+ * this path. reb_simulation_step() integrates them itself, with a
+ * private Bulirsch-Stoer state, for every integrator whose name is not
+ * "bs" - so under the drop-in they are integrated exactly as they are
+ * under REBOUND's own ias15. Only the subprocess API refuses them.
  */
 #ifndef CFT_IAS15_H
 #define CFT_IAS15_H

@@ -18,9 +18,10 @@ bdfda4bd), not from running anything:
    they exist.
 3. **Is the per-step state small enough to stay resident?** On the
    tile the state that must persist between runs is what a lane
-   carries in its scratch block (256 format-width slots a lane today,
-   docs/HARDWARE.md) or what the host can hold in device-resident
-   buffers.
+   carries in its scratch block (256 format-width slots a lane today -
+   cft-fp256's docs/SEQUENCER.md, not this project's docs/HARDWARE.md,
+   which counts what IAS15 puts in those slots rather than how many
+   there are) or what the host can hold in device-resident buffers.
 
 The IAS15 measurements in docs/VALIDATION.md are the calibration for
 the first question: a wider format lowers the round-off floor exactly

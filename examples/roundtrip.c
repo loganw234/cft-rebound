@@ -149,22 +149,33 @@ static int run_at(enum cft_rebound_format fmt, struct outcome *o){
 /* The force model is basic pairwise gravity and nothing else, so a
  * simulation asking for more is refused before it runs rather than
  * quietly integrated as something it is not. This is the README's
- * "Scope" table demonstrated: each case sets one thing and prints the
- * message it gets back. */
+ * "Scope" table demonstrated: each case sets one thing, says which
+ * answer it expects, and prints what cft_rebound_check() gives back.
+ * The expectation is the point - a case that only printed the answer
+ * would keep printing whatever the library now does and look right. */
 static void a_force(struct reb_simulation *const r){ (void)r; }
 
+/* r->softening was case 0 here until 2026-09-11, and the example
+ * printed "NOT REFUSED, which is a bug" once it stopped being refused -
+ * accusing the library of a defect that was actually a capability.
+ * src/cft_rebound_run.c forwards r->softening to the program as
+ * --softening now, so a non-zero value is honoured on this path. It is
+ * shown below as an accepted setting instead, which is what keeps this
+ * function from going stale silently the next time a refusal is
+ * retired: every case states which answer it expects. */
 static void show_refusals(void){
-    static const char *const what[] = {
-        "r->softening = 0.01",
-        "r->collision = DIRECT",
-        "r->gravity = TREE",
-        "r->additional_forces set",
-        "1025 particles"
+    static const struct { const char *what; int expect_refusal; } cases[] = {
+        { "r->softening = 0.01",       0 },   /* forwarded, not refused */
+        { "r->collision = DIRECT",     1 },
+        { "r->gravity = TREE",         1 },
+        { "r->additional_forces set",  1 },
+        { "1025 particles",            1 }
     };
     size_t k;
-    for (k = 0; k < sizeof what / sizeof what[0]; k++){
+    for (k = 0; k < sizeof cases / sizeof cases[0]; k++){
         struct reb_simulation *r = build_system();
         char why[256];
+        int refused;
         switch (k){
             case 0: r->softening = 0.01; break;
             case 1: r->collision = REB_COLLISION_DIRECT; break;
@@ -177,10 +188,15 @@ static void show_refusals(void){
                 break;
             }
         }
-        if (cft_rebound_check(r, why, sizeof why))
-            printf("  %-26s -> %s\n", what[k], why);
+        refused = cft_rebound_check(r, why, sizeof why) != 0;
+        if (refused != cases[k].expect_refusal)
+            printf("  %-26s -> UNEXPECTED: %s, which this example did not "
+                   "predict - the refusal list moved under it\n",
+                   cases[k].what, refused ? "refused" : "accepted");
+        else if (refused)
+            printf("  %-26s -> %s\n", cases[k].what, why);
         else
-            printf("  %-26s -> NOT REFUSED, which is a bug\n", what[k]);
+            printf("  %-26s -> accepted; this path honours it\n", cases[k].what);
         reb_simulation_free(r);
     }
 }

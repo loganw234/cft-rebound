@@ -242,9 +242,13 @@ a tolerance*: the difference between a binary64 and a binary256 run of
 the same steps is the binary64 round-off, exactly, which is how every
 floor in the ledger was measured. An ensemble can be gated: 64 or
 1,000 systems in one vector are demonstrably each the solo
-integration, not approximately. And a run can be replayed: the
-recorded step sequence, fed back, reproduces the record to the bit
-(tools/check_ensemble.py, the `--dt-file` entry of the ledger).
+integration, not approximately (tools/check_ensemble.py). And a run can
+be replayed: the recorded step sequence, fed back, reproduces the record
+to the bit - the `--dt-file` entry of the ledger, 2026-09-10, on Kepler
+and the Pythagorean problem at 2,000 steps each. That one is a
+measurement rather than a gate: nothing in `make check` replays a step
+sequence, and `tools/check_ensemble.py` - which an earlier version of
+this line credited for it - has no `--dt-file` case.
 
 What exactness does not give IAS15 is an exact return. Integrated
 forward N steps and back N steps from the exact recorded state

@@ -85,8 +85,18 @@ enum cft_rebound_format {
  * `epsilon` keeps REBOUND's own meaning exactly, including that zero
  * means a fixed step of r->dt - so a zero-initialised struct asks for a
  * fixed step, not for REBOUND's default. Set epsilon = 1e-9 for that.
- * The step criterion is PRS23, REBOUND's 2024 default and the only one
- * the port implements; an ias15 state asking for another is refused. */
+ *
+ * The step criterion is NOT here, deliberately: all four of REBOUND's
+ * are implemented, and the one that runs is the SIMULATION's -
+ * ((struct reb_integrator_ias15_state *)r->integrator.state)
+ * ->adaptive_mode, when r->integrator.name really is "ias15". This call
+ * forwards it to the program unconditionally. Only a number that names
+ * none of the four is refused. It comes from there rather than from
+ * here because it is REBOUND's own ias15 setting and a caller who has
+ * one has already spelled it REBOUND's way.
+ *
+ * r->softening is forwarded the same way, from the simulation, and a
+ * non-zero value is honoured rather than refused. */
 struct cft_rebound_options {
     enum cft_rebound_format format;
     double epsilon;        /* IAS15's tolerance: > 0 adaptive, 0 fixed */
@@ -94,9 +104,10 @@ struct cft_rebound_options {
                             * is REBOUND's default: at 0 the comparison
                             * REBOUND makes is false and no floor is ever
                             * selected, so the arithmetic is unchanged.
-                            * Alongside epsilon and max_iter because the
-                            * IAS15 tunables come from here, not from the
-                            * simulation. */
+                            * Alongside epsilon and max_iter here rather
+                            * than read from the simulation, unlike
+                            * adaptive_mode and r->softening - see the
+                            * note above this struct for which is which. */
     int    max_iter;       /* the cap on IAS15's corrector passes. 0 picks
                             * a default per format - see the note in
                             * src/cft_rebound_run.c - because the program's

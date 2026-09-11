@@ -1086,10 +1086,31 @@ static void dtnew_legacy(const V dtnB){
     }else{
         /* per particle, in REBOUND's order: (x*x + y*y) + z*z, and the
          * same for v. The position is the predictor's at h[7], which is
-         * what r->particles hold when REBOUND reaches this; the velocity
-         * is the step's start, because the predictor only writes
-         * velocities when a velocity-dependent force or MEGNO asks for
-         * them and neither is supported here. */
+         * what r->particles hold when REBOUND reaches this.
+         *
+         * THE VELOCITY IS THE STEP'S START, AND THAT IS NOT ALWAYS
+         * REBOUND'S. This comment used to say the predictor writes
+         * velocities only for a velocity-dependent force or MEGNO and
+         * "neither is supported here", which was true until 2026-09-11
+         * and is not true now: the drop-in supports a velocity-dependent
+         * r->additional_forces. When one is set, REBOUND's node loop
+         * leaves the h[7]-PREDICTED velocities in r->particles
+         * (integrator_ias15.c:446-449), nothing restores them before the
+         * step controller, and its GLOBAL arm reads them at :632. This
+         * port keeps its predicted velocities in FVP and leaves v at the
+         * step start, so the two build v2 from different numbers.
+         *
+         * It has not been shown to change an answer, and the reason is
+         * narrow: v2 feeds ONLY the skip predicate
+         * fabs(v2*dt*dt/x2) < 1e-16, never the error estimate, so a
+         * difference matters only when it flips that boolean. An audit
+         * scanned 260 (speed, drag) configurations tuned to sit on the
+         * threshold and found no flip. So this is a latent divergence
+         * rather than a measured one - but the argument that made it
+         * safe is gone, and nothing gates the combination:
+         * tools/cases_forces.c pins adaptive_mode = 2 and
+         * tools/cases_modes.c sets no force. A case that runs GLOBAL
+         * with a velocity-dependent routine is what would settle it. */
         vmul(sqc, x, x, N3);
         for (size_t p = 0; p < NB; p++) memcpy(E(x2, p), E(sqc, 3 * p), ESZ);
         for (int c = 1; c < 3; c++){
@@ -1357,11 +1378,16 @@ static void force_constants(void){
  * force hook's own flag.
  *
  * REBOUND writes the result into particles[].v; nothing in IAS15 reads
- * it back except the force routine and (in adaptive_mode GLOBAL, which
- * this port does not implement) the step controller, and the end of the
- * step recomputes every velocity from v0. So the port keeps it in its
- * own vector and leaves v alone, which is the same thing with one fewer
- * way to go wrong.
+ * it back except the force routine and, in adaptive_mode GLOBAL, the
+ * step controller, and the end of the step recomputes every velocity
+ * from v0. So the port keeps it in its own vector and leaves v alone.
+ *
+ * That is the same thing with one fewer way to go wrong for three of
+ * the four criteria, and NOT the same thing for GLOBAL, which reads
+ * r->particles[].v - the predicted ones, under a velocity-dependent
+ * routine - where this port reads the step-start v. See the note in
+ * dtnew_legacy() at the "per particle" branch for why that has not been
+ * shown to change an answer and why nothing gates it.
  *
  *   vk = -csv + (((((((b6*7h/8 + b5)*6h/7 + b4)*5h/6 + b3)*4h/5
  *                    + b2)*3h/4 + b1)*2h/3 + b0)*h/2 + a0)*dt*h
@@ -2224,11 +2250,10 @@ void ias15_engine_set_G_f64(double g_){
     V s = valloc(1); eng_promote(s, &g_, 1); vbcast(G, s, NMAX); free(s);
 }
 
-/* softening SQUARED, taken in the run's format. At binary64 that is
- * REBOUND's own fl64(s*s); above it, the more accurate square, which
- * is what a caller asking for a wide format is asking for. */
-/* 2 = PRS23, 3 = AARSETH85. Anything else is refused by the caller;
- * this only records it. */
+/* 0 = INDIVIDUAL, 1 = GLOBAL, 2 = PRS23, 3 = AARSETH85: all four of
+ * REBOUND's, all implemented. A number outside 0..3 is refused by the
+ * caller - main() for the standalone program, the adaptive_mode row in
+ * src/cft_supported.c for both entry points - and this only records it. */
 void ias15_engine_set_adaptive_mode(int mode){ ADAPTIVE_MODE = mode; }
 
 /* Remove one body from the wide state, shifting every vector down.
@@ -2267,6 +2292,9 @@ void ias15_engine_set_min_dt_f64(double m_){
     V s = valloc(1); eng_promote(s, &m_, 1); vbcast(SMINDT, s, NMAX); free(s);
 }
 
+/* softening SQUARED, taken in the run's format. At binary64 that is
+ * REBOUND's own fl64(s*s); above it, the more accurate square, which
+ * is what a caller asking for a wide format is asking for. */
 void ias15_engine_set_softening_f64(double s_){
     V a = valloc(1), b = valloc(1);
     eng_promote(a, &s_, 1);
