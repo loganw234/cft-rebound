@@ -972,12 +972,175 @@ static void choose_timestep(void){
 }
 
 /* ------------------------------------------------------------------ */
+/* The force hook: r->additional_forces at every substage              */
+/* ------------------------------------------------------------------ */
+/* REBOUND's IAS15 never calls gravity directly. It calls
+ * reb_simulation_update_acceleration(), which is gravity FOLLOWED BY
+ * r->additional_forces(r) (simulation.c:643), at the top of every step
+ * attempt and again at each of the seven Gauss-Radau nodes
+ * (integrator_ias15.c:461) - and then reads particles[mk].ax straight
+ * back into at[] at :467. So the port's two gravity() call sites are
+ * the seam, and this is the half of it that lives in the engine.
+ *
+ * Library only. The standalone program has no caller to call back into,
+ * and the compiled-out branch is what keeps the no-force path from
+ * paying for a hook that can never be set. Under the library the cost
+ * of "no forces" is one predictable test of a null pointer per node.
+ *
+ * The engine may not include rebound.h - src/ias15_cft.c builds both as
+ * the program and, here, as a library half that knows nothing about
+ * REBOUND, and that separation is load bearing - so the hook is a plain
+ * callback over binary64 buffers. src/ias15_engine.h states the
+ * contract; cft_force_hook() in src/reb_integrator_cft.c is the other
+ * half, the one that knows what a particle is.
+ */
+#ifdef IAS15_CFT_LIBRARY
+#include "ias15_engine.h"
+
+static void eng_promote(V d, const double *s, size_t n);
+static void eng_round(double *d, const V s, size_t n);
+
+static ias15_engine_force_fn force_fn;
+static void   *force_user;
+static int     force_veldep;      /* r->force_is_velocity_dependent */
+static double *fh_x, *fh_v, *fh_a, *fh_a_in;   /* the node, in binary64 */
+static size_t  fh_cap;            /* coordinates the four buffers hold */
+static V       FAW;               /* the routine's a, promoted back */
+static V       FVP;               /* the node's predicted velocities */
+static V       FT1;               /* the velocity predictor's accumulator */
+
+/* The velocity predictor's Taylor factors, derived here rather than in
+ * make_constants() so that adding this costs the constant table
+ * nothing. The factor at the b_j level is (j+1)/(j+2), which is already
+ * in lowest terms for every j (consecutive integers are coprime), and
+ * is exactly how REBOUND writes it: 7/8, 6/7, 5/6, 4/5, 3/4, 2/3, 1/2.
+ * Derived from the level index, never typed. */
+static V KVNUM[7], KVDEN[7];
+
+static void force_constants(void){
+    if (KVNUM[0]) return;
+    for (int lvl = 0; lvl < 7; lvl++){
+        long j = 6 - lvl;                    /* b_j at this level */
+        KVNUM[lvl] = kint(j + 1);
+        KVDEN[lvl] = kint(j + 2);
+    }
+}
+
+/* ONE PREDICTED VELOCITY SET PER NODE, and only when a
+ * velocity-dependent force is registered.
+ *
+ * integrator_ias15.c:434 predicts velocities under
+ *   r->calculate_megno || (r->additional_forces && r->force_is_velocity_dependent)
+ * and not otherwise, so a velocity-INdependent force is handed the
+ * step-start velocities - which is what v holds here, v being untouched
+ * between vcopy(v0, v) at the top of the attempt and vcopy(v, v0) at
+ * the bottom. MEGNO is refused by the shim, so this condition is the
+ * force hook's own flag.
+ *
+ * REBOUND writes the result into particles[].v; nothing in IAS15 reads
+ * it back except the force routine and (in adaptive_mode GLOBAL, which
+ * this port does not implement) the step controller, and the end of the
+ * step recomputes every velocity from v0. So the port keeps it in its
+ * own vector and leaves v alone, which is the same thing with one fewer
+ * way to go wrong.
+ *
+ *   vk = -csv + (((((((b6*7h/8 + b5)*6h/7 + b4)*5h/6 + b3)*4h/5
+ *                    + b2)*3h/4 + b1)*2h/3 + b0)*h/2 + a0)*dt*h
+ *   v_node = vk + v0
+ *
+ * Each level as ((T*num)*h)/den, the same shape as predict_positions,
+ * because that is the shape REBOUND's expression has. The numerator 1
+ * of the b0 level is a multiply by one - exact in every format - kept
+ * so that every level is the same code.
+ *
+ * arith_fma is deliberately not honoured here. It is not REBOUND's
+ * sequence of roundings anywhere, the equivalence claim is at
+ * arith_fma = 0, and a second KHF-shaped table for one accuracy knob
+ * would be a constant set with no gate behind it. */
+static void predict_velocities(int n){
+    V H = KH[n];
+    force_constants();
+    if (!FVP){ FVP = valloc(N3); FT1 = valloc(N3); }
+    vmul(FT1, b[6], KVNUM[0], N3);
+    for (int lvl = 0; lvl < 7; lvl++){
+        if (lvl > 0) vmul(FT1, FT1, KVNUM[lvl], N3);
+        vmul(FT1, FT1, H, N3); vdiv(FT1, FT1, KVDEN[lvl], N3);
+        vadd(FT1, FT1, lvl < 6 ? b[5 - lvl] : a0, N3);
+    }
+    vmul(FT1, FT1, DTB, N3); vmul(FT1, FT1, H, N3);   /* *dt*h */
+    vsub(FT1, FT1, csv, N3);                          /* vk = -csv + (...) */
+    vadd(FVP, FT1, v0, N3);                           /* particle.v = vk + v0 */
+}
+
+/* n = 0 is the call at the top of the attempt, where REBOUND's r->t is
+ * still t_beginning; 1..7 are the nodes. `vnode` is what the routine
+ * should see as the velocities.
+ *
+ * What comes back is binary64 and that is the ceiling: r->particles are
+ * binary64 and it is the only interface REBOUND offers a callback, so a
+ * component the routine wrote is binary64 from here on even in a
+ * binary256 run. Gravity stays wide; the force does not. The bit
+ * comparison below is what keeps that from spreading: a component the
+ * routine did not change keeps its wide value exactly, so the no-force
+ * path and a do-nothing routine are the same run, at every format. At
+ * CFT_FP64 promote and round are memcpy and this is REBOUND's own
+ * `at[k] = particles[mk].ax`, bit for bit, for any routine. */
+static void apply_force_hook(int n, const V vnode){
+    if (!force_fn) return;
+    if (fh_cap < N3){
+        free(fh_x); free(fh_v); free(fh_a); free(fh_a_in);
+        /* cap_elems is valloc's floor - NMAX, at least 3 * the reserved
+         * body count - so this allocates once however the count moves,
+         * for the same reason every lazily allocated vector here does. */
+        size_t want = cap_elems;
+        if (want < N3) want = N3;
+        fh_x = malloc(want * sizeof(double)); fh_v = malloc(want * sizeof(double));
+        fh_a = malloc(want * sizeof(double)); fh_a_in = malloc(want * sizeof(double));
+        if (!fh_x || !fh_v || !fh_a || !fh_a_in) die("out of memory");
+        if (!FAW) FAW = valloc(N3);
+        fh_cap = want;
+    }
+    eng_round(fh_x, x, N3);
+    eng_round(fh_v, vnode, N3);
+    eng_round(fh_a, a, N3);
+    memcpy(fh_a_in, fh_a, N3 * sizeof(double));
+    /* h[n] as REBOUND's own binary64 literal - tools/gen_constants.py
+     * checks that the derived KH[] rounds to it bit for bit - and the
+     * step this attempt is actually using, which a rejection changes
+     * under a caller that only ever saw r->dt. */
+    double h_n = 0.0, dt_now = 0.0;
+    if (n) eng_round(&h_n, KH[n], 1);
+    eng_round(&dt_now, SDT, 1);
+    force_fn(force_user, n, h_n, dt_now, fh_x, fh_v, fh_a);
+    eng_promote(FAW, fh_a, N3);
+    for (size_t k = 0; k < N3; k++)
+        if (memcmp(&fh_a[k], &fh_a_in[k], sizeof(double)) != 0)
+            memcpy(E(a, k), E(FAW, k), ESZ);
+}
+
+void ias15_engine_set_force_hook(ias15_engine_force_fn fn, void *user, int velocity_dependent){
+    force_fn = fn;
+    force_user = fn ? user : NULL;
+    force_veldep = fn ? (velocity_dependent != 0) : 0;
+}
+#else
+/* The standalone program: no caller, no hook, and the node loop below
+ * is the same source with this compiled away to nothing. */
+#define apply_force_hook(n, vnode) ((void)0)
+#endif /* IAS15_CFT_LIBRARY */
+
+/* ------------------------------------------------------------------ */
 /* One attempt at a step, for every active system at once:             */
 /* REBOUND's reb_integrator_ias15_step_try                              */
 /* ------------------------------------------------------------------ */
 static void step_attempt(void){
     for (size_t s = 0; s < E; s++) if (!active[s]) save_system(s);
-    gravity();                                   /* reb_simulation_update_acceleration */
+    /* reb_simulation_update_acceleration: gravity, then the user's
+     * force. At this call REBOUND's r->t is still t_beginning and its
+     * particles hold the step-start coordinates, so the hook is handed
+     * v itself. a0 below is therefore the TOTAL acceleration, which is
+     * what REBOUND copies out of particles[].a here. */
+    gravity(); apply_force_hook(0, v);
     vcopy(x0, x, N3); vcopy(v0, v, N3); vcopy(a0, a, N3);
     vzero(csa0, N3);                             /* basic gravity: gravity_cs is csa0, always 0 */
     for (int m = 0; m < 7; m++) vzero(csb[m], N3);
@@ -1035,7 +1198,17 @@ static void step_attempt(void){
         npass++;
         for (int n = 1; n < 8; n++){
             if (engine_program) predict_positions_program(n); else predict_positions(n);
+#ifdef IAS15_CFT_LIBRARY
+            /* REBOUND predicts the node's velocities only for a
+             * velocity-dependent force (or MEGNO, which is refused);
+             * without one the routine sees the step-start velocities,
+             * which is what v still holds here. */
+            if (force_fn && force_veldep) predict_velocities(n);
             gravity();
+            apply_force_hook(n, (force_fn && force_veldep) ? FVP : v);
+#else
+            gravity();
+#endif
             vcopy(at, a, N3);
             if (engine_program) correct_program(n); else correct(n);
         }

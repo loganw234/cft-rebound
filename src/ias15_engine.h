@@ -92,6 +92,65 @@ int    ias15_engine_remove_body(size_t index);
  * old count is still the engine's. A no-op for an ensemble. */
 void   ias15_engine_alias_resize(size_t n_new);
 
+/* ---- the force hook: r->additional_forces at every substage --------
+ *
+ * REBOUND's IAS15 does not call gravity; it calls
+ * reb_simulation_update_acceleration(), which is gravity FOLLOWED BY
+ * r->additional_forces(r), at the top of every step attempt and again
+ * at each of the seven Gauss-Radau nodes (integrator_ias15.c:461). The
+ * engine therefore has to offer the same seam.
+ *
+ * It is a plain callback over binary64 buffers and not a
+ * struct reb_simulation, deliberately: src/ias15_cft.c builds both as
+ * the standalone program and, under -DIAS15_CFT_LIBRARY, as a library
+ * half that knows nothing about REBOUND, and that separation is load
+ * bearing. cft_force_hook() in src/reb_integrator_cft.c is what turns
+ * these buffers into particles and back.
+ *
+ * The engine calls fn with:
+ *   n    0 for the call at the top of the attempt, 1..7 for the node
+ *   h_n  REBOUND's h[n] as a binary64, +0 at n = 0. The caller wants
+ *        this rather than the engine's clock because REBOUND computes
+ *        r->t = t_beginning + r->dt*h[n] in binary64 and a
+ *        time-dependent force that saw a different t would compute a
+ *        different acceleration. The port's derived KH[] rounds to
+ *        REBOUND's h literals bit for bit at binary64, so handing the
+ *        node's h over is enough for the caller to reproduce the
+ *        expression exactly.
+ *   dt   the CURRENT attempt's step, rounded to binary64. Not r->dt as
+ *        the caller last saw it: a rejected attempt changes it, and the
+ *        node times move with it.
+ *   x,v  the node's positions and velocities, 3n values each, the
+ *        correctly rounded view of the wide state
+ *   a    in: the wide gravity, correctly rounded. out: whatever the
+ *        routine leaves there.
+ *
+ * A COMPONENT THE ROUTINE CHANGES BECOMES BINARY64. The engine compares
+ * `a` bit for bit against what it handed over and promotes back only
+ * where it differs, so an untouched component - and a do-nothing
+ * routine - costs nothing and leaves a wide run wide. Where the routine
+ * did write, the value it wrote is all there is: r->particles are
+ * binary64 and that is the only interface REBOUND offers a callback.
+ * Gravity stays wide; the user's force does not. At CFT_FP64, which is
+ * where the equivalence claim lives, the two are the same bits and this
+ * is REBOUND's own `at[k] = particles[mk].ax` exactly.
+ *
+ * velocity_dependent is REBOUND's r->force_is_velocity_dependent, and
+ * it selects one thing: whether the node's velocities are predicted
+ * from the b polynomial before the call. REBOUND predicts them only
+ * under `r->calculate_megno || (r->additional_forces &&
+ * r->force_is_velocity_dependent)` (integrator_ias15.c:434), and a port
+ * that predicted them always would hand a velocity-independent force a
+ * different v from the one REBOUND hands it - not a difference the
+ * force uses, but not one to leave to luck either.
+ *
+ * fn NULL removes the hook, which is the no-force path and pays for
+ * nothing. */
+typedef void (*ias15_engine_force_fn)(void *user, int n, double h_n, double dt,
+                                      const double *x, const double *v, double *a);
+void   ias15_engine_set_force_hook(ias15_engine_force_fn fn, void *user,
+                                   int velocity_dependent);
+
 /* IAS15's adaptive_mode: 2 (PRS23) or 3 (AARSETH85). They share every
  * sum and differ in one expression; 0 and 1 are REBOUND's other
  * branch and are not implemented. */

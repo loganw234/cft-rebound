@@ -43,8 +43,6 @@
 static void coverage_report(void);
 static void mark_covered(const char *row);
 
-static void nop_forces(struct reb_simulation *r){ (void)r; }
-
 /* The message itself goes to stderr, which is where a user would meet it;
  * what is asserted here is that the integration STOPPED and that the
  * clock did not move - nothing was computed. Positions are deliberately
@@ -74,8 +72,12 @@ int refused(const char *row, const char *what,
     return 1;
 }
 
-static void p_forces(struct reb_simulation *r){ r->additional_forces = nop_forces; }
-static void p_veldep(struct reb_simulation *r){ r->force_is_velocity_dependent = 1; }
+/* additional_forces and force_is_velocity_dependent were poisoned here
+ * until they were implemented. They are now drop-in capabilities and
+ * their rows are subprocess-only, so their cases moved to
+ * tools/cases_forces.c - where they are accepted() and then run against
+ * REBOUND's own ias15 with the same routine, which is the assertion
+ * that retires a refusal rather than merely deleting it. */
 static void p_ghost(struct reb_simulation *r){ r->N_ghost_x = 1; }
 static void p_gravity(struct reb_simulation *r){ r->gravity = REB_GRAVITY_COMPENSATED; }
 static void p_tree(struct reb_simulation *r){ r->gravity = REB_GRAVITY_TREE; }
@@ -186,8 +188,6 @@ static void p_maxiter(struct reb_simulation *r){ cft_ias15_get_state(r)->max_ite
 
 static void case_refusals(void){
     printf("refusals: each unsupported feature named and the integration stopped\n");
-    refused("additional_forces", "additional_forces",         p_forces);
-    refused("veldep_forces",  "velocity-dependent forces",    p_veldep);
     refused("ghost_boxes",    "ghost boxes",                  p_ghost);
     refused("gravity_module", "REB_GRAVITY_COMPENSATED",      p_gravity);
     refused("gravity_module", "the tree code",                p_tree);
@@ -240,6 +240,7 @@ int main(int argc, char **argv){
 
     cases_core();
     /* A parcel's topic goes here, one line, beside its own file. */
+    cases_forces();
     case_refusals();
 
     printf("\n");

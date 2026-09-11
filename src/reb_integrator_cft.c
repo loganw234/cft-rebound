@@ -346,6 +346,69 @@ static int bind_engine(struct reb_simulation *r, struct cft_ias15_state *st){
 }
 
 /* ------------------------------------------------------------------ */
+/* r->additional_forces, at every substage                             */
+/* ------------------------------------------------------------------ */
+/* REBOUND's IAS15 calls reb_simulation_update_acceleration(), not
+ * gravity: simulation.c:643 is gravity followed by
+ * r->additional_forces(r), and integrator_ias15.c calls it at :290 for
+ * the step-start acceleration and again at :461 for each of the seven
+ * Gauss-Radau nodes, reading particles[mk].ax straight back into at[]
+ * at :467. The engine offers that seam as a callback over binary64
+ * buffers (src/ias15_engine.h) because it may not include rebound.h;
+ * this is the half that knows what a particle is.
+ *
+ * It lives here rather than in a src/cft_forces.c of its own for one
+ * reason: a new object in src/ would have to be added to DROPIN_OBJ,
+ * to PIC_OBJ and to the install rules, which is a larger edit to the
+ * Makefile than the whole of this is to this file.
+ *
+ * THE USER'S FORCE IS EVALUATED AT BINARY64, even in a binary256 run.
+ * r->particles are binary64 and they are the only interface REBOUND
+ * offers a callback, so there is nowhere wider to hand the routine its
+ * inputs or to take its answer back. Gravity stays wide; a component
+ * the routine writes is binary64 from that node on. That is a real
+ * ceiling of this feature and not a detail: docs and README belong to
+ * the integrator, so it is stated here and in src/ias15_engine.h. */
+static double force_t_beginning;   /* REBOUND's t_beginning for this step */
+
+static void cft_force_hook(void *user, int n, double h_n, double dt,
+                           const double *x, const double *v, double *a){
+    struct reb_simulation *r = user;
+    const size_t N = r->N;
+
+    /* r->t at the node, as REBOUND's own binary64 expression:
+     *     r->t = t_beginning + r->dt * h[n];      (integrator_ias15.c:408)
+     * NOT the engine's wide clock rounded - the two differ in the last
+     * bits, and a time-dependent force that saw a different time would
+     * compute a different acceleration. h_n is the port's derived KH[n]
+     * rounded to binary64, which tools/gen_constants.py checks is
+     * REBOUND's h[] literal bit for bit. `dt` is the attempt's step and
+     * not r->dt as it stood when this step began, because a rejected
+     * attempt changes it and the node times move with it.
+     *
+     * n = 0 is the call at the top of the attempt, where REBOUND has
+     * not touched r->t and it still holds t_beginning - which is also
+     * what integrator_ias15.c:608 restores it to after the loop, so
+     * writing it here is that restore for the next attempt. */
+    const double dth = dt * h_n;
+    r->dt = dt;
+    r->t = n ? force_t_beginning + dth : force_t_beginning;
+
+    for (size_t i = 0; i < N; i++){
+        r->particles[i].x  = x[3*i]; r->particles[i].y  = x[3*i+1]; r->particles[i].z  = x[3*i+2];
+        r->particles[i].vx = v[3*i]; r->particles[i].vy = v[3*i+1]; r->particles[i].vz = v[3*i+2];
+        r->particles[i].ax = a[3*i]; r->particles[i].ay = a[3*i+1]; r->particles[i].az = a[3*i+2];
+    }
+    r->additional_forces(r);
+    for (size_t i = 0; i < N; i++){
+        a[3*i] = r->particles[i].ax; a[3*i+1] = r->particles[i].ay; a[3*i+2] = r->particles[i].az;
+    }
+    /* The particles are deliberately left at the node, positions and
+     * all: REBOUND leaves them there too until the end of step_try, and
+     * the step below writes the accepted view over them afterwards. */
+}
+
+/* ------------------------------------------------------------------ */
 /* The step                                                            */
 /* ------------------------------------------------------------------ */
 static void cft_ias15_step(struct reb_simulation *r, void *p){
@@ -437,6 +500,17 @@ static void cft_ias15_step(struct reb_simulation *r, void *p){
     if (!view_valid || memcmp(&r->dt_last_done, &view_dt_last, sizeof(double)) != 0)
         ias15_engine_put_dt_last_f64(r->dt_last_done);
 
+    /* --- the force hook ------------------------------------------------
+     * Registered every step, for the same reason G and the masses are
+     * set every step: a user may attach or detach a routine between
+     * steps, or flip force_is_velocity_dependent, and should get what
+     * they asked for rather than what the first step saw. A NULL
+     * routine removes the hook, so the no-force path costs one test of
+     * a null pointer per Gauss-Radau node and nothing else. */
+    force_t_beginning = r->t;
+    ias15_engine_set_force_hook(r->additional_forces ? cft_force_hook : NULL, r,
+                                r->force_is_velocity_dependent != 0);
+
     /* --- one accepted step -------------------------------------------- */
     double dt_done = 0;
     ias15_engine_step(&dt_done);
@@ -492,6 +566,11 @@ static void cft_ias15_free(void *p){
         engine_owner = NULL;
         view_valid = 0;
         view_N = 0;
+        /* The hook holds the simulation that is being freed. Nothing
+         * would call it - every step re-registers before it steps - but
+         * a dangling pointer in a process-global is not something to
+         * leave lying around for the next simulation to adopt. */
+        if (ias15_engine_is_open()) ias15_engine_set_force_hook(NULL, NULL, 0);
     }else{
         /* Never bound, so any blob it holds is one REBOUND's loader
          * allocated - see adopt_loaded_state for why that is the only
@@ -567,11 +646,17 @@ const struct reb_integrator cft_ias15_integrator = {
         "state lives in struct cft_ias15_state; r->particles are the binary64 "
         "view of it, correctly rounded after every step, so every REBOUND "
         "output, callback and visualisation works unchanged.\n\n"
-        "Set state->format to CFT_FP128 or CFT_FP256 for a wide run. Additional "
-        "forces, velocity-dependent forces, collisions, ghost boxes, boundaries, "
-        "gravity modules other than REB_GRAVITY_BASIC, non-zero softening, test "
-        "particles, r->map and variational particles are refused rather than "
-        "approximated.",
+        "Set state->format to CFT_FP128 or CFT_FP256 for a wide run. Collisions, "
+        "ghost boxes, boundaries, gravity modules other than REB_GRAVITY_BASIC, "
+        "non-zero softening, test particles, r->map and variational particles are "
+        "refused rather than approximated.\n\n"
+        "r->additional_forces is called where REBOUND's IAS15 calls it: after "
+        "gravity at the top of every step attempt and at each of the seven "
+        "Gauss-Radau nodes, with r->t set to t_beginning + r->dt*h[n] and, when "
+        "r->force_is_velocity_dependent is set, with the node's predicted "
+        "velocities. The routine is evaluated at binary64 even in a wide run, "
+        "because r->particles are binary64 and are the only interface REBOUND "
+        "offers a callback: gravity stays wide, the user's force does not.",
     .step = cft_ias15_step,
     .synchronize = NULL,       /* IAS15 is not a DKD scheme; REBOUND's own is NULL too */
     .create = cft_ias15_create,

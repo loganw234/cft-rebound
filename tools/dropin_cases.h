@@ -81,5 +81,7 @@ int accepted(const char *row, const char *what, void (*prepare)(struct reb_simul
 /* ---- the topics ---------------------------------------------------- */
 void cases_core(void);   /* tools/cases_core.c - the binary64 equivalence set */
 void cases_wide(void);   /* tools/cases_wide.c - binary128, a smoke test */
+void cases_forces(void); /* tools/cases_forces.c - r->additional_forces at every
+                          * substage, and the timestep-modification hooks */
 
 #endif /* DROPIN_CASES_H */
