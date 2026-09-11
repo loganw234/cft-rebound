@@ -1055,8 +1055,8 @@ static void force_constants(void){
  *
  * arith_fma IS NOT HONOURED HERE, and the combination is REFUSED
  * rather than left to disagree quietly. arith_fma is the form that
- * issues no correctly rounded divide - line 1470 refuses
- * `--engine program` without it for that reason - and every level above
+ * issues no correctly rounded divide - main() refuses
+ * `--engine program` without it, saying so - and every level above
  * is a vdiv, so a step with this predictor in it is not that form. A
  * second KHF-shaped table would be a constant set with no gate behind
  * it: REBOUND has no FMA form to be equivalent to, and the standalone

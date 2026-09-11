@@ -277,7 +277,7 @@ static void say_adaptive_mode(const struct cft_support_ctx *c, char *b, size_t n
 }
 
 /* arith_fma is the regime in which the step issues NO correctly rounded
- * divide - that is what it is for, and src/ias15_cft.c:1470 refuses
+ * divide - that is what it is for, and src/ias15_cft.c's main() refuses
  * `--engine program` without it for exactly that reason. predict_positions()
  * honours it; predict_velocities(), the separate predictor REBOUND runs
  * only for a velocity-dependent force, does not: it issues vdiv at every
