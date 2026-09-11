@@ -424,7 +424,11 @@ the particles are intact.
 `cft_rebound.load()` on the same path twice is a no-op - `dlopen` and
 `LoadLibrary` both return the existing handle without re-running the
 constructor. Loading two different files that each register the same
-name is the second-registration hang above.
+name is the second-registration hang above. Windows has a second way
+into it, described in "The Windows rule": a DLL built for the wrong
+interpreter, loaded next to a librebound the loader can find, silently
+registers into a *second* REBOUND rather than hanging. `load()` refuses
+that case before `CDLL` sees it.
 
 ## What has not been tested
 
