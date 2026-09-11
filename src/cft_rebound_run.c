@@ -155,7 +155,10 @@ int cft_rebound_check(const struct reb_simulation *r, char *why, size_t n){
     if (r->gravity_ignore_terms != REB_GRAVITY_IGNORE_TERMS_NONE){
         say(why, n, "r->gravity_ignore_terms must be NONE; this port computes every pair"); return 1; }
     if (r->collision != REB_COLLISION_NONE){
-        say(why, n, "collision detection is not supported (r->collision != NONE)"); return 1; }
+        say(why, n, "collision detection is not supported by this API"
+                    " (r->collision != NONE); the drop-in integrator supports it,"
+                    " because REBOUND's own driver runs the search between steps"
+                    " there and this one does not"); return 1; }
     if (r->boundary != REB_BOUNDARY_NONE){
         say(why, n, "boundary conditions are not supported (r->boundary != NONE)"); return 1; }
     if (r->N_ghost_x || r->N_ghost_y || r->N_ghost_z){

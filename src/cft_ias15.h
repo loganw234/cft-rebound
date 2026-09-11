@@ -116,6 +116,26 @@ struct cft_ias15_state {
                                 * first step and written back here; see
                                 * cft_ias15_default_max_iter() */
     int      arith_fma;        /* 0 = REBOUND's roundings, 1 = the FMA form */
+    int      accurate;         /* 0 (default) = be REBOUND, bit for bit, even
+                                * where REBOUND is worse - across a particle
+                                * removal too, where its seven coefficient
+                                * levels are re-read at the new stride and
+                                * mix (ias15_engine_alias_resize()). 1 =
+                                * where this port can be more accurate than
+                                * REBOUND, be so, and accept that the
+                                * equivalence gate does not cover the
+                                * affected step.
+                                *
+                                * Removal is what it governs today, and only
+                                * above binary64 does it change what is
+                                * possible rather than what is chosen: there
+                                * a removal at 0 re-promotes the survivors
+                                * from the binary64 r->particles and loses
+                                * every wide tail, so the step refuses. At 1
+                                * the wide state shifts with the particles
+                                * and each survivor keeps its own
+                                * polynomial; see the note by
+                                * ias15_engine_remove_body(). */
 
     /* the wide state: byte blobs, archived as REB_POINTER with
      * element_size = W. Lengths are 3N or 3N*E elements. */

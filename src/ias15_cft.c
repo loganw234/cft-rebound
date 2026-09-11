@@ -1528,11 +1528,63 @@ int ias15_engine_alloc(size_t n_cap, int max_iter_, int arith_fma_, int cs_aug, 
     return 0;
 }
 
+
+/* ---- REBOUND's body-count change, which is a re-reading, not a move --
+ *
+ * REBOUND's seven coefficient levels share ONE flat allocation that
+ * dpcast() slices at the CURRENT 3N on every step - p[m] = dp + m*N3,
+ * integrator_ias15.c:217. So when the count changes below the
+ * high-water mark, where reb_integrator_ias15_alloc() does not
+ * reallocate, the buffer is left alone and every level above 0 is read
+ * at an offset that moved. Measured against a merge from three bodies
+ * to two: level 0 is unchanged, and REBOUND's b[1][3] is bit for bit
+ * what its level 1 element 0 becomes - every level displaced by
+ * old_N3 - new_N3, level 1 reading the tail of level 0 and so on up.
+ *
+ * Each level is its own allocation here, so the reading has to be
+ * performed. Through a flat shadow, for two reasons. In place is wrong:
+ * at 9 -> 6, level 2's element 0 is flat index 12, which is level 1's
+ * element 3, already overwritten. And the shadow keeps the tail above
+ * the live region that a shrink leaves behind - the part of REBOUND's
+ * buffer no stride reaches while the count is small, and that a regrow
+ * under the mark reads straight back.
+ *
+ * Only for a caller reproducing REBOUND. ias15_engine_remove_body() is
+ * the other half of the choice: shift, and keep each survivor its own
+ * polynomial. */
+static V alias_flat[6];
+static size_t alias_flat_n;
+
+/* The live region of the shadow, in elements: REBOUND's realloc_dp7
+ * zeroes all 7*N3 of a newly grown buffer, and reset_state is called on
+ * exactly the grow that triggers it. */
+static void alias_zero(size_t n3){
+    for (int f = 0; f < 6; f++)
+        if (alias_flat[f]) vzero(alias_flat[f], 7 * n3 < alias_flat_n ? 7 * n3 : alias_flat_n);
+}
+
+void ias15_engine_alias_resize(size_t n_new){
+    if (E != 1 || !eng_cap) return;         /* REBOUND has no ensembles */
+    if (n_new < 1 || n_new > eng_cap) return;
+    const size_t s_old = N3, s_new = 3 * n_new;
+    if (s_new == s_old) return;
+    V *fam[6] = { g, b, e, csb, er, br };
+    if (!alias_flat[0]){
+        alias_flat_n = 7 * 3 * eng_cap;     /* valloc is calloc: REBOUND's buffer starts zeroed */
+        for (int f = 0; f < 6; f++) alias_flat[f] = valloc(alias_flat_n);
+    }
+    for (int f = 0; f < 6; f++){
+        for (int m = 0; m < 7; m++) vcopy(E(alias_flat[f], (size_t)m * s_old), fam[f][m], s_old);
+        for (int m = 0; m < 7; m++) vcopy(fam[f][m], E(alias_flat[f], (size_t)m * s_new), s_new);
+    }
+}
+
 /* The IAS15 state proper, zeroed. Called when the body count changes:
  * b, e and the compensations describe a particle set that no longer
  * exists, and REBOUND's own integrators discard them for the same
  * reason. */
 void ias15_engine_reset_state(void){
+    alias_zero(N3);                     /* realloc_dp7 zeroes the whole flat array */
     vzero(csx, N3); vzero(csv, N3); vzero(csa0, N3); vzero(gcs, N3); vzero(at, N3);
     for (int m = 0; m < 7; m++){ vzero(g[m], N3); vzero(b[m], N3); vzero(e[m], N3); vzero(csb[m], N3); vzero(er[m], N3); vzero(br[m], N3); }
     done[0] = 0; rejected[0] = 0; max_exceeded[0] = 0; pc_total[0] = 0; pc_max[0] = 0;
@@ -1574,6 +1626,36 @@ void ias15_engine_set_G_f64(double g_){
 /* 2 = PRS23, 3 = AARSETH85. Anything else is refused by the caller;
  * this only records it. */
 void ias15_engine_set_adaptive_mode(int mode){ ADAPTIVE_MODE = mode; }
+
+/* Remove one body from the wide state, shifting every vector down.
+ *
+ * The alternative - and the default - is REBOUND's: shift nothing and
+ * let each survivor inherit its neighbour's polynomial. This is what
+ * cft_ias15_state.accurate asks for instead, and it is deliberately
+ * NOT what REBOUND computes.
+ *
+ * Returns 0, or non-zero if the request cannot be honoured. */
+int ias15_engine_remove_body(size_t index){
+    if (E != 1) return 1;              /* an ensemble's pair list is shared */
+    size_t n = NB;                      /* bodies, with E == 1 */
+    if (index >= n || n == 0) return 2;
+    size_t tail = n - index - 1;        /* bodies above the removed one */
+    if (tail){
+        size_t dst = 3 * index, src = 3 * (index + 1), cnt = 3 * tail;
+        V all[] = { x, v, a, at, x0, v0, a0, csx, csv, csa0 };
+        for (size_t k = 0; k < sizeof all / sizeof *all; k++)
+            memmove(E(all[k], dst), E(all[k], src), cnt * ESZ);
+        for (int m = 0; m < 7; m++){
+            V arr[] = { g[m], b[m], e[m], csb[m], er[m], br[m] };
+            for (size_t k = 0; k < sizeof arr / sizeof *arr; k++)
+                memmove(E(arr[k], dst), E(arr[k], src), cnt * ESZ);
+        }
+    }
+    /* The vacated top body is left as it is: set_bodies() shortens the
+     * run and nothing reads past it. Zeroing would cost a pass over the
+     * state to no effect. */
+    return 0;
+}
 
 /* REBOUND's ias15->min_dt: a floor on |dt|, 0 to disable, which is
  * REBOUND's own default and the value every gate here runs. */

@@ -123,7 +123,8 @@ const struct reb_binarydata_field_descriptor *cft_archive_descriptor_list(int fo
 }
 
 /* A list that has drifted writes the wrong bytes silently, so check its
- * shape rather than trusting it: CFT_N_BLOBS blobs then 11 scalars,
+ * shape rather than trusting it: CFT_N_BLOBS blobs then CFT_N_SCALARS
+ * scalars,
  * every name cft_-prefixed and unique, every blob's element_size the
  * format's width and its offset_N the one member the read path is
  * allowed to scribble on, and cft_n_elem last (NOTE 3). Returns 0 if
@@ -160,8 +161,9 @@ int cft_archive_selftest(void){
             fprintf(stderr, "cft_archive_selftest: %d blobs at %s, want %d\n",
                     blobs, cft_format_name((cft_format)fmts[fi]), CFT_N_BLOBS); bad++;
         }
-        if (scalars != 11){
-            fprintf(stderr, "cft_archive_selftest: %d scalars, want 11\n", scalars); bad++;
+        if (scalars != CFT_N_SCALARS){
+            fprintf(stderr, "cft_archive_selftest: %d scalars, want %d\n",
+                    scalars, CFT_N_SCALARS); bad++;
         }
         if (n < 1 || strcmp(l[n-1].name, "cft_n_elem")){
             fprintf(stderr, "cft_archive_selftest: last field is \"%s\", must be cft_n_elem\n",

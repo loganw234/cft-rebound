@@ -201,7 +201,10 @@ Implement `struct reb_integrator` and register it.
   is a subset of every wider one), take one IAS15 step through the
   existing engine, round the result back into `r->particles`, and
   advance `r->t` and `r->dt` as REBOUND expects.
-- `did_add_particle` / `will_remove_particle`: resize and invalidate.
+- `did_add_particle` / `will_remove_particle`: resize and invalidate -
+  and, below the high-water mark, re-read the coefficient levels at
+  the new stride, which is what REBOUND does rather than what it was
+  first thought to do (see the upstream-defects section).
 - Honour `r->exact_finish_time`, and `synchronize` where it applies.
 
 **Gate:** a C program that builds a simulation, registers this
@@ -210,9 +213,18 @@ values to the same program using REBOUND's own `"ias15"`. That is the
 existing equivalence gate seen from REBOUND's side, and it is the one
 result that proves the shim did not change the arithmetic.
 
-Deliberately out of scope: additional forces, collisions, ghost boxes,
-the tree code, non-zero softening, variational particles. Detect them
-and refuse with a clear message rather than computing something wrong.
+Deliberately out of scope: additional forces, ghost boxes, the tree
+code, variational particles. Detect them and refuse with a clear
+message rather than computing something wrong.
+
+Since settled the other way, and each with a gate: non-zero
+`softening`, `min_dt`, the AARSETH85 step criterion, and **collision
+detection** - the driver runs the search and the resolver between
+steps, so the integrator's whole obligation is to survive the
+removal, which is reproducible once you know what REBOUND actually
+does across one. Above binary64 it needs `state->accurate = 1` and
+is then deliberately not bit-identical; the README's note under the
+support table has the rule.
 
 ### B. Simulationarchive support
 
@@ -320,6 +332,25 @@ suspicions.
   here does.
 - **Integrator names must be lowercase.** The Python layer lowercases
   on assignment. `ias15_cft` is safe.
+- **A body-count change re-reads IAS15's coefficient levels at a
+  different offset.** All seven share one flat allocation, and
+  `dpcast(ias15->b, N3)` slices it at the *current* `3N` on every step
+  (`integrator_ias15.c:217`): `p[m] = dp + m*N3`. Below
+  `N_allocated` - a removal, or a regrow under the high-water mark -
+  `reb_integrator_ias15_alloc()` reallocates nothing, so the buffer
+  keeps its contents and every level above 0 is read short by
+  `old_3N - new_3N`; level 1 begins in the tail of level 0, and so on
+  up. Measured on a merge from three bodies to two: level 0 unchanged,
+  and REBOUND's `b1[3]` is bit for bit what its `b1[0]` becomes.
+  This project believed, and wrote down, that a removal simply left a
+  stale polynomial behind - each survivor inheriting its neighbour's.
+  It does not, and the difference matters here, because every level is
+  its own allocation in this port and the aliasing had to be
+  *performed* to reproduce it (`ias15_engine_alias_resize()`). A
+  regrow reads back the tail the shrink stranded above the live region,
+  which is why that is done through a persistent flat shadow rather
+  than in place; `case_remove_then_add` in tools/check_dropin.c fails
+  without it and passes with it.
 
 ## The cost, which was nowhere in this repository
 
@@ -458,3 +489,32 @@ seam. A round split into parcels should name the seam tests too, and
 give them to the integrator.
 
 See docs/VALIDATION.md entry 25 for the measurements.
+
+## What the collision work leaves open, across a checkpoint
+
+Reproducing REBOUND's coefficient re-slice (see the upstream-defects
+section) needs the part of its buffer that a shrink strands above the
+live region: no stride reaches it while the count is small, and a
+regrow under the high-water mark reads it straight back. Within one
+process `ias15_engine_alias_resize()` keeps it in a flat shadow, and
+`case_remove_then_add` in tools/check_dropin.c holds that down - the
+case fails if the shadow is dropped between resizes.
+
+**Across a checkpoint it is not kept, and neither is the mark.**
+REBOUND stores its coefficient arrays as one `REB_POINTER` field of
+`N_allocated` elements of `7*sizeof(double)`, so the stranded tail and
+`N_allocated` itself both survive a save. This port stores each level
+as its own blob of `3N` elements and has no `N_allocated` at all: the
+shim sets its high-water mark from `r->N` when it binds. So a run that
+removes a particle, checkpoints, resumes, and then adds one back below
+the *original* mark diverges twice over - the port zeroes where
+REBOUND aliases, because its mark is now the smaller count, and it
+would read zeros where REBOUND reads the tail even if the mark were
+right.
+
+Closing it means archiving both, which adds blobs and a scalar and so
+changes the on-disk field list. Left open deliberately: the sequence
+needs a removal, a save, a resume and a regrow that stays under a mark
+the resumed process cannot see, and every other removal path - a merge,
+a bare `reb_simulation_remove_particle`, a regrow within one process -
+is bit-identical and gated.

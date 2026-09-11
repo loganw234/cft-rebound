@@ -79,6 +79,13 @@ static int         pc_tol_shift = -1;
 
 static struct cft_ias15_state *engine_owner;   /* the state the engine is bound to */
 static int    engine_ready;                    /* the engine has been allocated */
+/* REBOUND's ias15->N_allocated, in particles rather than in 3N.
+ * reb_integrator_ias15_alloc() zeroes the polynomial only when 3N
+ * exceeds it, so a removal and a regrow under the mark leave the
+ * polynomial alone. Reproduced here because the equivalence claim is
+ * to REBOUND's behaviour, not to the behaviour REBOUND ought to
+ * have. */
+static size_t engine_hiwater_N;
 static int    engine_fmt;
 static double engine_eps;
 static int    engine_max_iter;
@@ -147,10 +154,36 @@ static int supported(struct reb_simulation *r, struct cft_ias15_state *st){
         refuse(r, "ias15_cft: only REB_GRAVITY_BASIC is supported, r->gravity is %d "
                   "(the tree code, the compensated and the Jacobi modules and a custom "
                   "gravity routine all are not).", (int)r->gravity); return 0; }
-    if (r->collision != REB_COLLISION_NONE){
-        refuse(r, "ias15_cft: collision detection is not supported (r->collision = %d). "
-                  "A collision removes a particle mid-run, which the wide state cannot "
-                  "follow in this build.", (int)r->collision); return 0; }
+    /* Collisions are REBOUND's driver's work: the search and the
+     * resolver run after this callback returns, and all this
+     * integrator owes is to survive the removal the way REBOUND does.
+     * Which is not by keeping a stale polynomial, as this comment
+     * once said. REBOUND's seven coefficient levels share one flat
+     * buffer that dpcast() re-slices every step at the CURRENT N3
+     * (integrator_ias15.c:217), so a removal shortens the stride and
+     * every level above 0 is read at an offset short by
+     * old_N3 - new_N3 - level 1 reading the tail of level 0, and so on
+     * up. Measured on a merge from three bodies to two: level 0 is
+     * unchanged, and REBOUND's b1[3] IS this port's b1[0]. The
+     * polynomial is not stale, it is aliased, and
+     * ias15_engine_alias_resize() performs that reading rather than
+     * approximating it.
+     *
+     * So accurate = 0 is REBOUND across a removal too, at binary64.
+     * Above it the cost is elsewhere: the removal shifts r->particles,
+     * which are binary64, and accurate = 0 re-promotes the wide state
+     * from them. accurate = 1 shifts the wide state instead and keeps
+     * each survivor its own polynomial - correct, and not REBOUND. */
+    if (r->collision != REB_COLLISION_NONE && st->format != CFT_FP64 && !st->accurate){
+        refuse(r, "ias15_cft: collision detection at %s needs state->accurate = 1. "
+                  "A removal shifts r->particles, which are binary64, so at "
+                  "accurate = 0 - where this port reproduces REBOUND exactly, "
+                  "aliased coefficient levels and all - the wide state is "
+                  "re-promoted from them and every coordinate loses its tail. "
+                  "accurate = 1 shifts the wide state instead, which is more "
+                  "accurate than REBOUND and therefore not bit-identical to it.",
+               cft_format_name((cft_format)st->format));
+        return 0; }
     if (r->N_ghost_x || r->N_ghost_y || r->N_ghost_z){
         refuse(r, "ias15_cft: ghost boxes are not supported (N_ghost = %d, %d, %d). "
                   "The engine's pair term uses a ghost-box offset of exactly +0.",
@@ -355,7 +388,10 @@ static int bind_engine(struct reb_simulation *r, struct cft_ias15_state *st){
     }
     if (ias15_engine_set_bodies(r->N) != 0){
         refuse(r, "ias15_cft: the engine refused %zu bodies.", r->N); return 0; }
+    /* The first bind is REBOUND's first alloc: N_allocated is 0, so
+     * 3N always exceeds it and the polynomial starts from zero. */
     ias15_engine_reset_state();
+    engine_hiwater_N = r->N;
     view_alloc(ias15_engine_capacity());
     view_N = r->N;
     view_valid = 0;
@@ -392,9 +428,23 @@ static void cft_ias15_step(struct reb_simulation *r, void *p){
                    r->N, ias15_engine_capacity());
             return;
         }
+        /* REBOUND does not move its coefficient levels when the count
+         * changes; it re-reads them at the new stride, because all
+         * seven share one buffer that dpcast() slices at the current
+         * N3. Here they are seven allocations, so that reading is
+         * performed - before set_bodies, while the old count is still
+         * the engine's. At accurate = 1 the state was already shifted
+         * in will_remove_particle and must not be re-read. */
+        if (!st->accurate) ias15_engine_alias_resize(r->N);
         if (ias15_engine_set_bodies(r->N) != 0){
             refuse(r, "ias15_cft: the engine refused %zu bodies.", r->N); return; }
-        ias15_engine_reset_state();
+        /* And zero only past the high-water mark, which is what
+         * REBOUND's `if (N3 > N_allocated)` amounts to: realloc_dp7
+         * zeroes the whole array, and nothing below the mark does. */
+        if (r->N > engine_hiwater_N){
+            ias15_engine_reset_state();
+            engine_hiwater_N = r->N;
+        }
         view_N = r->N;
         view_valid = 0;
         publish_state(st);
@@ -514,30 +564,51 @@ static void cft_ias15_free(void *p){
     free(st);
 }
 
-/* Adding or removing a particle invalidates: the next step resizes the
- * engine, zeroes g, e, b, csb, er, br, csx and csv, and re-promotes
- * every coordinate from r->particles.
+/* Adding or removing a particle invalidates the view: the next step
+ * resizes the engine and re-promotes every coordinate from
+ * r->particles.
  *
- * On a grow that is REBOUND's own behaviour bit for bit -
- * reb_integrator_ias15_alloc reallocates past its high-water mark and
- * realloc_dp7 zeroes the whole array - which is why the binary64 gate
- * has an add-a-particle case and it passes.
+ * What happens to the polynomial is REBOUND's, in both directions.
+ * Past the high-water mark reb_integrator_ias15_alloc() reallocates
+ * and realloc_dp7 zeroes the whole array, which the step reproduces
+ * with reset_state. Below the mark REBOUND reallocates nothing and
+ * re-reads its seven levels at the new stride, which the step
+ * reproduces with ias15_engine_alias_resize. So the binary64 gate's
+ * add-a-particle case and its merge case are both bit-identical, and
+ * for the same reason: the behaviour is performed, not guessed at.
  *
- * Removal is NOT REBOUND's behaviour: REBOUND keeps a polynomial that no
- * longer describes the particle set, and this does not.
- *
- * At a wide format both cases cost the surviving particles their wide
- * coordinates, because the only thing left that describes them is the
- * binary64 view. Nothing is lost at CFT_FP64, where the view is the
- * state; at CFT_FP128 and above, change the particle set between runs
- * rather than during one. */
+ * At a wide format accurate = 0 still costs the survivors their wide
+ * coordinates, because after the shift the only thing describing them
+ * is the binary64 view. Nothing is lost at CFT_FP64, where the view is
+ * the state. Above it, set state->accurate = 1, which shifts the wide
+ * state itself - a removal only; an add there still re-promotes. */
 static void cft_ias15_did_add_particle(struct reb_simulation *r){
     (void)r;
     view_valid = 0;
 }
 
 static void cft_ias15_will_remove_particle(struct reb_simulation *r, size_t index){
-    (void)r; (void)index;
+    /* REBOUND calls this BEFORE its own range check, so an index past
+     * the end arrives here and is then refused without a particle ever
+     * being removed (particle.c: the hook, then `if (index >= r->N)`).
+     * Both built-in integrators that implement this hook guard against
+     * it and so does this one: acting on it would shift the state for a
+     * removal that never happened. */
+    if (!r || index >= r->N) return;
+
+    struct cft_ias15_state *st = cft_ias15_get_state(r);
+    if (st && st->accurate && engine_owner == st && engine_ready){
+        /* Shift the wide state with the particles, so each survivor
+         * keeps its own polynomial. Not what REBOUND does. */
+        if (ias15_engine_remove_body(index) == 0){
+            /* The view has to move with it, or the step compares
+             * REBOUND's shifted particles against an unshifted view,
+             * decides they changed, and re-promotes the whole vector -
+             * which is the truncation this mode exists to avoid. */
+            ias15_engine_get_xv_f64(view_x, view_v);
+            return;
+        }
+    }
     view_valid = 0;
 }
 

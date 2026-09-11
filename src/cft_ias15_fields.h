@@ -66,6 +66,7 @@
     CFT_FD_S("format",           REB_INT,    format) \
     CFT_FD_S("max_iter",         REB_INT,    max_iter) \
     CFT_FD_S("arith_fma",        REB_INT,    arith_fma) \
+    CFT_FD_S("accurate",         REB_INT,    accurate) \
     CFT_FD_S("E",                REB_SIZE_T, E) \
     CFT_FD_S("abi_0",            REB_UINT64, cft_abi[0]) \
     CFT_FD_S("abi_1",            REB_UINT64, cft_abi[8]) \
@@ -75,6 +76,11 @@
 #define CFT_FD_LIST(W) { CFT_FD_BLOBS(W) CFT_FD_SCALARS { 0 } }
 
 #define CFT_N_BLOBS 50
+/* And the scalars CFT_FD_SCALARS adds after them. Here rather than
+ * written out in cft_archive_selftest(), for the reason the blob
+ * count is here: a number kept anywhere but beside the list it counts
+ * is a number that will disagree with it. */
+#define CFT_N_SCALARS 12
 
 /* One definition of each, in src/cft_ias15_fields.c. cft_archive.c
  * selects among them by format; the integrator registers the first,

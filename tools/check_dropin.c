@@ -76,6 +76,10 @@ static double soften = 0.0;          /* applied by build() to BOTH sides, so
                                       * the softening case compares like with
                                       * like; set and reset around it */
 static double min_dt = 0.0;          /* the same, for IAS15's step floor */
+static int accurate = 0;             /* state->accurate: shift the wide state on a
+                                      * removal instead of re-promoting it from
+                                      * r->particles. Diverges from REBOUND, so it is
+                                      * off for every equivalence case. */
 static int adaptive_mode = 2;        /* and for the step criterion: 2 PRS23,
                                       * 3 AARSETH85 */
 
@@ -93,6 +97,7 @@ static struct reb_simulation *build(const struct body *bs, size_t n, double dt, 
         s->format = wide_format;
         s->min_dt = min_dt;
         s->adaptive_mode = adaptive_mode;
+        s->accurate = accurate;
     }else{
         struct reb_integrator_ias15_state *s = reb_simulation_set_integrator(r, "ias15");
         if (!s){ fprintf(stderr, "check_dropin: ias15 missing\n"); exit(2); }
@@ -173,6 +178,85 @@ static void case_steps(const char *label, const struct body *bs, size_t n,
     reb_simulation_free(rb);
 }
 
+
+/* A collision that really happens, at binary64.
+ *
+ * REBOUND's driver does the search and the resolution after the step
+ * callback returns, so what is under test is whether this integrator
+ * survives the removal the same way REBOUND's does - which, since
+ * accurate = 0, means leaving the polynomial exactly as stale as
+ * REBOUND leaves it. */
+static void case_collision(const char *label, double dt, double epsilon, size_t steps){
+    printf("%s (3 bodies, dt = %g, epsilon = %g, %zu steps, merge on contact)\n",
+           label, dt, epsilon, steps);
+    /* A star and two small bodies that meet, so that a merge still
+     * leaves a system with a pair in it.
+     *
+     * Both tangential velocities straddle the circular speed at
+     * r = 1 rather than zero, and that is the whole design. With
+     * +0.3 and -0.3 the remnant carries almost no angular momentum,
+     * falls into the star, and the run ends as one body - where
+     * IAS15 has no pairs, divides 0 by 0 in the step controller, and
+     * the two sides differ only in the SIGN of the quiet NaN, which
+     * 754 does not specify and which says nothing about a removal.
+     * With 1.3 and 0.7 the remnant stays in orbit: measured, the
+     * merge lands at step 1291 and the two survivors are 1.0079
+     * apart at step 2000.
+     *
+     * Late is also the point. Bodies that overlap at t = 0 merge on
+     * step 1, where the polynomial being re-read is still all zeros
+     * and re-reading it proves nothing. */
+    static const struct body meet[3] = {
+        { 1.0,    0.0, 0.0, 0.0,   0.0,  0.0,  0.0 },
+        { 1.0e-3, 1.0, 0.0, 0.0,   0.0,  1.3,  0.0 },
+        { 1.0e-3, 1.02,0.0, 0.0,   0.0,  0.7,  0.0 },
+    };
+    struct reb_simulation *ra = build(meet, 3, dt, epsilon, 0);
+    struct reb_simulation *rb = build(meet, 3, dt, epsilon, 1);
+    for (int i = 0; i < 2; i++){
+        struct reb_simulation *r = i ? rb : ra;
+        r->collision = REB_COLLISION_DIRECT;
+        r->collision_resolve = reb_collision_resolve_merge;
+        for (size_t k = 0; k < r->N; k++) r->particles[k].r = 0.02;
+    }
+    size_t n_before = ra->N;
+    reb_simulation_steps(ra, steps);
+    reb_simulation_steps(rb, steps);
+
+    /* Did one actually happen? Without this the case passes whether or
+     * not the collision search ever fired, which would make it a test
+     * of nothing. */
+    if (ra->N >= n_before){
+        printf("  FAIL %s: no collision occurred (N is still %zu), so this case\n"
+               "       proves nothing; the bodies need to actually meet\n", label, ra->N);
+        failures++;
+        reb_simulation_free(ra); reb_simulation_free(rb);
+        return;
+    }
+    if (ra->N != rb->N){
+        printf("  FAIL %s: REBOUND ended with %zu particles and this port with %zu\n",
+               label, ra->N, rb->N);
+        failures++;
+        reb_simulation_free(ra); reb_simulation_free(rb);
+        return;
+    }
+    /* And did it leave a system behind? One body has no pairs, so
+     * IAS15's controller divides 0 by 0 and the case would go on to
+     * compare two NaNs whose sign 754 leaves to the implementation. */
+    if (ra->N < 2){
+        printf("  FAIL %s: the run collapsed to %zu particle(s); a one-body\n"
+               "       IAS15 run has no pairs and compares 0/0 against 0/0\n",
+               label, ra->N);
+        failures++;
+        reb_simulation_free(ra); reb_simulation_free(rb);
+        return;
+    }
+    printf("  (a merge removed one: %zu particles became %zu)\n", n_before, ra->N);
+    compare(ra, rb, label);
+    reb_simulation_free(ra);
+    reb_simulation_free(rb);
+}
+
 static void case_integrate(const char *label, const struct body *bs, size_t n,
                            double dt, double epsilon, double tmax){
     printf("%s (N = %zu, dt = %g, epsilon = %g, integrate to t = %g, exact_finish_time = 1)\n",
@@ -220,13 +304,12 @@ static void case_user_edit(const char *label, const struct body *bs, size_t n,
     reb_simulation_free(rb);
 }
 
-/* A particle added mid-run. REBOUND's ias15_alloc zeroes g, e, b, csb,
- * er, br, csx and csv whenever the array grows past its high-water mark
- * (realloc_dp7 zeroes the whole array); the shim's did_add_particle
- * invalidates and the next step does the same. So this IS an
- * equivalence case - on a grow. Removal is not, and is not claimed:
- * REBOUND keeps a polynomial that no longer describes the particle set
- * and the shim deliberately does not. */
+/* A particle added mid-run, past the high-water mark. REBOUND's
+ * ias15_alloc reallocates and realloc_dp7 zeroes the whole array; the
+ * shim's did_add_particle invalidates and the next step does the same.
+ * An equivalence case, like every other one here - including, since
+ * the port performs REBOUND's re-slice rather than approximating it,
+ * the two below that change the count without passing the mark. */
 static void case_add_particle(const char *label, double dt, double epsilon){
     printf("%s (150 steps of 2 bodies, a third added, 150 more)\n", label);
     struct reb_simulation *ra = build(kepler, 2, dt, epsilon, 0);
@@ -237,6 +320,48 @@ static void case_add_particle(const char *label, double dt, double epsilon){
     reb_simulation_add(ra, p);
     reb_simulation_add(rb, p);
     reb_simulation_steps(ra, 150); reb_simulation_steps(rb, 150);
+    compare(ra, rb, label);
+    reb_simulation_free(ra);
+    reb_simulation_free(rb);
+}
+
+
+/* Down and back up again, both times below the high-water mark.
+ *
+ * REBOUND reallocates nothing in either direction, so both are a
+ * re-reading: its seven coefficient levels share one buffer that
+ * dpcast() slices at the CURRENT 3N. Going down leaves a tail above the
+ * live region that no stride reaches. Coming back up reads that tail
+ * straight back, at offsets the shrunk configuration never wrote.
+ *
+ * That second half is the point of this case. Nothing else in the gate
+ * reaches it, and a port that re-sliced on a shrink but did not keep
+ * what the shrink stranded would pass every other case and read zeros
+ * here. Four bodies so that the mark is 4, a removal leaves 3, and the
+ * one added back lands under it. */
+static void case_remove_then_add(const char *label, double dt, double epsilon){
+    printf("%s (4 bodies, 200 steps, one removed, 200, one added back under the mark, 200)\n",
+           label);
+    struct reb_simulation *ra = build(five, 4, dt, epsilon, 0);
+    struct reb_simulation *rb = build(five, 4, dt, epsilon, 1);
+    reb_simulation_steps(ra, 200); reb_simulation_steps(rb, 200);
+    if (reb_simulation_remove_particle(ra, 2) != 0 ||   /* 0 is success */
+        reb_simulation_remove_particle(rb, 2) != 0){
+        printf("  FAIL %s: REBOUND refused the removal\n", label); failures++;
+        reb_simulation_free(ra); reb_simulation_free(rb); return;
+    }
+    reb_simulation_steps(ra, 200); reb_simulation_steps(rb, 200);
+    struct reb_particle p = {0};
+    p.m = 2e-4; p.x = -3.1; p.y = 0.7; p.z = -0.02; p.vy = -0.55; p.vz = 0.004;
+    reb_simulation_add(ra, p);
+    reb_simulation_add(rb, p);
+    if (ra->N != 4){
+        printf("  FAIL %s: N is %zu, so the add passed the mark and this case\n"
+               "       tests the zeroing path instead of the re-reading one\n", label, ra->N);
+        failures++;
+        reb_simulation_free(ra); reb_simulation_free(rb); return;
+    }
+    reb_simulation_steps(ra, 200); reb_simulation_steps(rb, 200);
     compare(ra, rb, label);
     reb_simulation_free(ra);
     reb_simulation_free(rb);
@@ -303,6 +428,103 @@ static void case_wide(void){
 /* ------------------------------------------------------------------ */
 /* The refusals: named, not computed                                    */
 /* ------------------------------------------------------------------ */
+
+/* A merge at binary128 with state->accurate = 1.
+ *
+ * At accurate = 0 a removal shifts r->particles, which are binary64,
+ * and the wide state is re-promoted from them - correct at CFT_FP64,
+ * where the view IS the state, and a silent loss of every tail above
+ * it. That is why the shim refuses this combination, which the refusal
+ * case below checks. accurate = 1 shifts the wide state itself, so the
+ * survivors keep their tails and each keeps its own polynomial.
+ *
+ * Not an equivalence case, and it must not become one: REBOUND is
+ * binary64 and its own removal re-reads its coefficient levels at the
+ * new stride. So the assertions are that the run survives, that both
+ * sides removed the same particle, that the clock agrees - the step
+ * sequence is driven by the wide state but reported rounded - and that
+ * the coordinates do NOT match bit for bit, which is what says the
+ * extra precision was really carried across the removal. */
+static void case_wide_collision(void){
+    const size_t steps = 2000;
+    printf("binary128 with accurate = 1, across a merge (3 bodies, dt = 0.01)\n");
+    static const struct body meet[3] = {
+        { 1.0,    0.0, 0.0, 0.0,   0.0,  0.0,  0.0 },
+        { 1.0e-3, 1.0, 0.0, 0.0,   0.0,  1.3,  0.0 },
+        { 1.0e-3, 1.02,0.0, 0.0,   0.0,  0.7,  0.0 },
+    };
+    accurate = 1;
+    struct reb_simulation *ra = build(meet, 3, 0.01, 1e-9, 0);
+    struct reb_simulation *rb = build(meet, 3, 0.01, 1e-9, 1);
+    accurate = 0;
+    for (int i = 0; i < 2; i++){
+        struct reb_simulation *r = i ? rb : ra;
+        r->collision = REB_COLLISION_DIRECT;
+        r->collision_resolve = reb_collision_resolve_merge;
+        for (size_t k = 0; k < r->N; k++) r->particles[k].r = 0.02;
+    }
+    size_t n_before = ra->N;
+    reb_simulation_steps(ra, steps);
+    reb_simulation_steps(rb, steps);
+
+    if (rb->status == REB_STATUS_GENERIC_ERROR){
+        printf("  FAIL binary128 merge: the step refused\n"); failures++;
+        reb_simulation_free(ra); reb_simulation_free(rb); return;
+    }
+    if (ra->N >= n_before){
+        printf("  FAIL binary128 merge: no collision occurred (N is still %zu)\n", ra->N);
+        failures++;
+        reb_simulation_free(ra); reb_simulation_free(rb); return;
+    }
+    if (ra->N != rb->N){
+        printf("  FAIL binary128 merge: REBOUND ended with %zu particles and this port %zu\n",
+               ra->N, rb->N);
+        failures++;
+        reb_simulation_free(ra); reb_simulation_free(rb); return;
+    }
+    int finite = 1, identical = 1;
+    double worst = 0;
+    for (size_t i = 0; i < ra->N; i++){
+        double A[6] = { ra->particles[i].x, ra->particles[i].y, ra->particles[i].z,
+                        ra->particles[i].vx, ra->particles[i].vy, ra->particles[i].vz };
+        double B[6] = { rb->particles[i].x, rb->particles[i].y, rb->particles[i].z,
+                        rb->particles[i].vx, rb->particles[i].vy, rb->particles[i].vz };
+        for (int k = 0; k < 6; k++){
+            if (!isfinite(B[k])) finite = 0;
+            if (bits_differ(A[k], B[k])) identical = 0;
+            double scale = fabs(A[k]) > 1e-3 ? fabs(A[k]) : 1e-3;
+            double d = fabs(A[k] - B[k]) / scale;
+            if (d > worst) worst = d;
+        }
+    }
+    printf("    a merge removed one: %zu particles became %zu, on both sides\n",
+           n_before, ra->N);
+    printf("    largest relative difference after it: %.3e\n", worst);
+    if (!finite){ printf("  FAIL binary128 merge: a coordinate is not finite\n"); failures++; }
+    else if (identical){
+        printf("  FAIL binary128 merge: bit-identical to binary64, so the wide state did\n"
+               "       not survive the removal after all\n"); failures++; }
+    else printf("  ok   binary128 merge: survived, finite, and wider than binary64\n");
+    reb_simulation_free(ra);
+    reb_simulation_free(rb);
+}
+
+/* And the combination that must be refused rather than approximated:
+ * a removal at a wide format with accurate = 0, where the surviving
+ * particles would come back from r->particles at binary64. */
+static void case_wide_collision_refused(void){
+    struct reb_simulation *r = build(kepler, 2, 0.05, 1e-9, 1);
+    r->collision = REB_COLLISION_DIRECT;
+    r->collision_resolve = reb_collision_resolve_merge;
+    double t_before = r->t;
+    r->integrator.callbacks.step(r, r->integrator.state);
+    int ok = (r->status == REB_STATUS_GENERIC_ERROR) &&
+             !bits_differ(t_before, r->t);
+    reb_simulation_free(r);
+    if (ok) printf("  ok   collisions at binary128 without accurate refused, clock did not move\n");
+    else { printf("  FAIL collisions at binary128 without accurate were not refused\n"); failures++; }
+}
+
 static void nop_forces(struct reb_simulation *r){ (void)r; }
 
 /* The message itself goes to stderr, which is where a user would meet it;
@@ -379,7 +601,6 @@ static void case_refusals(void){
     refused("REB_GRAVITY_COMPENSATED",   p_gravity);
     refused("the tree code",             p_tree);
     refused("a custom gravity routine",  p_gravcustom);
-    refused("collision detection",       p_collision);
     refused("periodic boundaries",       p_boundary);
     refused("test particles (N_active)", p_testp);
     refused("variational particles",     p_var);
@@ -389,6 +610,11 @@ static void case_refusals(void){
     /* And one that must NOT be refused. It was, for one day, on a
      * premise that was not true. */
     accepted("an attached ODE set",      p_odes);
+    /* Collisions are REBOUND's driver's work; at binary64 this
+     * integrator reproduces REBOUND's removal exactly, so it must not
+     * refuse the search. Above binary64 it still does unless
+     * accurate = 1 - that case is below. */
+    accepted("collision detection at binary64", p_collision);
 }
 
 /* ------------------------------------------------------------------ */
@@ -408,6 +634,10 @@ int main(int argc, char **argv){
     if (wide){
         printf("check_dropin --wide: the same shim at binary128, a smoke test\n\n");
         case_wide();
+        printf("\n");
+        case_wide_collision();
+        printf("\n");
+        case_wide_collision_refused();
         printf("\n");
         if (failures){ printf("check_dropin --wide: %d FAILURES\n", failures); return 1; }
         printf("check_dropin --wide: passed\n");
@@ -434,6 +664,8 @@ int main(int argc, char **argv){
     case_two_calls("kepler, two integrate calls", kepler, 2, 8.0, 1e-9, 20.0, 53.0);
     case_user_edit("kepler, a coordinate edited", kepler, 2, 0.05, 1e-9);
     case_add_particle("kepler, a particle added", 0.05, 1e-9);
+    case_collision("a merge removes a particle", 0.01, 1e-9, 2000);
+    case_remove_then_add("one removed, one added back", 0.5, 1e-9);
 
     printf("\n");
     /* Softening: not "is it accepted" but "is it still REBOUND's IAS15

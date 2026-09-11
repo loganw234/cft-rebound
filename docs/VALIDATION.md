@@ -2689,3 +2689,142 @@ column `tools/oracle.py` writes and `tools/horizon.py` reads, the
 upstream and the present tense is right. NOTICE attributes REBOUND
 under GPL-3.0 and libcft under Apache-2.0 with the one-way combination
 rule stated correctly. Nothing to fix in any of the four.
+
+## 30. Collisions, and a defect that was not the one we wrote down
+
+Collision detection and resolution are supported on the drop-in path.
+The route there went through a wrong belief that this project had
+written into three comments and a document, and the correction is the
+substance of this entry.
+
+### What was believed
+
+REBOUND's IAS15 was thought to leave a *stale polynomial* behind when a
+particle is removed: the arrays keep describing the old particle set,
+so each survivor inherits its neighbour's `b`, `e`, `g`, `br`, `er`,
+`csb`. Reproducing that looked like a choice between being faithful and
+being right, which is how it was put to the decision and how the
+decision was made: match REBOUND, defect and all.
+
+### What is actually there
+
+All seven coefficient levels share **one flat allocation**, and
+
+    static struct reb_dpconst7 dpcast(double* dp, size_t N3){
+        .p0 = dp, .p1 = dp+1*N3, ... .p6 = dp+6*N3
+
+`integrator_ias15.c:217`, called at 307-312 with the **current** `N3`,
+every step. `reb_integrator_ias15_alloc()` reallocates only when
+`N3 > ias15->N_allocated`, so a removal - or a regrow under the mark -
+leaves the buffer untouched and re-slices it at a shorter stride. Level
+*m* is then read starting `m*(old_N3 - new_N3)` elements early: level 1
+begins in the tail of level 0, level 2 in the tail of level 1, and so
+on up.
+
+That is a falsifiable statement, unlike "stale", so it was tested. A
+probe compared REBOUND's arrays against the port's, member by member,
+on the step a merge took three bodies to two (`old_N3 = 9`,
+`new_N3 = 6`):
+
+    b1 [0] reb 0x1.81c06a463eabfp+5    cft -0x1.44481639f6f84p-7
+    b1 [3] reb -0x1.44481639f6f84p-7   cft -0x1.1ab9834c788ffp-13
+
+REBOUND's `b1[3]` **is** the port's `b1[0]`, bit for bit - a
+displacement of exactly 3, which is `old_N3 - new_N3`. Level 0 does not
+appear in the diff at all, because offset 0 does not depend on the
+stride. Both halves of the prediction, on the nose.
+
+So the polynomial is not stale. It is aliased, and the survivors do not
+inherit each other's coefficients - they inherit fragments of the level
+above.
+
+### What was done about it
+
+Performed, rather than approximated. `ias15_engine_alias_resize()`
+gathers the seven levels into a flat shadow at the old stride and reads
+them back at the new one. Through a shadow for two reasons, both
+measured rather than reasoned about afterwards:
+
+- **In place is wrong.** At `9 -> 6`, level 2's element 0 is flat index
+  12, which is level 1's element 3 - already overwritten by the time
+  level 2 is reached, in any ascending order.
+- **The tail has to persist.** A shrink strands the part of the buffer
+  between `7*new_N3` and `7*old_N3`: no stride reaches it while the
+  count is small, and a regrow below the high-water mark reads it
+  straight back. Holding the shadow between resizes is what makes that
+  exact.
+
+Neither claim is left as reasoning. Both were run as negative
+controls, against binaries built for the purpose and then deleted:
+
+- **the re-slice itself**, made a no-op, which is what this port did
+  before: `case_collision` and `case_remove_then_add` both fail, the
+  merge case in `x`, `y`, `vx` and `vy` of the surviving pair.
+- **the shadow, zeroed on every resize** rather than kept between
+  them: `case_remove_then_add` fails - `x`, `y`, `z`, `vx`, `t` and
+  `dt` - and `case_collision` still passes, because a merge is a pure
+  shrink and never reads the stranded tail. So the two cases are not
+  redundant, and the second one is the only thing holding the shadow's
+  persistence down.
+
+### The results
+
+- `case_collision`: a star and two small bodies that merge, REBOUND's
+  own `reb_collision_resolve_merge`, 2000 steps. Bit-identical - two
+  particles by nine values, plus the clock - with the merge at step
+  1291 and 709 steps after it for a divergence to show in. A
+  step-by-step probe on the older setup put the first divergence on the
+  very next step after the removal, so 709 is generous rather than
+  necessary.
+- `case_remove_then_add`: bit-identical, and the negative control above
+  says it is testing what it claims.
+- `case_wide_collision`: binary128 with `state->accurate = 1` across the
+  same merge. Survives, finite, both sides remove the same particle,
+  largest relative difference from binary64 afterwards `3.403e-10`, and
+  **not** bit-identical - which is the assertion, since matching would
+  mean the wide tails had been lost.
+- `case_wide_collision_refused`: binary128 with `accurate = 0` refuses
+  and the clock does not move.
+
+### The flag, and why the rule is what it is
+
+`state->accurate` is required above binary64 and is refused there
+rather than silently approximated. A removal shifts `r->particles`,
+which are binary64; at `accurate = 0` - where this port reproduces
+REBOUND - the wide state is re-promoted from them and every coordinate
+loses its tail. At `accurate = 1` the wide state shifts with the
+particles (`ias15_engine_remove_body()`), each survivor keeps its own
+polynomial, and the run is deliberately not REBOUND.
+
+At binary64 the flag changes nothing that matters, because the view is
+the state.
+
+### One test that was measuring the wrong thing
+
+The merge case first gave the two small bodies `+0.3` and `-0.3` in
+`vy`. The remnant of a merge between them carries almost no angular
+momentum, so it fell into the star: `3 -> 2` at step 64, `2 -> 1` at
+step 94. A one-body IAS15 run has no pairs, so the step controller
+divides 0 by 0, and the two sides then disagreed on the **sign of the
+quiet NaN** - `fff8000000000000` against `7ff8000000000000`. 754 leaves
+the sign of a NaN unspecified and x86's default QNaN is negative where
+libcft's is positive, so that difference is real, permitted, and says
+nothing whatever about the removal the case exists to test. Straddling
+the circular speed instead (`1.3` and `0.7`) keeps the remnant in
+orbit. The case now also fails outright if the run collapses to one
+particle, so it cannot quietly go back to comparing two NaNs.
+
+Late also matters: bodies that overlap at `t = 0` merge on step 1,
+where the polynomial being re-read is still all zeros and re-reading it
+proves nothing. Two of the five candidate setups did exactly that.
+
+### What is still open
+
+Across a checkpoint. REBOUND archives its coefficient arrays as one
+`REB_POINTER` of `N_allocated` elements of `7*sizeof(double)`, so both
+the stranded tail and `N_allocated` survive a save; this port archives
+each level as its own blob of `3N` and has no `N_allocated`. A run that
+removes, checkpoints, resumes and then regrows below the *original*
+mark therefore diverges. Closing it changes the on-disk field list, and
+the sequence is narrow enough that it is recorded in ROADMAP.md rather
+than fixed on the way past.

@@ -27,3 +27,7 @@ results/sweep_followup2.log
 # the Makefile uses by default.
 build[0-9]*/
 gate_real.bin
+# tests/gate_restart.c writes these beside the binary when it is run
+# without --build, which is what a bare ./build/gate_restart does.
+gate1_one.bin
+gate1_two.bin

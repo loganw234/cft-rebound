@@ -35,7 +35,7 @@ and why.)
 | refused | |
 |---|---|
 | additional forces, `pre_`/`post_timestep_modifications` (REBOUNDx) | only gravity is ported |
-| collision detection and resolution | not ported |
+| collision detection and resolution | **subprocess API only.** The drop-in supports it; see the note below |
 | ghost boxes, periodic or shear boundaries | not ported |
 | the tree code (`REB_GRAVITY_TREE`) | this is direct summation. `REB_GRAVITY_COMPENSATED` is refused too: a different summation from the one ported |
 | non-zero `softening` | not ported |
@@ -55,6 +55,24 @@ src/reb_integrator_cft.c, checked at the top of every step. The two
 overlap but are not identical, and the differences are worth knowing
 before you pick a path:
 
+- the drop-in **supports collision detection and resolution**, which
+  `cft_rebound_check()` refuses. REBOUND's driver runs the search and
+  the resolver between steps, so all the integrator owes is to survive
+  the removal the way REBOUND's own IAS15 does - which is not by
+  keeping a stale polynomial, as this project believed until it
+  measured one. REBOUND's seven coefficient levels share a single
+  buffer that `dpcast()` re-slices at the *current* `3N` on every
+  step, so a removal below its high-water mark leaves the buffer
+  alone and re-reads every level at an offset short by
+  `old_3N - new_3N`. The port performs that reading rather than
+  approximating it, so a merge at binary64 is bit-identical across
+  the removal - gated by `case_collision` in tools/check_dropin.c.
+  At `CFT_FP128` and above set `state->accurate = 1`, or the step
+  refuses: a removal shifts `r->particles`, which are binary64, and
+  the default re-promotes the survivors from them and loses every
+  wide tail. `accurate = 1` shifts the wide state instead, which is
+  more accurate than REBOUND and so deliberately not bit-identical
+  to it;
 - the drop-in additionally refuses **MEGNO** (`r->calculate_megno`), a
   `format` or `max_iter` outside its range, and a state whose `E` is
   not 1 (an ensemble is E independent systems and a `reb_simulation`

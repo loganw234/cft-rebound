@@ -76,6 +76,22 @@ void   ias15_engine_set_max_iter(int n);
 void   ias15_engine_set_arith_fma(int on);
 
 void   ias15_engine_set_G_f64(double G);
+/* Remove one body from the wide state, shifting every vector down so
+ * that each survivor keeps its own polynomial and its own wide tail.
+ * This is NOT what REBOUND does - REBOUND shifts its particles and
+ * leaves its polynomial arrays alone - so it is only for a caller
+ * that has asked for accuracy over equivalence. 0 on success. */
+int    ias15_engine_remove_body(size_t index);
+
+/* The opposite choice, and REBOUND's: do not move anything, and read
+ * the seven coefficient levels at the new stride. REBOUND keeps them
+ * in one flat buffer that dpcast() slices at the current 3N, so a
+ * count change below its high-water mark silently re-reads every
+ * level at a different offset; each level is its own allocation here,
+ * so that has to be performed. Call it BEFORE set_bodies, while the
+ * old count is still the engine's. A no-op for an ensemble. */
+void   ias15_engine_alias_resize(size_t n_new);
+
 /* IAS15's adaptive_mode: 2 (PRS23) or 3 (AARSETH85). They share every
  * sum and differ in one expression; 0 and 1 are REBOUND's other
  * branch and are not implemented. */
