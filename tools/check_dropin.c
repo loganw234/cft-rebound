@@ -113,7 +113,11 @@ static void p_gravcustom(struct reb_simulation *r){ r->gravity_custom = nop_grav
  * exactly as it does under REBOUND's ias15 - so this must be
  * accepted, not refused. */
 static void p_odes(struct reb_simulation *r){ reb_ode_create(r, 1); }
-static void p_mode(struct reb_simulation *r){ cft_ias15_get_state(r)->adaptive_mode = 0; }
+/* 4, not 0. All four of REBOUND's criteria are implemented now
+ * (tools/cases_modes.c asserts each against REBOUND's own), so what the
+ * adaptive_mode row still refuses on this path is a number that names
+ * no criterion. */
+static void p_mode(struct reb_simulation *r){ cft_ias15_get_state(r)->adaptive_mode = 4; }
 
 
 /* ------------------------------------------------------------------ *
@@ -197,7 +201,7 @@ static void case_refusals(void){
     refused("particle_map",   "r->map",                       p_map);
     refused("variational",    "variational particles",        p_var);
     refused("megno",          "MEGNO",                        p_megno);
-    refused("adaptive_mode",  "adaptive_mode != PRS23",       p_mode);
+    refused("adaptive_mode",  "an adaptive_mode REBOUND has no name for", p_mode);
     refused("ensemble_E",     "state->E != 1",                p_ensemble);
     refused("format",         "an out-of-range format",       p_format);
     refused("max_iter",       "a negative max_iter",          p_maxiter);
@@ -240,6 +244,7 @@ int main(int argc, char **argv){
 
     cases_core();
     /* A parcel's topic goes here, one line, beside its own file. */
+    cases_modes();
     case_refusals();
 
     printf("\n");
