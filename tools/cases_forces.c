@@ -676,13 +676,18 @@ static void subprocess_refuses(const char *row, const char *what,
     const struct cft_support_row *hit =
         cft_support_first_refusal(&c, CFT_PATH_SUBPROCESS);
     const char *got = hit ? hit->name : "(nothing)";
+    /* The row must also be able to SAY something: a row that refused
+     * with an empty message refuses without a reason, which is the one
+     * thing a refusal here may not do. */
     char why[768];
-    if (hit) hit->say(&c, why, sizeof why); else why[0] = 0;
-    int ok = hit && !strcmp(hit->name, row);
+    why[0] = 0;
+    if (hit) hit->say(&c, why, sizeof why);
+    int ok = hit && !strcmp(hit->name, row) && why[0];
     reb_simulation_free(r);
     if (ok){ printf("  ok   %s refused on the subprocess path by \"%s\"\n", what, row); return; }
-    printf("  FAIL %s: the subprocess path was refused by \"%s\" and not \"%s\"\n",
-           what, got, row);
+    printf("  FAIL %s: the subprocess path was refused by \"%s\" and not \"%s\"%s\n",
+           what, got, row, (hit && !why[0]) ? ", and it said nothing" : "");
+    if (verbose && why[0]) printf("       it said: %s\n", why);
     failures++;
 }
 
