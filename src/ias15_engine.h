@@ -76,6 +76,9 @@ void   ias15_engine_set_max_iter(int n);
 void   ias15_engine_set_arith_fma(int on);
 
 void   ias15_engine_set_G_f64(double G);
+/* IAS15's min_dt, a floor on |dt|. 0 disables it, which is REBOUND's
+ * default: at 0 the comparison is false and nothing is selected. */
+void   ias15_engine_set_min_dt_f64(double min_dt);
 /* r->softening. Squared internally in the run's format; 0 is the
  * default and issues the same +0 addend the port always issued. */
 void   ias15_engine_set_softening_f64(double softening);

@@ -90,6 +90,13 @@ enum cft_rebound_format {
 struct cft_rebound_options {
     enum cft_rebound_format format;
     double epsilon;        /* IAS15's tolerance: > 0 adaptive, 0 fixed */
+    double min_dt;         /* IAS15's floor on |dt|. 0 disables it, which
+                            * is REBOUND's default: at 0 the comparison
+                            * REBOUND makes is false and no floor is ever
+                            * selected, so the arithmetic is unchanged.
+                            * Alongside epsilon and max_iter because the
+                            * IAS15 tunables come from here, not from the
+                            * simulation. */
     int    max_iter;       /* the cap on IAS15's corrector passes. 0 picks
                             * a default per format - see the note in
                             * src/cft_rebound_run.c - because the program's

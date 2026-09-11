@@ -176,10 +176,6 @@ static int supported(struct reb_simulation *r, struct cft_ias15_state *st){
     if (st->adaptive_mode != 2){
         refuse(r, "ias15_cft: adaptive_mode %d is not implemented; only PRS23 (2), "
                   "REBOUND's default since January 2024, is.", st->adaptive_mode); return 0; }
-    if (st->min_dt != 0.0){
-        refuse(r, "ias15_cft: min_dt is not implemented (min_dt = %g). The engine's step "
-                  "control issues the comparison against a min_dt of exactly 0, which is "
-                  "REBOUND's default; a floor would change the arithmetic.", st->min_dt); return 0; }
     if (st->format != CFT_FP64 && st->format != CFT_FP128 && st->format != CFT_FP256){
         refuse(r, "ias15_cft: format %d is not one of CFT_FP64 (%d), CFT_FP128 (%d) or "
                   "CFT_FP256 (%d).", st->format, CFT_FP64, CFT_FP128, CFT_FP256); return 0; }
@@ -412,6 +408,7 @@ static void cft_ias15_step(struct reb_simulation *r, void *p){
      * may change it between steps and should get what they asked for
      * rather than what the first step saw. */
     ias15_engine_set_softening_f64(r->softening);
+    ias15_engine_set_min_dt_f64(st->min_dt);
 
     /* --- the particles ------------------------------------------------
      * The wide state is the truth. r->particles are re-promoted only if

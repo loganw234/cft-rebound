@@ -177,8 +177,6 @@ int cft_rebound_check(const struct reb_simulation *r, char *why, size_t n){
         const struct reb_integrator_ias15_state *s = r->integrator.state;
         if (s->adaptive_mode != 2){
             say(why, n, "only IAS15's PRS23 step criterion (adaptive_mode 2) is ported"); return 1; }
-        if (s->min_dt != 0.0){
-            say(why, n, "IAS15's min_dt is not ported; leave it at 0"); return 1; }
     }
     say(why, n, "");
     return 0;
@@ -357,6 +355,11 @@ int cft_rebound_steps(struct reb_simulation *r, long nsteps,
             char sb[40];
             hexfloat_print(r->softening, sb);
             k += sprintf(cmd + k, " --softening %s", sb);
+        }
+        if (opt->min_dt != 0.0){
+            char mb[40];
+            hexfloat_print(opt->min_dt, mb);
+            k += sprintf(cmd + k, " --min-dt %s", mb);
         }
         }
         if (art) k += sprintf(cmd + k, " --artifact \"%s\"", art);

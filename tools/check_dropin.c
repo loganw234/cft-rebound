@@ -75,6 +75,7 @@ static int wide_format = CFT_FP64;   /* --wide runs the cft side at binary128 */
 static double soften = 0.0;          /* applied by build() to BOTH sides, so
                                       * the softening case compares like with
                                       * like; set and reset around it */
+static double min_dt = 0.0;          /* the same, for IAS15's step floor */
 
 static struct reb_simulation *build(const struct body *bs, size_t n, double dt, double epsilon,
                                     int use_cft){
@@ -88,10 +89,12 @@ static struct reb_simulation *build(const struct body *bs, size_t n, double dt, 
         if (!s){ fprintf(stderr, "check_dropin: ias15_cft not registered\n"); exit(2); }
         s->epsilon = epsilon;
         s->format = wide_format;
+        s->min_dt = min_dt;
     }else{
         struct reb_integrator_ias15_state *s = reb_simulation_set_integrator(r, "ias15");
         if (!s){ fprintf(stderr, "check_dropin: ias15 missing\n"); exit(2); }
         s->epsilon = epsilon;
+        s->min_dt = min_dt;
     }
     for (size_t i = 0; i < n; i++){
         struct reb_particle p = {0};
@@ -362,7 +365,6 @@ static void p_gravcustom(struct reb_simulation *r){ r->gravity_custom = nop_grav
  * exactly as it does under REBOUND's ias15 - so this must be
  * accepted, not refused. */
 static void p_odes(struct reb_simulation *r){ reb_ode_create(r, 1); }
-static void p_mindt(struct reb_simulation *r){ cft_ias15_get_state(r)->min_dt = 1e-8; }
 static void p_mode(struct reb_simulation *r){ cft_ias15_get_state(r)->adaptive_mode = 0; }
 
 static void case_refusals(void){
@@ -378,7 +380,6 @@ static void case_refusals(void){
     refused("test particles (N_active)", p_testp);
     refused("variational particles",     p_var);
     refused("MEGNO",                     p_megno);
-    refused("min_dt",                    p_mindt);
     refused("adaptive_mode != PRS23",    p_mode);
 
     /* And one that must NOT be refused. It was, for one day, on a
@@ -444,6 +445,19 @@ int main(int argc, char **argv){
     case_steps("kepler, softened, adaptive",     kepler, 2,      0.05, 1e-9, 400);
     case_steps("pythagorean, softened",          pythagorean, 3, 0.01, 1e-9, 400);
     soften = 0.0;
+
+    /* min_dt. The trap here is a floor the control never reaches: the
+     * case would pass and prove nothing. kepler at dt = 8 with
+     * epsilon = 1e-9 is the rejected-steps configuration, where the
+     * control must shrink hard, so a floor of 0.5 is well above where
+     * it wants to go and is selected. The run without the floor is
+     * there to prove exactly that: if the two agreed, the floor never
+     * engaged. */
+    printf("\nwith IAS15's min_dt, REBOUND's copysign(min_dt, dt_new) floor:\n");
+    min_dt = 0.5;
+    case_steps("kepler, floored at 0.5",      kepler, 2,      8.0,  1e-9, 200);
+    case_steps("pythagorean, floored at 0.5", pythagorean, 3, 5.0,  1e-9, 200);
+    min_dt = 0.0;
 
     case_refusals();
 

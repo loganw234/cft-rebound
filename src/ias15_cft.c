@@ -61,7 +61,7 @@
  *             [--arith rebound|fma] [--engine loop|program] [--programs DIR]
  *             [--no-flag-abort] [--artifact PATH] [--dump-constants] [--quiet]
  *             [--member K] [--dt-file FILE] [--dt-out FILE]
- *             [--softening S]
+ *             [--softening S] [--min-dt M]
  *
  * --artifact opens a tile instead of the software backend; with no flag
  * the program falls back to $CFT_REBOUND_ARTIFACT, which is how the
@@ -144,6 +144,8 @@ static void vadd(V d, const V a, const V c, size_t n){
     uint32_t fl = 0; cft_status st = cft_run(dev, CFT_ADD, F, CFT_RNE, a, NULL, c, d, n, &fl, NULL); note(st, fl, "add"); }
 static void vsub(V d, const V a, const V c, size_t n){
     uint32_t fl = 0; cft_status st = cft_run(dev, CFT_SUB, F, CFT_RNE, a, NULL, c, d, n, &fl, NULL); note(st, fl, "sub"); }
+static void vcopysign(V d, const V a, const V b, size_t n){
+    uint32_t fl = 0; cft_status st = cft_run(dev, CFT_COPYSIGN, F, CFT_RNE, a, b, NULL, d, n, &fl, NULL); note(st, fl, "copysign"); }
 static void vmul(V d, const V a, const V b, size_t n){
     uint32_t fl = 0; cft_status st = cft_run(dev, CFT_MUL, F, CFT_RNE, a, b, NULL, d, n, &fl, NULL); note(st, fl, "mul"); }
 static void vneg(V d, const V a, size_t n){
@@ -355,6 +357,10 @@ static size_t L;           /* lanes per system, 3N */
 static size_t PS, P;       /* pairs per system, pairs in all */
 static V mass;             /* NB */
 static V G;                /* broadcast */
+static V SMINDT;           /* broadcast: the step-size floor, +0 by
+                            * default - and at +0 the comparison below
+                            * is false, so nothing is ever selected and
+                            * the arithmetic is REBOUND's unchanged */
 static V SOFT2;            /* broadcast: r->softening squared, +0 by
                             * default, so a simulation that sets none
                             * issues the same operation on the same
@@ -397,6 +403,7 @@ static void read_problem(const char *path){
     mass = valloc(NB);
     G = valloc(NMAX);
     SOFT2 = valloc(NMAX); vzero(SOFT2, NMAX);
+    SMINDT = valloc(NMAX); vzero(SMINDT, NMAX);
     X0 = valloc(N3); V0 = valloc(N3);
     body_names = calloc(NB, sizeof *body_names);
     sys_names = calloc(E, sizeof *sys_names);
@@ -856,11 +863,11 @@ static int s7_stale = 1;
  * control's call count is therefore independent of E. */
 static void choose_timestep(void){
     static V sq, tmp, y[6], a0i, ts2, mints2, num, den, INVB;
-    static V y1m, y2m, y3m, mim, r, dtnA, dtnB, ad, rr, ar, P0, PR, PL, PI; static uint8_t *cls, *cls2, *clsm;
+    static V y1m, y2m, y3m, mim, r, dtnA, dtnB, dtnF, ad, rr, ar, P0, PR, PL, PI; static uint8_t *cls, *cls2, *clsm;
     if (!sq){
         sq = valloc(N3); tmp = valloc(N3); for (int i = 0; i < 6; i++) y[i] = valloc(NB); a0i = valloc(NB); ts2 = valloc(NB);
         mints2 = valloc(E); num = valloc(NB); den = valloc(NB); cls = cbytes(NB); cls2 = cbytes(NB); clsm = cbytes(E);
-        y1m = valloc(NB); y2m = valloc(NB); y3m = valloc(NB); mim = valloc(E); r = valloc(E); dtnA = valloc(E); dtnB = valloc(E);
+        y1m = valloc(NB); y2m = valloc(NB); y3m = valloc(NB); mim = valloc(E); r = valloc(E); dtnA = valloc(E); dtnB = valloc(E); dtnF = valloc(E);
         ad = valloc(E); rr = valloc(E); ar = valloc(E); P0 = valloc(E); PR = valloc(E); PL = valloc(E); PI = valloc(E);
         if (!cls || !cls2 || !clsm) die("out of memory");
         /* 1/safety_factor depends on nothing at all: once, the same bits every step */
@@ -922,8 +929,16 @@ static void choose_timestep(void){
     vsqrt(r, mim, E); vmul(r, r, SDTDONE, E); vmul(dtnA, r, S7B, E);
     vdiv(dtnB, SDTDONE, K0_25, E);
     for (size_t s = 0; s < E; s++) memcpy(E(SDTNEW, s), is_normal_class(clsm[s]) ? E(dtnA, s) : E(dtnB, s), ESZ);
-    /* min_dt is 0: fabs(dt_new) < 0 is never true, but issue it */
-    vabs(ad, SDTNEW, E); vcmplt(P0, ad, K0, E);
+    /* REBOUND's floor:
+     *   if (fabs(dt_new) < min_dt) dt_new = copysign(min_dt, dt_new);
+     * At the default min_dt of +0 the comparison is false for every
+     * system - including a dt_new of +-0, since 0 < 0 is false - so
+     * nothing is selected and the step control is bit for bit what it
+     * was before this existed. */
+    vabs(ad, SDTNEW, E); vcmplt(P0, ad, SMINDT, E);
+    vcopysign(dtnF, SMINDT, SDTNEW, E);
+    for (size_t s = 0; s < E; s++)
+        if (pred_at(P0, s)) memcpy(E(SDTNEW, s), E(dtnF, s), ESZ);
     /* fabs(dt_new/dt_done) < safety_factor -> reject; if it is larger
      * than 1/safety_factor, clamp to dt_done/safety_factor */
     vdiv(rr, SDTNEW, SDTDONE, E); vabs(ar, rr, E);
@@ -1200,6 +1215,9 @@ static void read_dt_file(const char *path, long steps){
 
 int main(int argc, char **argv){
     const char *problem = NULL, *artifact = NULL, *fmtname = "fp64", *dt_file = NULL, *dt_out_path = NULL;
+    const char *mindt_txt = NULL;  /* --min-dt; NULL is +0, which disables
+                                    * the floor exactly as REBOUND's
+                                    * default does */
     const char *soft_txt = NULL;   /* --softening; NULL is +0, which is
                                     * the addend the port always issued */
     const char *dt_txt = "0.01", *eps_txt = "1e-9";
@@ -1211,6 +1229,7 @@ int main(int argc, char **argv){
         else if (!strcmp(argv[i], "--dt") && i + 1 < argc) dt_txt = argv[++i];
         else if (!strcmp(argv[i], "--epsilon") && i + 1 < argc) eps_txt = argv[++i];
         else if (!strcmp(argv[i], "--softening") && i + 1 < argc) soft_txt = argv[++i];
+        else if (!strcmp(argv[i], "--min-dt") && i + 1 < argc) mindt_txt = argv[++i];
         else if (!strcmp(argv[i], "--steps") && i + 1 < argc) steps = atol(argv[++i]);
         else if (!strcmp(argv[i], "--sample") && i + 1 < argc) sample = atol(argv[++i]);
         else if (!strcmp(argv[i], "--cs") && i + 1 < argc){ const char *m = argv[++i]; if (!strcmp(m, "kahan")) cs_augmented = 0; else if (!strcmp(m, "augmented")) cs_augmented = 1; else die("--cs kahan|augmented"); }
@@ -1261,6 +1280,11 @@ int main(int argc, char **argv){
         vmul(q, t, t, 1);
         vbcast(SOFT2, q, NMAX);
         free(t); free(q);
+    }
+    if (mindt_txt){
+        V t = from_text(mindt_txt, is_hex_text(mindt_txt));
+        vbcast(SMINDT, t, NMAX);
+        free(t);
     }
 
     /* dt and epsilon from their decimal text, correctly rounded in the
@@ -1463,6 +1487,7 @@ int ias15_engine_alloc(size_t n_cap, int max_iter_, int arith_fma_, int cs_aug, 
     mass = valloc(NB);
     G = valloc(NMAX);
     SOFT2 = valloc(NMAX); vzero(SOFT2, NMAX);
+    SMINDT = valloc(NMAX); vzero(SMINDT, NMAX);
     body_names = calloc(NB, sizeof *body_names);
     sys_names = calloc(E, sizeof *sys_names);
     if (!body_names || !sys_names) die("out of memory");
@@ -1521,6 +1546,12 @@ void ias15_engine_set_G_f64(double g_){
 /* softening SQUARED, taken in the run's format. At binary64 that is
  * REBOUND's own fl64(s*s); above it, the more accurate square, which
  * is what a caller asking for a wide format is asking for. */
+/* REBOUND's ias15->min_dt: a floor on |dt|, 0 to disable, which is
+ * REBOUND's own default and the value every gate here runs. */
+void ias15_engine_set_min_dt_f64(double m_){
+    V s = valloc(1); eng_promote(s, &m_, 1); vbcast(SMINDT, s, NMAX); free(s);
+}
+
 void ias15_engine_set_softening_f64(double s_){
     V a = valloc(1), b = valloc(1);
     eng_promote(a, &s_, 1);
