@@ -162,10 +162,28 @@ void   ias15_engine_alias_resize(size_t n_new);
  *   a    in: the wide gravity, correctly rounded. out: whatever the
  *        routine leaves there.
  *
+ * `a` IS THE ONLY OUTPUT. The engine reads `a` back and nothing else;
+ * `x` and `v` are const and the engine has no view of the caller's
+ * masses at all. That is not a gap the caller may paper over: REBOUND's
+ * IAS15 goes on using the particles the routine left behind - a
+ * position or velocity written at the n = 0 call becomes the step's
+ * initial condition (integrator_ias15.c:296, then :311), a velocity
+ * written at a node survives into the next one when the velocity
+ * predictor is not running, and a mass is re-read by gravity at the
+ * next node. A caller whose routine can write those must DETECT it and
+ * refuse; cft_force_hook() in src/reb_integrator_cft.c compares the
+ * three by memcmp and does, and its header says why a partial
+ * emulation would be worse than the refusal.
+ *
  * A COMPONENT THE ROUTINE CHANGES BECOMES BINARY64. The engine compares
  * `a` bit for bit against what it handed over and promotes back only
  * where it differs, so an untouched component - and a do-nothing
- * routine - costs nothing and leaves a wide run wide. Where the routine
+ * routine - costs nothing and leaves a wide run wide. The comparison is
+ * memcmp and not `!=`, which matters: -0 and +0 compare EQUAL under
+ * `!=`, so a routine that turned a -0 acceleration into a +0 would have
+ * its write dropped and the run would differ from REBOUND in the sign
+ * of a zero. tools/cases_forces.c's signed-zero case is that
+ * distinction, and fails if the comparison is weakened. Where the routine
  * did write, the value it wrote is all there is: r->particles are
  * binary64 and that is the only interface REBOUND offers a callback.
  * Gravity stays wide; the user's force does not. At CFT_FP64, which is
@@ -174,7 +192,12 @@ void   ias15_engine_alias_resize(size_t n_new);
  *
  * velocity_dependent is REBOUND's r->force_is_velocity_dependent, and
  * it selects one thing: whether the node's velocities are predicted
- * from the b polynomial before the call. REBOUND predicts them only
+ * from the b polynomial before the call. It is also the one thing
+ * arith_fma does not reach: predict_velocities() is written in
+ * divisions and arith_fma is the form that issues none, so the shim
+ * refuses that combination by name (the fma_veldep row in
+ * src/cft_supported.c) rather than run two predictors under two
+ * rounding regimes. REBOUND predicts them only
  * under `r->calculate_megno || (r->additional_forces &&
  * r->force_is_velocity_dependent)` (integrator_ias15.c:434), and a port
  * that predicted them always would hand a velocity-independent force a

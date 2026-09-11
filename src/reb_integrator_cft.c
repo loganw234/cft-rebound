@@ -50,9 +50,10 @@
  * at the top of their loops. The user's process is not killed and the
  * simulation is left exactly as it was: nothing was computed. */
 static void refuse(struct reb_simulation *r, const char *fmt, ...){
-    /* Wide enough for the longest row in src/cft_supported.c plus the
-     * "ias15_cft: " prefix. The collision row alone is over 400. */
-    char buf[1024];
+    /* Wide enough for the longest message this integrator formats plus
+     * the "ias15_cft: " prefix. The collision row is over 400 and the
+     * force-write refusal below is over 750, so this is not slack. */
+    char buf[1280];
     va_list ap; va_start(ap, fmt);
     vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
@@ -172,6 +173,7 @@ static int supported(struct reb_simulation *r, struct cft_ias15_state *st){
     c.format        = st->format;
     c.accurate      = st->accurate;
     c.max_iter      = st->max_iter;
+    c.arith_fma     = st->arith_fma;
     c.E             = st->E;
     c.adaptive_mode = st->adaptive_mode;
 
@@ -565,13 +567,98 @@ static int bind_engine(struct reb_simulation *r, struct cft_ias15_state *st){
  * inputs or to take its answer back. Gravity stays wide; a component
  * the routine writes is binary64 from that node on. That is a real
  * ceiling of this feature and not a detail: docs and README belong to
- * the integrator, so it is stated here and in src/ias15_engine.h. */
+ * the integrator, so it is stated here and in src/ias15_engine.h.
+ *
+ * ONLY ax/ay/az MAY BE WRITTEN, and a routine that writes anything else
+ * is REFUSED rather than half-obeyed. This hook hands the routine the
+ * node's x, v and a and reads back the accelerations; REBOUND hands it
+ * the same particles and then goes on using ALL of them, through three
+ * separate channels that are three different rules:
+ *
+ *   particles[].x  reb_integrator_ias15_step_try calls
+ *                  reb_simulation_update_acceleration() at
+ *                  integrator_ias15.c:296 and only afterwards, at :311,
+ *                  snapshots x0/v0/a0 out of particles. So a position
+ *                  the routine writes at the n = 0 call BECOMES the
+ *                  step's initial condition; one written at a node is
+ *                  overwritten by the next node's predictor.
+ *   particles[].v  the same n = 0 channel, and a second one: REBOUND
+ *                  refreshes particles[].v between nodes only when the
+ *                  velocity predictor runs (:434), so with
+ *                  force_is_velocity_dependent CLEAR a velocity written
+ *                  at one node is still there at the next. Here every
+ *                  node is handed the engine's own v, freshly rounded.
+ *   particles[].m  REBOUND's gravity re-reads the masses at every node.
+ *                  The shim sets them once per step.
+ *
+ * Measured on kepler over 200 steps, against this port running the same
+ * routine: each channel moves 15 of the 21 compared values. Reproducing
+ * all three faithfully is three mechanisms, and at a wide format the
+ * first two cannot be reproduced at all - applying the write would mean
+ * re-promoting x or v from binary64 and losing every tail, which is the
+ * same loss the collision row refuses (hit_collision in
+ * src/cft_supported.c). A partial emulation would be the silent
+ * wrong-answer shape with extra steps, so the write is detected by
+ * memcmp and named.
+ *
+ * THE TIMING, AND WHAT IS DONE ABOUT IT. The detection happens
+ * mid-step: refuse() sets REB_STATUS_GENERIC_ERROR, and REBOUND's
+ * driver only looks at the status at the top of its next loop - so by
+ * then a whole step has been integrated with a routine whose writes
+ * went nowhere. That answer must not reach the user, so the step is
+ * DISCARDED: cft_ias15_step puts r->particles, r->t, r->dt and
+ * r->dt_last_done back exactly as they were when it was entered and
+ * invalidates the view. The refusal then keeps the invariant every
+ * other refusal in this port has, the one tools/check_dropin.c's
+ * refused() asserts - the integration stopped and the clock did not
+ * move, nothing was computed - instead of being the one refusal that
+ * leaves a number behind. */
 static double force_t_beginning;   /* REBOUND's t_beginning for this step */
+/* Set by the hook, read by the step, cleared by the step before it
+ * starts: "the routine wrote something this port cannot carry". A
+ * process-global for the same reason force_t_beginning is - the engine
+ * is one global instance and the hook has nowhere else to put it. */
+static int  force_refused;
+static char force_refused_why[1024];   /* the longest message this file
+                                        * formats; refuse()'s own buffer
+                                        * is sized for it plus the prefix */
+
+/* Which field of which particle changed, or NULL. The order is the
+ * order they are reported in, and N comes first because a changed N
+ * means r->particles may have been reallocated under us and nothing
+ * below it may be read. */
+static const char *force_write_found(struct reb_simulation *r, size_t N_in,
+                                     const double *x, const double *v,
+                                     const double *m, size_t *which){
+    *which = 0;
+    if (r->N != N_in) return "N";
+    for (size_t i = 0; i < N_in; i++){
+        const struct reb_particle *p = &r->particles[i];
+        const double got[6] = { p->x, p->y, p->z, p->vx, p->vy, p->vz };
+        static const char *names[6] = { "x", "y", "z", "vx", "vy", "vz" };
+        for (int k = 0; k < 6; k++){
+            const double *want = k < 3 ? &x[3*i + k] : &v[3*i + (k - 3)];
+            /* memcmp and not !=, for the reason every comparison in
+             * this file is memcmp: -0 and +0 compare equal under != and
+             * REBOUND would carry the sign. */
+            if (memcmp(&got[k], want, sizeof(double)) != 0){ *which = i; return names[k]; }
+        }
+        if (memcmp(&p->m, &m[i], sizeof(double)) != 0){ *which = i; return "m"; }
+    }
+    return NULL;
+}
 
 static void cft_force_hook(void *user, int n, double h_n, double dt,
                            const double *x, const double *v, double *a){
     struct reb_simulation *r = user;
     const size_t N = r->N;
+
+    /* Already refused at an earlier node of this step. Do not call the
+     * routine again - the step is going to be thrown away, and eight
+     * copies of the same message per attempt is not a better diagnostic
+     * than one. `a` is left as the engine handed it over, which is the
+     * wide gravity and nothing else. */
+    if (force_refused) return;
 
     /* r->t at the node, as REBOUND's own binary64 expression:
      *     r->t = t_beginning + r->dt * h[n];      (integrator_ias15.c:408)
@@ -597,6 +684,45 @@ static void cft_force_hook(void *user, int n, double h_n, double dt,
         r->particles[i].ax = a[3*i]; r->particles[i].ay = a[3*i+1]; r->particles[i].az = a[3*i+2];
     }
     r->additional_forces(r);
+
+    /* Everything but the accelerations must come back as it went in.
+     * tmp_m is the masses this step handed the engine, which is what
+     * REBOUND's gravity would have re-read at this node. */
+    size_t i_bad = 0;
+    const char *field = force_write_found(r, N, x, v, tmp_m, &i_bad);
+    if (field && !strcmp(field, "N")){
+        force_refused = 1;
+        snprintf(force_refused_why, sizeof force_refused_why,
+                 "the r->additional_forces routine changed the particle count from "
+                 "%zu to %zu. IAS15 is mid-step: REBOUND's own ias15 would read the "
+                 "new particles into a polynomial sized for the old count, and this "
+                 "port refuses rather than reproduce that. Add and remove particles "
+                 "between steps, where both this port and REBOUND resize. The step "
+                 "in progress has been discarded.",
+                 N, r->N);
+        return;
+    }
+    if (field){
+        force_refused = 1;
+        snprintf(force_refused_why, sizeof force_refused_why,
+                 "the r->additional_forces routine wrote r->particles[%zu].%s, and "
+                 "this port carries only ax, ay and az out of that call. REBOUND "
+                 "carries the rest: a position or velocity written at the call at "
+                 "the top of the step attempt becomes the step's initial condition "
+                 "(integrator_ias15.c:296, then :311), a velocity written at a "
+                 "Gauss-Radau node survives into the next one while "
+                 "force_is_velocity_dependent is clear (:434), and a mass is picked "
+                 "up by gravity at the next node. So the run would answer a "
+                 "different problem, and this refuses instead of computing it. "
+                 "Write ax, ay and az only; edit coordinates from "
+                 "r->pre_timestep_modifications, which REBOUND's own driver calls "
+                 "between steps and which this port does carry. The step in "
+                 "progress has been discarded - the simulation is exactly as it "
+                 "was when the step began.",
+                 i_bad, field);
+        return;
+    }
+
     for (size_t i = 0; i < N; i++){
         a[3*i] = r->particles[i].ax; a[3*i+1] = r->particles[i].ay; a[3*i+2] = r->particles[i].az;
     }
@@ -716,13 +842,64 @@ static void cft_ias15_step(struct reb_simulation *r, void *p){
      * routine removes the hook, so the no-force path costs one test of
      * a null pointer per Gauss-Radau node and nothing else. */
     force_t_beginning = r->t;
+    force_refused = 0;
     ias15_engine_set_force_hook(r->additional_forces ? cft_force_hook : NULL, r,
                                 r->force_is_velocity_dependent != 0);
+
+    /* Enough of the entry state to put the simulation back if the
+     * routine turns out to write something this port cannot carry. The
+     * hook can only detect that mid-step, so the step runs to the end
+     * and is then thrown away - see cft_force_hook's header for why
+     * that, rather than handing the user a number the routine's writes
+     * never reached. x, v and m are already in tmp_x, tmp_v and tmp_m;
+     * only the accelerations need a copy, and it is taken under the
+     * hook so the no-force path goes on paying nothing. */
+    const double t_entry = r->t, dt_entry = r->dt, dtl_entry = r->dt_last_done;
+    if (r->additional_forces)
+        for (size_t i = 0; i < N; i++){
+            tmp_a[3*i] = r->particles[i].ax;
+            tmp_a[3*i+1] = r->particles[i].ay;
+            tmp_a[3*i+2] = r->particles[i].az;
+        }
 
     /* --- one accepted step -------------------------------------------- */
     double dt_done = 0;
     ias15_engine_step(&dt_done);
 
+    if (force_refused){
+        /* Put back what the routine left at a Gauss-Radau node, and the
+         * clock the hook moved, so that nothing of this step survives.
+         * The engine's wide state HAS advanced; view_valid = 0 is what
+         * makes a caller that clears the status and steps again
+         * re-promote from r->particles rather than continue from a
+         * half-finished step it was never shown. */
+        const size_t n_back = N < r->N ? N : r->N;   /* a routine that changed
+                                                      * the count is refused too,
+                                                      * and there is nothing to
+                                                      * put the extra ones back to */
+        for (size_t i = 0; i < n_back; i++){
+            r->particles[i].x = tmp_x[3*i]; r->particles[i].y = tmp_x[3*i+1]; r->particles[i].z = tmp_x[3*i+2];
+            r->particles[i].vx = tmp_v[3*i]; r->particles[i].vy = tmp_v[3*i+1]; r->particles[i].vz = tmp_v[3*i+2];
+            r->particles[i].ax = tmp_a[3*i]; r->particles[i].ay = tmp_a[3*i+1]; r->particles[i].az = tmp_a[3*i+2];
+            r->particles[i].m = tmp_m[i];
+        }
+        r->t = t_entry; r->dt = dt_entry; r->dt_last_done = dtl_entry;
+        view_valid = 0;
+        /* and swallow the non-convergences of the step being thrown
+         * away, so they are neither counted now nor attributed to the
+         * next step that folds. */
+        engine_mx_seen = ias15_engine_max_exceeded();
+        refuse(r, "ias15_cft: %s", force_refused_why);
+        return;
+    }
+
+    /* After the discard above, deliberately. A step that is thrown
+     * away must not leave a non-convergence behind - and must not
+     * leave one for a LATER step to pick up either, which is what
+     * returning without touching engine_mx_seen would do, since it is
+     * a high-water mark against the engine's process-global counter.
+     * The discard swallows the delta; this folds only what a step
+     * that actually happened produced. */
     /* REBOUND counts a corrector that ran out of passes and warns once
      * at ten. The engine's counter is the process's; the state's is this
      * simulation's, monotonic, and archived. */
@@ -875,17 +1052,30 @@ const struct reb_integrator cft_ias15_integrator = {
         "state lives in struct cft_ias15_state; r->particles are the binary64 "
         "view of it, correctly rounded after every step, so every REBOUND "
         "output, callback and visualisation works unchanged.\n\n"
-        "Set state->format to CFT_FP128 or CFT_FP256 for a wide run. Collisions, "
-        "ghost boxes, boundaries, gravity modules other than REB_GRAVITY_BASIC, "
-        "non-zero softening, test particles, r->map and variational particles are "
-        "refused rather than approximated.\n\n"
+        "Set state->format to CFT_FP128 or CFT_FP256 for a wide run. Ghost boxes, "
+        "boundaries, gravity modules other than REB_GRAVITY_BASIC, a custom "
+        "gravity routine, test particles (r->N_active), r->map, variational "
+        "particles and MEGNO are refused rather than approximated; the exact list "
+        "is cft_support_rows in src/cft_supported.c, and every entry names itself "
+        "when it refuses.\n\n"
+        "Collisions and non-zero softening are supported, and were once on that "
+        "list. Above binary64 a collision needs state->accurate = 1: a removal "
+        "shifts r->particles, which are binary64, so at accurate = 0 the "
+        "survivors would be re-promoted from them and lose every wide tail.\n\n"
         "r->additional_forces is called where REBOUND's IAS15 calls it: after "
         "gravity at the top of every step attempt and at each of the seven "
         "Gauss-Radau nodes, with r->t set to t_beginning + r->dt*h[n] and, when "
         "r->force_is_velocity_dependent is set, with the node's predicted "
-        "velocities. The routine is evaluated at binary64 even in a wide run, "
-        "because r->particles are binary64 and are the only interface REBOUND "
-        "offers a callback: gravity stays wide, the user's force does not.",
+        "velocities. THE ROUTINE MAY WRITE ax, ay AND az AND NOTHING ELSE. "
+        "REBOUND goes on using a position, velocity or mass the routine leaves "
+        "in r->particles - at the first call they become the step's initial "
+        "condition - and this port reads back only the accelerations, so such a "
+        "write is detected and refused, and the step it happened in is discarded. "
+        "Edit coordinates from r->pre_timestep_modifications instead; REBOUND's "
+        "own driver calls it between steps and this port carries it. The routine "
+        "is evaluated at binary64 even in a wide run, because r->particles are "
+        "binary64 and are the only interface REBOUND offers a callback: gravity "
+        "stays wide, the user's force does not.",
     .step = cft_ias15_step,
     .synchronize = NULL,       /* IAS15 is not a DKD scheme; REBOUND's own is NULL too */
     .create = cft_ias15_create,
