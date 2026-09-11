@@ -72,6 +72,10 @@ struct cft_support_ctx {
     int    format;         /* CFT_FP64 | CFT_FP128 | CFT_FP256 */
     int    accurate;       /* state->accurate */
     int    max_iter;       /* after the 0 -> default fixup */
+    int    arith_fma;      /* state->arith_fma. 0 on the subprocess path,
+                            * where have_state is 0 and the memset is what
+                            * sets it - the standalone program takes the
+                            * arithmetic form from its own --arith flag. */
     size_t E;              /* state->E; 1 for a reb_simulation */
 
     int    adaptive_mode;  /* the criterion the run will actually use.

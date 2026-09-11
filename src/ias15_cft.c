@@ -1053,10 +1053,19 @@ static void force_constants(void){
  * of the b0 level is a multiply by one - exact in every format - kept
  * so that every level is the same code.
  *
- * arith_fma is deliberately not honoured here. It is not REBOUND's
- * sequence of roundings anywhere, the equivalence claim is at
- * arith_fma = 0, and a second KHF-shaped table for one accuracy knob
- * would be a constant set with no gate behind it. */
+ * arith_fma IS NOT HONOURED HERE, and the combination is REFUSED
+ * rather than left to disagree quietly. arith_fma is the form that
+ * issues no correctly rounded divide - line 1470 refuses
+ * `--engine program` without it for that reason - and every level above
+ * is a vdiv, so a step with this predictor in it is not that form. A
+ * second KHF-shaped table would be a constant set with no gate behind
+ * it: REBOUND has no FMA form to be equivalent to, and the standalone
+ * program, where --arith fma IS gated, compiles the force hook out and
+ * never reaches this function. So the shim refuses arith_fma = 1
+ * together with a velocity-dependent routine - the fma_veldep row in
+ * src/cft_supported.c - and this function runs only under arith_fma = 0.
+ * arith_fma with a velocity-INdependent routine is supported and never
+ * gets here. */
 static void predict_velocities(int n){
     V H = KH[n];
     force_constants();

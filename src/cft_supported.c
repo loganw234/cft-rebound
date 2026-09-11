@@ -276,6 +276,46 @@ static void say_adaptive_mode(const struct cft_support_ctx *c, char *b, size_t n
                    "not.", c->adaptive_mode);
 }
 
+/* arith_fma is the regime in which the step issues NO correctly rounded
+ * divide - that is what it is for, and src/ias15_cft.c:1470 refuses
+ * `--engine program` without it for exactly that reason. predict_positions()
+ * honours it; predict_velocities(), the separate predictor REBOUND runs
+ * only for a velocity-dependent force, does not: it issues vdiv at every
+ * level. So the two predictors of one step would disagree about their
+ * rounding regime.
+ *
+ * Honouring it there is not the cheaper answer. The FMA form is not
+ * "multiply by a reciprocal" but a KHF-shaped table of fused
+ * multiply-adds, and nothing could check a new one: REBOUND has no FMA
+ * form to be equivalent to, arith_fma = 1 is already declared
+ * non-bit-identical, and the standalone program - where --arith fma is
+ * gated, by tools/check_program_engine.py - compiles the force hook
+ * out entirely and never reaches predict_velocities(). A constant set
+ * with no gate behind it is what this refuses to add.
+ *
+ * The refusal is exactly the combination that is inconsistent. arith_fma
+ * with a velocity-INdependent routine is fine and is accepted: the
+ * velocity predictor does not run, and predict_positions() honours the
+ * flag as it always has. */
+static int hit_fma_veldep(const struct cft_support_ctx *c){
+    return c->have_state && c->arith_fma &&
+           c->r->additional_forces != NULL &&
+           c->r->force_is_velocity_dependent != 0;
+}
+static void say_fma_veldep(const struct cft_support_ctx *c, char *b, size_t n){
+    (void)c;
+    snprintf(b, n, "arith_fma = 1 with a velocity-dependent force routine is not "
+                   "supported. arith_fma is the form that issues no correctly "
+                   "rounded divide, and the velocity predictor IAS15 runs for such "
+                   "a routine - REBOUND's own, at integrator_ias15.c:434 - is "
+                   "written in divisions, so the two predictors of one step would "
+                   "round differently with nothing to check the result against. "
+                   "Set state->arith_fma = 0, which is REBOUND's own sequence of "
+                   "roundings and where this port's equivalence claim lives, or "
+                   "clear r->force_is_velocity_dependent. arith_fma = 1 with a "
+                   "velocity-independent routine is supported.");
+}
+
 static int hit_format(const struct cft_support_ctx *c){
     return c->format != CFT_FP64 && c->format != CFT_FP128 && c->format != CFT_FP256;
 }
@@ -331,6 +371,7 @@ const struct cft_support_row cft_support_rows[] = {
     /* the integrator's own settings */
     { "ensemble_E",        CFT_PATH_DROPIN,     hit_ensemble,          say_ensemble          },
     { "adaptive_mode",     CFT_PATH_BOTH,       hit_adaptive_mode,     say_adaptive_mode     },
+    { "fma_veldep",        CFT_PATH_DROPIN,     hit_fma_veldep,        say_fma_veldep        },
     { "format",            CFT_PATH_DROPIN,     hit_format,            say_format            },
     { "max_iter",          CFT_PATH_DROPIN,     hit_max_iter,          say_max_iter          },
     { NULL, 0, NULL, NULL }
