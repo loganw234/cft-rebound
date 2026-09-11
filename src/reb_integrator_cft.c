@@ -120,6 +120,15 @@ static int supported(struct reb_simulation *r, struct cft_ias15_state *st){
     if (!st){ refuse(r, "ias15_cft: no integrator state (was reb_simulation_set_integrator called?)"); return 0; }
 
     /* The simulation */
+    if (r->gravity_custom != NULL){
+        refuse(r, "ias15_cft: a custom gravity routine is not supported. The engine "
+                  "issues REBOUND's basic pairwise gravity itself, so r->gravity_custom "
+                  "would never be called and the run would answer a different "
+                  "problem."); return 0; }
+    if (r->N_odes != 0){
+        refuse(r, "ias15_cft: attached ODE sets are not supported (r->N_odes = %zu). The "
+                  "wide state carries the particles only, so the ODEs would not be "
+                  "integrated at all.", r->N_odes); return 0; }
     if (r->N_var || r->particles_var){
         refuse(r, "ias15_cft: variational particles are not supported (r->N_var = %zu). "
                   "The wide state carries the real particles only.", r->N_var); return 0; }

@@ -332,6 +332,11 @@ static void p_boundary(struct reb_simulation *r){ r->boundary = REB_BOUNDARY_PER
 static void p_testp(struct reb_simulation *r){ r->N_active = 1; }
 static void p_var(struct reb_simulation *r){ reb_simulation_add_variation_1st_order(r, -1); }
 static void p_megno(struct reb_simulation *r){ r->calculate_megno = 1; }
+static void nop_gravity(struct reb_simulation *r){ (void)r; }
+static void p_gravcustom(struct reb_simulation *r){ r->gravity_custom = nop_gravity; }
+/* Through REBOUND's own constructor, so N_odes is set the way a user
+ * would set it. The ODE is never stepped - that is the point. */
+static void p_odes(struct reb_simulation *r){ reb_ode_create(r, 1); }
 static void p_mindt(struct reb_simulation *r){ cft_ias15_get_state(r)->min_dt = 1e-8; }
 static void p_mode(struct reb_simulation *r){ cft_ias15_get_state(r)->adaptive_mode = 0; }
 
@@ -343,6 +348,8 @@ static void case_refusals(void){
     refused("ghost boxes",               p_ghost);
     refused("REB_GRAVITY_COMPENSATED",   p_gravity);
     refused("the tree code",             p_tree);
+    refused("a custom gravity routine",  p_gravcustom);
+    refused("attached ODE sets",         p_odes);
     refused("collision detection",       p_collision);
     refused("periodic boundaries",       p_boundary);
     refused("test particles (N_active)", p_testp);

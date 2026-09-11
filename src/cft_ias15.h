@@ -40,10 +40,17 @@
  * E other than 1, because an ensemble is E
  * independent systems and a reb_simulation is one (docs/ENSEMBLE.md).
  *
- * Three things the subprocess API refuses and this does NOT check:
- * pre_/post_timestep_modifications (deliberate - the step re-promotes
- * a coordinate a callback edited), r->gravity_custom, and r->N_odes.
- * The README's scope table says so beside the table.
+ * ONE thing the subprocess API refuses and this deliberately does not:
+ * pre_/post_timestep_modifications. The step compares r->particles
+ * against the view it last wrote and re-promotes anything that
+ * changed, so a callback that edits a coordinate is honoured here.
+ * cft_rebound_check() refuses them because the subprocess API cannot
+ * see a callback at all - it writes a problem file and runs a program.
+ * That is a capability this path has, not a check it is missing.
+ * r->gravity_custom and r->N_odes were in that sentence too until
+ * 2026-09-10 and should not have been: the engine computes gravity
+ * itself and the wide state carries particles only, so each would have
+ * been silently ignored. Both are refused above now.
  */
 #ifndef CFT_IAS15_H
 #define CFT_IAS15_H
