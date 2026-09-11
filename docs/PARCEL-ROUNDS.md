@@ -98,6 +98,16 @@ would have been five agents editing three regions. It became a file per
 topic plus a header saying how to add one, so a parcel writes its own
 file and makes four small edits outside it.
 
+**Aim for a glob, not a list.** Every parcel in this round still had
+to add its file to a build variable, a declaration to a header and a
+call to a `main()` — four one-line edits in shared files, which meant
+four trivial conflicts per merge. Trivial is a P0 win over what it
+would otherwise have been, but zero was available: had the build
+globbed the topic directory and the entry points been discovered
+rather than declared, the parcels would have shared **no** file at
+all. When you design the P0 refactor, ask what would make the seam
+disappear rather than what would make it small.
+
 Two conditions on P0:
 
 - **It must preserve behaviour**, and you prove that by running the full
@@ -158,6 +168,17 @@ drops certain environment variables unless they are passed as
 variables. An agent will rediscover these in forty minutes; you can
 spend three lines instead.
 
+**How to make the tree buildable**, if that takes a step. Three
+parcels in one round each discovered independently that a directory
+the brief told them to read did not exist in a fresh worktree, and
+each solved it from scratch. One line in the brief, or one line in
+the ledger from whoever hit it first.
+
+**The base commit, and an instruction to verify it.** A worktree does
+not necessarily branch from where you think: one parcel found itself
+a merge behind the commit its brief named, noticed, and reset. Say
+the SHA and say "check you are on it".
+
 **Working rules the repository learned the hard way** — the two or three
 environment-specific traps that have actually cost hours. Keep this list
 short and true. A long one gets skimmed.
@@ -175,6 +196,23 @@ round the first parcel back reported two brief errors and a design fact
 the brief had asserted backwards. Without the invitation, an agent
 routes around a wrong brief silently.
 
+### Expect boundary violations, and judge them on disclosure
+
+A seam drawn by function is a hypothesis like any other, and one round
+falsified three of them: a parcel told to own the step control found
+that the setting it was implementing also changes the *corrector*, in a
+function outside its seam; another needed one call in a function its
+brief had not mentioned; a third put its plumbing in an existing file
+rather than the new one the brief named, because a new object would have
+meant a larger edit to the build than the code was to the file.
+
+All three were right, and all three said so unprompted. That is the
+standard: **judge a boundary crossing on whether it was disclosed and
+reasoned, not on whether it happened.** A parcel that silently stays
+inside a wrong boundary ships something half-implemented; a parcel that
+crosses it quietly is the thing the ownership list exists to prevent.
+Ask for the disclosure explicitly and you get it.
+
 ### Verify the constraints you write down
 
 A forbidden-files list carried from another project is noise at best.
@@ -184,6 +222,78 @@ came across unchecked. Harmless here, but the same carelessness in an
 *owned*-files list sends an agent to edit the wrong thing.
 
 Check that every path in a brief exists before you send it.
+
+---
+
+## The ledger
+
+A brief is written once, at dispatch, and cannot be updated. Everything
+learned while the parcels are running reaches them **never** — it
+arrives in a final report, after the sibling who needed it has already
+finished. One round of evidence:
+
+- three parcels independently discovered the same setup problem and each
+  solved it from scratch;
+- one parcel ended its report with a paragraph headed "for P3" — a fact
+  about which velocities the step controller reads — which reached P3
+  hours after P3 had started and made its own discovery of the same
+  thing;
+- the lead learned at the second merge that a refusal row was refusing a
+  run that would have been correct, and had no way to tell the three
+  agents still running.
+
+So: **an append-only ledger the agents read and write while they work.**
+
+**Where it lives matters.** Agents in worktrees cannot see each other's
+files — that is the point of a worktree. The ledger has to sit outside
+every worktree, at a fixed absolute path each brief states, and be
+**ignored by version control** so it never conflicts and never lands in
+history. A directory beside the repository is the simple answer.
+
+**One file per author, append only.** `ledger/P1.md`, `ledger/lead.md`,
+`ledger/verifier-P2.md`. Not one shared file: concurrent appends to one
+file lose writes, and a per-author file makes locking unnecessary by
+construction. Everyone reads the whole directory; everyone writes only
+their own.
+
+**When to read**, stated as moments rather than "periodically", which
+means never:
+
+- once before starting anything;
+- again before designing anything that touches a file the brief marked
+  as shared or forbidden;
+- again before writing the final report.
+
+**What goes in**, with a bar: *would this have changed another parcel's
+work, or the lead's?* Three things clear it.
+
+1. **Environment and setup** — what the tree needs before it builds,
+   what the base commit actually is, a tool that is not where it looks.
+   The cheapest entries and the ones that save the most.
+2. **A brief that turned out wrong.** The moment you find it, not in the
+   report. A sibling may be acting on the same wrong premise right now.
+3. **A finding about shared code** — behaviour in a function another
+   parcel owns, an upstream defect, a constraint that will bind someone
+   else.
+
+What does **not** go in: progress, plans, anything only your own parcel
+cares about. A ledger nobody reads because it is full of status is worse
+than none.
+
+**Mark what you measured.** Every entry says which of its claims were
+*measured* and which are *believed*, to the same standard as a report.
+Agents build on each other's entries, and an unverified claim propagates
+faster than a verified one.
+
+**The lead writes to it too**, and this is half the value: it is the
+only channel for correcting a brief after dispatch. Re-briefs, merge
+findings, "the row you were told to delete turned out to be load
+bearing" — all of it goes there, and the read-before-you-design rule is
+what makes agents see it.
+
+At the end of the round the lead folds anything durable into the
+repository's own records and throws the ledger away. It is scaffolding,
+not history.
 
 ---
 
@@ -307,6 +417,13 @@ verifier is the only role positioned to notice them.
 Agents report in good faith and are sometimes wrong about what their own
 change did.
 
+**Resolve conflicts from what git says is conflicted**, never from
+what the merge output happened to print, and assert that no marker
+survives before you stage. The lead in this round resolved the two
+files the merge message named, ran `git add -A`, and committed a
+third file still holding its conflict — along with eight agent
+worktrees as embedded repositories. Both are one command to check.
+
 **Read the log, not the exit code.** A background wrapper in this
 session reported exit 0 for a run whose log said `Error 1`, because a
 trailing `echo` succeeded. If a claim of green rests on a status code
@@ -323,9 +440,50 @@ you did not watch produce, it is not a claim yet.
   without complaint; what it cannot merge is one parcel reshaping the
   thing another is hooking into.
 - **Parcels finishing early is fine.** Merging is serial and that is the
-  real constraint.
+  real constraint — and the constraint is not the merge, it is the
+  **suite run after it**. Budget that explicitly: at twenty-five
+  minutes a run, five parcels is two hours of waiting that nobody
+  plans for. Where two parcels share no file, merging both and
+  running one suite is a defensible trade if you say you made it;
+  a failure then costs a bisection over two candidates, which is
+  cheap when each arrived green on its own.
 - **Re-brief from what comes back.** The first report usually corrects
   the plan. Fold it into the remaining briefs before sending them.
+
+---
+
+## Observed, one round
+
+Five parcels plus a P0 and two verifiers, on a codebase of about
+fifteen thousand lines with an exacting bit-identity gate.
+
+**What the system caught that would otherwise have shipped:**
+
+- **Twelve brief errors**, from all five parcels. Every single parcel
+  corrected its brief, including on a point the lead had asserted
+  backwards: a mechanism described as an exact addition was in fact a
+  replacement, which changed what the feature costs at every format
+  above the baseline.
+- **Four gates that could not fail**, each found by the parcel that
+  wrote the code the gate was meant to hold down: a control that left
+  every case passing; a control that was vacuous at two of three
+  formats because the observable was a rounded view; a configuration
+  where the physics made the difference exactly zero, so the obvious
+  test would have passed with nothing implemented; and a bit comparison
+  that could be swapped for a value comparison and still pass the whole
+  suite.
+- **Two divergences and four coverage gaps** from one verifier on the
+  long pole, none of them on the list it was given.
+- **Two previously unrecorded defects**, one of them upstream.
+
+**What it cost:** every merge conflicted, in the same four places every
+time, and every one was trivial — a P0 outcome, not luck. Suite time
+dominated: about twenty-five minutes per merge, serially, which is more
+than the merges themselves and more than anyone budgets for.
+
+**The single highest-yield line in the whole system** is the one asking
+what the brief got wrong. It cost nine words and returned twelve
+corrections.
 
 ---
 
@@ -347,10 +505,18 @@ Before dispatch:
 - [ ] Each brief names its specific negative control.
 - [ ] Each brief asks what the brief got wrong.
 - [ ] Host build traps are in the brief as verbatim commands.
+- [ ] The brief says how to make the tree buildable, and names the
+      base commit with an instruction to verify it.
+- [ ] The ledger exists, its path is in every brief, and the read
+      moments are stated as moments.
 
 At each merge:
 
 - [ ] The control was run and its output reported.
 - [ ] The diff stayed inside the ownership boundary.
 - [ ] A seam test exercises this parcel against an already-merged one.
+- [ ] Conflicts were enumerated from git, and no marker survived
+      into the commit.
 - [ ] The full suite was run by the lead, and the log read.
+- [ ] Anything the merge taught the lead went into the ledger, for
+      the parcels still running.

@@ -36,3 +36,9 @@ gate1_two.bin
 # separate checkout with its own .git file, so `git add -A` would
 # stage them as embedded repositories. It did once.
 .claude/worktrees/
+
+# The round ledger: cross-agent scaffolding for a parcel round, at a
+# path every worktree can reach. docs/PARCEL-ROUNDS.md explains it.
+# Never history - the lead folds what is durable into VALIDATION or
+# ROADMAP and deletes the directory.
+.ledger/
