@@ -1280,6 +1280,10 @@ wrong without the arithmetic being wrong.
 
 ### The refusals
 
+**Superseded by entry 31** — eight of these are supported now and the
+gate asserts them rather than refusing them; the list below is what was
+true when it was written.
+
 Thirteen more cases, each asserting that the step names the feature in a
 REBOUND error message, sets `REB_STATUS_GENERIC_ERROR` and does not move
 the clock: non-zero softening, `additional_forces`,
@@ -1625,6 +1629,7 @@ format, from a fresh single-snapshot file and from the second snapshot
 of a two-snapshot one:
 
     gate 1: mid-run archive, restart, bit-identical continuation
+      (superseded by entry 31: 50 blobs + 44 alias blobs + 15 scalars now)
       descriptor lists: 48 blobs + 11 scalars at each of fp64/fp128/fp256, every name cft_-prefixed and unique, cft_n_elem last
       fp64      PASS  3840 state bytes, 48/48 blobs non-zero, 107 cft_ fields, n_elem 9, 72 B a blob, 2 snapshots; one-snapshot identical, appended-diff identical (restored exactly, restored exactly)
       fp128     PASS  7296 state bytes, 48/48 blobs non-zero, 107 cft_ fields, n_elem 9, 144 B a blob, 2 snapshots; one-snapshot identical, appended-diff identical (restored exactly, restored exactly)
@@ -2624,6 +2629,9 @@ a distinct non-NULL member and index `CFT_N_BLOBS` to yield none. The
 guard is the part that matters: a stale copy of this walker is what
 took three gates down with an access violation earlier the same day.
 
+**3. Superseded by entry 31 — the REBOUNDx force is computed now, and
+`r->gravity_custom` is refused on both paths.** As it stood:
+
 **3. The drop-in's refusal list is a strict subset** of the subprocess
 API's in three places: `pre_`/`post_timestep_modifications`,
 `r->gravity_custom` and `r->N_odes`. A REBOUNDx force or an attached ODE
@@ -2828,3 +2836,178 @@ removes, checkpoints, resumes and then regrows below the *original*
 mark therefore diverges. Closing it changes the on-disk field list, and
 the sequence is narrow enough that it is recorded in ROADMAP.md rather
 than fixed on the way past.
+
+## 31. Round 2: eight capabilities, five gates that could not fail
+
+Five parcels in parallel worktrees, two verifiers and a follow-up
+parcel, against `docs/PARCEL-ROUNDS.md`'s method. What landed matters
+less than what nearly did not get caught, so the gates come first.
+
+### Five gates that could not fail
+
+Each found by the parcel that wrote the code the gate was meant to hold
+down, except the last, which a verifier found.
+
+**1. A control that left every case passing.** Parcel P3 disabled the
+INDIVIDUAL branch it had just written in `pc_error()` and **every case
+still passed**. The corrector's pass count does move - 400 steps of
+kepler at `dt = 0.01` give a mean of 2.595 against 2.570 and a peak of 5
+against 4 - but on a converged step an extra pass changes no bits. It
+swept for a configuration that reaches the state and found one: five
+bodies from `dt = 500` at `epsilon = 1e-9`, where the first attempt is
+rejected hard. With that case added the control gives **1 failure, 48
+values**, on INDIVIDUAL, while GLOBAL correctly still passes - GLOBAL
+shares PRS23's corrector error.
+
+**2. A case that triggered before the thing it tested existed.** The
+merge case first fired on **step 1**, where the polynomial being
+re-read is still all zeros. Re-read zeros, got zeros, passed. It also
+collapsed to one particle, where a one-body IAS15 run has no pairs,
+divides 0 by 0 in the step controller, and the two sides differ only in
+the **sign of the quiet NaN** - `fff8000000000000` against
+`7ff8000000000000`, which 754 leaves unspecified and which says nothing
+about a removal.
+
+**3. A control that was vacuous at two of three formats.**
+`CFT_REBOUND_NO_ALIAS` **passed** at binary128 and binary256: the
+particles are the binary64 *view*, and a corrector starting from
+different coefficients re-converges to within 1e-34 and rounds to the
+same doubles. Every dump now ends with a digest of all 50 wide blobs.
+The verifier confirmed the fix bites - 1 of 15 lines differs at both
+wide formats, and that line is the digest.
+
+**4. A configuration where the physics made the difference exactly
+zero.** With strictly massless test particles, setting `N_active`
+changes **no bits**: every pair the skip removes contributes
+`prefact * 0 = ±0`, the sum starts at `+0` (a memset) and can never be
+`−0`, and the real contributions keep their order because the massive
+particles are the low indices. **Star, planets, massless dust - the
+obvious case - passes with nothing implemented.** Every divergence
+control now runs on *massive* semi-active bodies, and the inertness is
+recorded as a named case.
+
+**5. A bit comparison that could become a value comparison.** The
+`memcmp` deciding whether a force-touched component keeps its wide
+value can be swapped for `!=` and **pass the entire suite** while
+breaking signed zero (`az[1]`: REBOUND `-0` = `8000000000000000`, port
+`+0` = `0000000000000000`). Found by a verifier; the case that catches
+it counts the **40,128** zeros it met so it cannot pass vacuously.
+
+**And a sixth, in shared scaffolding.** With the force-write detection
+kept but the step-discard removed, all three `refused()` cases **still
+pass**: the refusal fires at the n = 0 call, where the hook has just set
+`r->t = t_beginning` and `r->dt = dt`, so `refused()`'s "the clock did
+not move" assertion is satisfied while the particles sit at
+Gauss-Radau node values. `refused()` is used by every refusal case in
+this repository.
+
+### What landed
+
+Eight capabilities came off the refusal list, 21 rows to 14 on the
+drop-in.
+
+- **`r->additional_forces` at every Gauss-Radau node.** 22 cases, all
+  bit-identical, including the whole **call stream** - `r->t`, `r->dt`,
+  `x`, `v` and the gravity handed over, per call, in order: **1041
+  calls, 5 values each**, and 929 on pythagorean.
+- **Velocity-dependent forces**, which were not free: the port had no
+  velocity predictor at all. REBOUND's is separate
+  (`integrator_ias15.c:435`) and runs **only** under
+  `calculate_megno || (additional_forces && force_is_velocity_dependent)`,
+  so a port that predicted always would hand a velocity-*in*dependent
+  routine a different `v`.
+- **Collisions**, bit-identical across a removal - see entry 30.
+- **Test particles and `testparticle_type`**, with a 198-configuration
+  sweep against REBOUND's gravity directly (N 1..6 × N_active 0..N and
+  unset × testparticle_type × three ignore-terms values), every one bit
+  for bit, **155 of them differing from the unrestricted answer**.
+- **All four step criteria.** The control: 199 of 200 steps differ from
+  PRS23, first at step 1, `0.043995128069094162` against
+  `0.015442074500284753`, reaching `t = 24.91` against `t = 8.97`.
+- **The checkpoint carries the mark and the stranded tail.**
+- **Python on Windows**, by the opposite loading rule.
+- **The subprocess API honours the step criterion** it had been
+  dropping.
+
+### The force ceiling, which is worse than it was described
+
+The brief said a force enters as an exact binary64 addend. It does not:
+REBOUNDx does `ax += f` and the callback returns **only the binary64
+total**. The delta form `a_wide += promote(out − in)` is not
+bit-identical at binary64 - `fl(u + fl(w−u)) ≠ w`, with `u = 1`,
+`w = 2⁻⁶⁰` giving 0 - and flips a `−0` to `+0` even for a do-nothing
+routine. What ships is replacement narrowed by `memcmp`, so an untouched
+component keeps its wide value exactly and a written one is binary64
+from that node on. At binary128 a routine writing `ax` only leaves the
+run **1.289e-13** from REBOUND's binary64 running the same routine.
+
+### And a refusal that is not about a setting
+
+A routine that writes anything but `ax/ay/az` is refused, because
+REBOUND uses more through three channels: `x`/`v` at the n = 0 call
+become the step's initial condition (`:296`, then `:311`), a velocity
+written at a node survives into the next while the predictor is off
+(`:434`), and a mass is picked up at the next node. Measured with the
+detection compiled out: **15 of 21 values differ** in each of the four
+channels. The step in progress is **discarded**, restoring the
+invariant every other refusal here has.
+
+### Two upstream defects, both reproduced rather than inferred
+
+**`reb_binarydata_diff` writes a field header with no data** for a field
+present in the old snapshot and absent from the new
+(`binarydata.c:325-333`). End to end: **0xC0000005** in `gate_real`.
+And a consequence the parcel did not name, found by the verifier: an
+archive written by a build carrying round 2's three new scalars and
+appended by one that does not is **unloadable** - REBOUND itself prints
+"The binary file seems to be corrupted."
+
+**`N_active > N` is a heap overread** in REBOUND's own gravity loop, so
+it is refused rather than reproduced.
+
+### A claim in the code that was not true
+
+An earlier draft said an archive from a run that never shrank is "byte
+for byte what this project wrote before these members existed". Measured
+by a verifier: **10,590 → 10,783 bytes, 62 → 65 named `cft_` fields**.
+The 44 alias blobs are correctly skipped; the three scalars are
+unconditional. What holds is that 123 fields are byte-identical and an
+older archive resumes bit-identically including the wide digest. Both
+comments say that now.
+
+Relatedly: the constants digest is **FNV-style, not FNV-1a** - the prime
+is FNV's, the offset basis is FNV-1a's `14695981039346656037` with its
+last decimal digit missing. Kept, because the value is archived; renamed,
+because the name was the wrong part. It had been hand-copied into a
+second file three hours after this repository wrote down its rule
+against transcribed constants, and is `CFT_DIGEST_SEED` in
+`src/ias15_limits.h` now.
+
+### Two modes that were unusable as shipped
+
+INDIVIDUAL divides by `at[k]` for every coordinate, so a **planar
+problem** divides 0 by 0 on every z lane, every step; GLOBAL divides by
+`|x|²`, so does a particle at the origin. REBOUND's `isnormal()` rejects
+the result and the coordinate drops out of the maximum - its own
+estimate showing through. The standalone program aborted on the flag,
+which made both modes unusable on most problems. The abort mask now
+drops INVALID and DIVBYZERO for those two only; an overflow there is
+still a real fault, and `flags_seen` still reports everything.
+
+### The suite
+
+**15 verdict lines, 211 `ok` assertions**, `coverage: all 14 drop-in
+rows` and `all 16 subprocess rows`. The new `gate_subprocess` is the
+first coverage `make check` has ever had of `libcft_rebound.a` - a
+shipped public entry point that nothing in the suite touched, which is
+how a flag went unforwarded for a month.
+
+### Still open
+
+The **wide clock is not archived**: a plain binary128 checkpoint differs
+by one binary64 ulp in `t` for 2 of 40 step splits tried, and it
+reproduces on a build from before this round. A remove → checkpoint →
+regrow at `state->accurate = 1` is still inexact, by construction.
+Reading a cft archive from Python on **Windows** is ungated - the wheel
+is MSVC/UCRT and mingw64 links `msvcrt`, two heaps, and the load path
+frees blobs REBOUND's loader allocated.

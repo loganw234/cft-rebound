@@ -19,73 +19,103 @@ to you.
 
 **What it does.** REBOUND's IAS15, unchanged as an algorithm, with
 every floating-point operation carried out at binary64, binary128 or
-binary256. The force model is **basic pairwise Newtonian gravity** -
-REBOUND's `REB_GRAVITY_BASIC`, every pair, nothing approximated -
-with IAS15's PRS23 adaptive step or a fixed one, up to **1024 bodies**
-per system. At binary64 it is REBOUND's own IAS15 bit for bit, which
-is a gate the port passes on every build. An ensemble of independent
-systems integrates in one run, each with its own step
-(docs/ENSEMBLE.md).
+binary256, up to **1024 bodies** per system. At binary64 it is
+REBOUND's own IAS15 bit for bit, which is a gate the port passes on
+every build. An ensemble of independent systems integrates in one run,
+each with its own step (docs/ENSEMBLE.md).
 
-That is all of it. Everything below is refused, by name, with a
-message - never silently ignored, never approximated. (Three rows have
-an exception on the drop-in path; the note under the table says which
-and why.)
+Gravity is REBOUND's `REB_GRAVITY_BASIC` - every pair, nothing
+approximated - and on the **drop-in integrator** it now comes with most
+of what a real script puts around it:
 
-| refused | |
+| | |
 |---|---|
-| additional forces, `pre_`/`post_timestep_modifications` (REBOUNDx) | only gravity is ported |
-| collision detection and resolution | **subprocess API only.** The drop-in supports it; see the note below |
+| `r->additional_forces` | called after gravity at **every Gauss-Radau node**, exactly where REBOUND's IAS15 calls it, with `r->t` set to REBOUND's own `t_beginning + dt*h[n]`. This is the REBOUNDx path |
+| velocity-dependent forces | the node's velocities are predicted first, under REBOUND's own condition for doing so |
+| `pre_`/`post_timestep_modifications` | REBOUND's driver calls these between steps and the port carries them |
+| collision detection and resolution | including REBOUND's own resolvers. Bit-identical across a removal |
+| test particles (`N_active`), `testparticle_type` | the pair set follows REBOUND's two loops, in REBOUND's order |
+| all four step criteria | INDIVIDUAL (0), GLOBAL (1), PRS23 (2, REBOUND's default), AARSETH85 (3) |
+| non-zero `softening`, IAS15's `min_dt` | as REBOUND computes them |
+| `r->gravity_ignore_terms` | accepted because IAS15 overwrites it with `NONE` at the top of every step, so nothing a caller sets ever reaches gravity - refusing it refused a run that would have been right |
+
+Everything below is refused, **by name, with a message** - never
+silently ignored, never approximated. The list is one table in code
+(`cft_support_rows`, src/cft_supported.c) that both entry points walk,
+and the gate walks it too and fails on any row no case exercises.
+
+**Refused on both paths:**
+
+| | |
+|---|---|
+| variational particles, and MEGNO with them | the wide state carries the real particles only |
 | ghost boxes, periodic or shear boundaries | not ported |
 | the tree code (`REB_GRAVITY_TREE`) | this is direct summation. `REB_GRAVITY_COMPENSATED` is refused too: a different summation from the one ported |
-| non-zero `softening` | not ported |
-| test particles (`N_active`), `gravity_ignore_terms`, particle maps | they change which pairs are computed |
-| variational particles | not ported |
-| velocity-dependent forces | not ported |
+| a custom gravity routine (`r->gravity_custom`) | the engine issues gravity itself, so it would never be called |
+| particle maps (`r->map`) | a setting of the *integrator*, not of gravity: IAS15 runs its state over `N_map` elements while gravity still runs over all `N` |
+| `N_active > N` | a heap overread in REBOUND's own gravity loop. There is no bit-identity to claim against undefined behaviour |
+| an `adaptive_mode` naming none of the four | |
 | every integrator except IAS15 | WHFast is ranked first to follow (docs/INTEGRATORS.md) and has not been done |
-| IAS15's `min_dt`, and adaptive modes other than PRS23 | not ported |
 
-`cft_rebound_check()` (src/cft_rebound_run.c) is that table in code for
-the **subprocess API**, and `cft_rebound_steps()` calls it before doing
-anything, so a refusal arrives at the start of your run rather than in
-the middle of it.
+**Refused on the subprocess API only**, because it hands the run to
+another process that cannot call a function pointer in this one, and
+because REBOUND's driver does not run between its steps:
+`r->additional_forces`, velocity-dependent forces, the timestep
+modification hooks, collision detection, attached ODE sets, and test
+particles. All six work on the drop-in.
 
-The **drop-in** has its own list, `supported()` in
-src/reb_integrator_cft.c, checked at the top of every step. The two
-overlap but are not identical, and the differences are worth knowing
-before you pick a path:
+**Refused on the drop-in only**, because they are its own settings:
+MEGNO, a `format` or `max_iter` out of range, a state whose `E` is not
+1 (an ensemble is E independent systems and a `reb_simulation` is one -
+use the standalone program, docs/ENSEMBLE.md), and `arith_fma` combined
+with a velocity-dependent force, which would need an FMA form of the
+velocity predictor that has no oracle to check it against.
 
-- the drop-in **supports collision detection and resolution**, which
-  `cft_rebound_check()` refuses. REBOUND's driver runs the search and
-  the resolver between steps, so all the integrator owes is to survive
-  the removal the way REBOUND's own IAS15 does - which is not by
-  keeping a stale polynomial, as this project believed until it
-  measured one. REBOUND's seven coefficient levels share a single
-  buffer that `dpcast()` re-slices at the *current* `3N` on every
-  step, so a removal below its high-water mark leaves the buffer
-  alone and re-reads every level at an offset short by
-  `old_3N - new_3N`. The port performs that reading rather than
-  approximating it, so a merge at binary64 is bit-identical across
-  the removal - gated by `case_collision` in tools/check_dropin.c.
-  At `CFT_FP128` and above set `state->accurate = 1`, or the step
-  refuses: a removal shifts `r->particles`, which are binary64, and
-  the default re-promotes the survivors from them and loses every
-  wide tail. `accurate = 1` shifts the wide state instead, which is
-  more accurate than REBOUND and so deliberately not bit-identical
-  to it;
-- the drop-in additionally refuses **MEGNO** (`r->calculate_megno`), a
-  `format` or `max_iter` outside its range, and a state whose `E` is
-  not 1 (an ensemble is E independent systems and a `reb_simulation`
-  is one; use the standalone program, docs/ENSEMBLE.md);
-- the drop-in does **not** check
-  `pre_`/`post_timestep_modifications`, `r->gravity_custom`, or
-  `r->N_odes`, all of which `cft_rebound_check()` refuses. The
-  timestep hooks are not an oversight - the step re-promotes any
-  coordinate that changed under it, which is how a callback that edits
-  a particle is meant to work - but a REBOUNDx force or an attached
-  ODE set reaches the drop-in without a refusal and without being
-  integrated, so do not rely on the row above for that path. It is
-  recorded as an open item rather than papered over.
+**And one refusal that is not about a setting:** a force routine may
+write `ax`, `ay` and `az` and nothing else. REBOUND carries more out of
+that call - a position or velocity written at the top of a step attempt
+becomes the step's initial condition, a velocity written at a node
+survives into the next one while `force_is_velocity_dependent` is
+clear, and a mass is picked up by gravity at the next node - so a
+routine that writes them would answer a different problem here. The
+port refuses and **discards the step in progress**, leaving the
+simulation exactly as it was. Edit coordinates from
+`r->pre_timestep_modifications` instead, which REBOUND's own driver
+calls between steps and which this port does carry.
+
+Both entry points walk the same table. `cft_rebound_check()`
+(src/cft_rebound_run.c) is the subprocess API's half, and
+`cft_rebound_steps()` calls it before doing anything, so a refusal
+arrives at the start of your run rather than in the middle of it;
+`supported()` (src/reb_integrator_cft.c) is the drop-in's, checked at
+the top of every step. The rows above say which path each applies to,
+and that column is the whole of the difference between them - it used
+to be the emergent result of two functions written months apart.
+
+Two details worth knowing before you pick a path.
+
+**Collisions above binary64 need `state->accurate = 1`.** What the
+integrator owes across a removal is to survive it the way REBOUND's own
+IAS15 does - which is not by keeping a stale polynomial, as this project
+believed until it measured one. REBOUND's seven coefficient levels share
+a single buffer that `dpcast()` re-slices at the *current* `3N` on every
+step, so a removal below its high-water mark leaves the buffer alone and
+re-reads every level at an offset short by `old_3N - new_3N`. The port
+performs that reading rather than approximating it, so a merge at
+binary64 is bit-identical across the removal (`case_collision` in
+tools/check_dropin.c). Above binary64 the cost is elsewhere: a removal
+shifts `r->particles`, which are binary64, and the default re-promotes
+the survivors from them and loses every wide tail. `accurate = 1` shifts
+the wide state instead, which is more accurate than REBOUND and so
+deliberately not bit-identical to it.
+
+**A force routine is evaluated at binary64 even in a binary256 run.**
+`r->particles` are binary64 and they are the only interface REBOUND
+offers a callback, so there is nowhere wider to hand a routine its
+inputs or take its answer back. Gravity stays wide; a component the
+routine writes is binary64 from that node on, and one it leaves alone
+keeps its wide value exactly. That is a real ceiling of the feature, not
+a detail.
 
 **What it costs, and this is the part to weigh.** The arithmetic is a
 software library, not the hardware's doubles. On the outer solar
@@ -161,7 +191,10 @@ Nothing is vendored by hand.
                              state struct in cft_ias15.h
     src/cft_archive.h/.c     Simulationarchive: the cft_ fields, the probe, the load
     src/cft_ias15_fields.h/.c  the ONE definition of the field descriptors, and
-                             CFT_N_BLOBS - the count everything else derives from
+                             CFT_N_BLOBS - a literal beside the list it
+                             counts, checked against it by the selftest.
+                             CFT_N_ALIAS_BLOBS and CFT_N_SCALARS are two
+                             more on the same terms
     tests/cft_shim_stub.c    a stand-in integrator, for four of the archive gates
     tests/gate_restart.c     gate 1: checkpoint and restart, bit for bit
     tests/gate_write.c       gate 2a: write a binary128 archive, and record the
@@ -337,7 +370,18 @@ own, bit for bit, which is what `make check-python` checks.
 The pinned REBOUND and the installed wheel must be the same source, or
 the two sides of every call disagree about how `struct reb_simulation`
 is laid out. `make python-lib` compares them and refuses if they
-differ. Windows is not supported yet and docs/PYTHON.md says why.
+differ.
+
+**Windows works**, by the opposite loading rule. A DLL may not carry
+undefined symbols, so where the POSIX shared object leaves REBOUND's
+symbols to the loader, the Windows build links the wheel's own
+`librebound` - asked of the interpreter that will load it. That ties
+the library to a Python minor version, and a mismatch is worse than it
+sounds: with a *different* wheel's librebound findable beside it the
+load **succeeds**, registers into a second REBOUND, and surfaces only
+as `RuntimeError: Integrator not found`. So `load()` reads the import
+table and refuses by name first. docs/PYTHON.md has the detail, and
+why there is no `pyproject.toml`.
 
 ### The subprocess API
 
