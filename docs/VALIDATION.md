@@ -2675,3 +2675,17 @@ not have. And four documents — `docs/ENSEMBLE.md`, `docs/HORIZON.md`,
 `results/horizon/README.md` and `NOTICE` — got only a targeted grep in
 the audit and were not checked line by line; the audit says so itself
 rather than implying coverage it did not have.
+
+**The audit's own coverage gap, closed.** It said plainly that
+`docs/ENSEMBLE.md`, `docs/HORIZON.md`, `results/horizon/README.md` and
+`NOTICE` got a targeted grep rather than a line-by-line check, and that
+it could not verify their internals. Checked afterwards: every path,
+tool, flag and column name in all four resolves - `--dt-file`,
+`--member`, `--fit-from`, `pc_lane_efficiency`, the `rel_phase_err`
+column `tools/oracle.py` writes and `tools/horizon.py` reads, the
+`predict-ens` programs at all three formats, and the ten entries
+`results/horizon/README.md` describes against the ten that are there.
+`SETACT`, which is not in `cft.h`, is a real sequencer instruction
+upstream and the present tense is right. NOTICE attributes REBOUND
+under GPL-3.0 and libcft under Apache-2.0 with the one-way combination
+rule stated correctly. Nothing to fix in any of the four.
