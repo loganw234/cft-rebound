@@ -438,7 +438,7 @@ const struct cft_support_row cft_support_rows[] = {
     { "body_count",        CFT_PATH_SUBPROCESS, hit_body_count,        say_body_count        },
     { "gravity_custom",    CFT_PATH_BOTH,       hit_gravity_custom,    say_gravity_custom    },
     { "variational",       CFT_PATH_BOTH,       hit_variational,       say_variational       },
-    { "megno",             CFT_PATH_DROPIN,     hit_megno,             say_megno             },
+    { "megno",             CFT_PATH_BOTH,       hit_megno,             say_megno             },
     { "additional_forces", CFT_PATH_SUBPROCESS, hit_additional_forces, say_additional_forces },
     { "timestep_mods",     CFT_PATH_SUBPROCESS, hit_timestep_mods,     say_timestep_mods     },
     { "veldep_forces",     CFT_PATH_SUBPROCESS, hit_veldep,            say_veldep            },

@@ -434,7 +434,7 @@ dropin: $(B)/libcft_ias15.a $(B)/check_dropin$(EXE)
 CASES_SRC := tools/check_dropin.c tools/dropin_common.c \
              tools/cases_core.c tools/cases_wide.c \
              tools/cases_forces.c tools/cases_modes.c \
-             tools/cases_pairs.c
+             tools/cases_pairs.c tools/cases_seam.c
 
 $(B)/check_dropin$(EXE): $(CASES_SRC) tools/dropin_cases.h src/cft_supported.h $(DROPIN_OBJ) $(B)/librebound.a $(CFTLIB)
 	$(CC) $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -Isrc -I$(CFT)/include -I$(REB) \
@@ -505,39 +505,71 @@ programs: $(ASM)
 	@for f in programs/*.cfta; do b=$$(basename $$f .cfta); $(ASM) $$f -o programs/out/$$b.cftp || exit 1; done
 	@echo "assembled $$(ls programs/out/*.cftp | wc -l) programs"
 
+# ---------------------------------------------------------------------
+# Suite legs go through tools/gate_cache.py. `check` runs them with
+# --mode full: it never skips and it writes the stamps. `check-quick`
+# runs them with --mode quick, which skips a leg whose inputs are
+# byte-for-byte what they were when that leg last passed.
+#
+# The key is over the ARTIFACTS a leg executes, its own script and the
+# data it reads - never over source files, because a source list has to
+# enumerate every header and flag and the cost of missing one is
+# skipping a leg that would have failed. The header of gate_cache.py
+# has the reasoning.
+#
+# $(ART) is in every key: a pass on the software backend must never
+# satisfy a run against a card.
+GATE_CACHE  := $(PYTHON) tools/gate_cache.py --cache-dir $(B)/.gate-cache \
+               --env CFT_REBOUND_ARTIFACT
+PROBLEMS    := $(wildcard data/problems/*)
+PROGRAMS    := $(wildcard programs/out/*.cftp)
+RECORDS     := $(wildcard results/raw/*.rec)
+
+IN_DROPIN   := --input $(B)/check_dropin$(EXE)
+IN_PROGRAM  := --input $(B)/ias15_cft$(EXE)
+IN_REF      := --input $(B)/ias15_ref$(EXE)
+IN_PROB     := $(patsubst %,--input %,$(PROBLEMS))
+IN_PROGS    := $(patsubst %,--input %,$(PROGRAMS))
+IN_RECS     := $(patsubst %,--input %,$(RECORDS))
+IN_ARCHIVE  := --input $(B)/gate_restart$(EXE) --input $(B)/gate_write$(EXE) \
+               --input $(B)/gate_stock$(EXE) --input $(B)/gate_promote$(EXE)
+IN_REAL     := --input $(B)/gate_real$(EXE)
+IN_SUBPROC  := --input $(B)/gate_subprocess$(EXE) --input $(B)/ias15_cft$(EXE)
+
 check: all programs $(ARCHIVE_GATES)
-	$(PYTHON) tools/gen_constants.py --no-write
-	$(B)/check_dropin$(EXE)
-	$(B)/check_dropin$(EXE) --wide
-	$(PYTHON) tools/check_equivalence.py --build $(B)
-	$(PYTHON) tools/check_program_engine.py --build $(B)
-	$(PYTHON) tools/check_records.py --build $(B)
-	$(PYTHON) tools/check_ensemble.py --build $(B)
-	$(PYTHON) tools/check_archive.py --build $(B)
-	$(PYTHON) tools/check_bodycount.py --build $(B)
-	$(B)/gate_real$(EXE) --fp64
-	$(B)/gate_real$(EXE) --fp128
-	$(B)/gate_real$(EXE) --fp256
-	$(B)/gate_subprocess$(EXE) --build $(B)
-	$(PYTHON) tools/check_checkpoint.py --build $(B)
+	$(GATE_CACHE) --leg constants --mode full --input tools/gen_constants.py -- $(PYTHON) tools/gen_constants.py --no-write
+	$(GATE_CACHE) --leg check_dropin --mode full $(IN_DROPIN) -- $(B)/check_dropin$(EXE)
+	$(GATE_CACHE) --leg check_dropin_wide --mode full $(IN_DROPIN) -- $(B)/check_dropin$(EXE) --wide
+	$(GATE_CACHE) --leg check_equivalence --mode full --input tools/check_equivalence.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_equivalence.py --build $(B)
+	$(GATE_CACHE) --leg check_program_engine --mode full --input tools/check_program_engine.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) -- $(PYTHON) tools/check_program_engine.py --build $(B)
+	$(GATE_CACHE) --leg check_records --mode full --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B)
+	$(GATE_CACHE) --leg check_ensemble --mode full --input tools/check_ensemble.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_ensemble.py --build $(B)
+	$(GATE_CACHE) --leg check_archive --mode full --input tools/check_archive.py $(IN_ARCHIVE) -- $(PYTHON) tools/check_archive.py --build $(B)
+	$(GATE_CACHE) --leg check_bodycount --mode full --input tools/check_bodycount.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_bodycount.py --build $(B)
+	$(GATE_CACHE) --leg gate_real_fp64 --mode full $(IN_REAL) -- $(B)/gate_real$(EXE) --fp64
+	$(GATE_CACHE) --leg gate_real_fp128 --mode full $(IN_REAL) -- $(B)/gate_real$(EXE) --fp128
+	$(GATE_CACHE) --leg gate_real_fp256 --mode full $(IN_REAL) -- $(B)/gate_real$(EXE) --fp256
+	$(GATE_CACHE) --leg gate_subprocess --mode full $(IN_SUBPROC) -- $(B)/gate_subprocess$(EXE) --build $(B)
+	$(GATE_CACHE) --leg check_checkpoint --mode full --input tools/check_checkpoint.py $(IN_REAL) -- $(PYTHON) tools/check_checkpoint.py --build $(B)
 
 # the same gates at binary64 only, in a few minutes
 .PHONY: check-quick
 check-quick: all programs $(ARCHIVE_GATES)
-	$(PYTHON) tools/gen_constants.py --no-write
-	$(B)/check_dropin$(EXE)
-	$(B)/check_dropin$(EXE) --wide
-	$(PYTHON) tools/check_equivalence.py --build $(B) --quick
-	$(PYTHON) tools/check_program_engine.py --build $(B) --formats fp64
-	$(PYTHON) tools/check_records.py --build $(B) --quick
-	$(PYTHON) tools/check_ensemble.py --build $(B) --quick
-	$(PYTHON) tools/check_archive.py --build $(B)
-	$(PYTHON) tools/check_bodycount.py --build $(B) --quick
-	$(B)/gate_real$(EXE) --fp64
-	$(B)/gate_real$(EXE) --fp128
-	$(B)/gate_real$(EXE) --fp256
-	$(B)/gate_subprocess$(EXE) --build $(B)
-	$(PYTHON) tools/check_checkpoint.py --build $(B) --quick
+	$(GATE_CACHE) --leg constants --mode quick --input tools/gen_constants.py -- $(PYTHON) tools/gen_constants.py --no-write
+	$(GATE_CACHE) --leg check_dropin --mode quick $(IN_DROPIN) -- $(B)/check_dropin$(EXE)
+	$(GATE_CACHE) --leg check_dropin_wide --mode quick $(IN_DROPIN) -- $(B)/check_dropin$(EXE) --wide
+	$(GATE_CACHE) --leg check_equivalence --mode quick --input tools/check_equivalence.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_equivalence.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_program_engine --mode quick --input tools/check_program_engine.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) -- $(PYTHON) tools/check_program_engine.py --build $(B) --formats fp64
+	$(GATE_CACHE) --leg check_records --mode quick --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_ensemble --mode quick --input tools/check_ensemble.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_ensemble.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_archive --mode quick --input tools/check_archive.py $(IN_ARCHIVE) -- $(PYTHON) tools/check_archive.py --build $(B)
+	$(GATE_CACHE) --leg check_bodycount --mode quick --input tools/check_bodycount.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_bodycount.py --build $(B) --quick
+	$(GATE_CACHE) --leg gate_real_fp64 --mode quick $(IN_REAL) -- $(B)/gate_real$(EXE) --fp64
+	$(GATE_CACHE) --leg gate_real_fp128 --mode quick $(IN_REAL) -- $(B)/gate_real$(EXE) --fp128
+	$(GATE_CACHE) --leg gate_real_fp256 --mode quick $(IN_REAL) -- $(B)/gate_real$(EXE) --fp256
+	$(GATE_CACHE) --leg gate_subprocess --mode quick $(IN_SUBPROC) -- $(B)/gate_subprocess$(EXE) --build $(B)
+	$(GATE_CACHE) --leg check_checkpoint --mode quick --input tools/check_checkpoint.py $(IN_REAL) -- $(PYTHON) tools/check_checkpoint.py --build $(B) --quick
+	@$(PYTHON) tools/gate_cache.py --report --cache-dir $(B)/.gate-cache
 
 # The worked round trip, built in the tree and run against the
 # programs here rather than an installed copy.

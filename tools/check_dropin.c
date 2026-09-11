@@ -253,6 +253,10 @@ int main(int argc, char **argv){
     cases_forces();
     cases_modes();
     cases_pairs();
+    /* Last of the topics, because a seam case needs the things it
+     * crosses to have been exercised on their own first: if one of
+     * them is broken, its own file says so before this one does. */
+    cases_seam();
     case_refusals();
 
     printf("\n");

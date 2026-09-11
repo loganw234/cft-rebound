@@ -48,7 +48,7 @@ and the gate walks it too and fails on any row no case exercises.
 
 | | |
 |---|---|
-| variational particles, and MEGNO with them | the wide state carries the real particles only |
+| variational particles | the wide state carries the real particles only. MEGNO needs them, so the ordinary route into it is refused here too |
 | ghost boxes, periodic or shear boundaries | not ported |
 | the tree code (`REB_GRAVITY_TREE`) | this is direct summation. `REB_GRAVITY_COMPENSATED` is refused too: a different summation from the one ported |
 | a custom gravity routine (`r->gravity_custom`) | the engine issues gravity itself, so it would never be called |
@@ -61,11 +61,21 @@ and the gate walks it too and fails on any row no case exercises.
 another process that cannot call a function pointer in this one, and
 because REBOUND's driver does not run between its steps:
 `r->additional_forces`, velocity-dependent forces, the timestep
-modification hooks, collision detection, attached ODE sets, and test
-particles. All six work on the drop-in.
+modification hooks, and attached ODE sets. All four work on the
+drop-in.
+
+**Refused differently by each path.** Two rows apply to both but ask a
+different question on each, which is why they are neither in the table
+above nor in the list before this one:
+
+| | drop-in | subprocess |
+|---|---|---|
+| collision detection | refused only above binary64 without `state->accurate = 1` | refused outright — REBOUND's driver runs the search between steps there and not here |
+| test particles (`N_active`) | refused only for `N_active > N`, which is undefined behaviour upstream | refused for any inactive particle |
 
 **Refused on the drop-in only**, because they are its own settings:
-MEGNO, a `format` or `max_iter` out of range, a state whose `E` is not
+MEGNO set directly (`r->calculate_megno` without variational
+particles), a `format` or `max_iter` out of range, a state whose `E` is not
 1 (an ensemble is E independent systems and a `reb_simulation` is one -
 use the standalone program, docs/ENSEMBLE.md), and `arith_fma` combined
 with a velocity-dependent force, which would need an FMA form of the
@@ -418,8 +428,17 @@ docs/VALIDATION.md. That restriction is the reason to prefer the
 drop-in above, where the state persists across steps and across a
 checkpoint. This form was deliberately kept rather than rewritten as a
 wrapper around it, for a caller who does not want the engine in their
-own address space; `make example` builds and runs both, so a change
-that breaks either is a build failure.
+own address space; `make example` builds and runs both, and each case
+declares the answer it expects, so a change that breaks either is a
+build failure.
+
+That sentence was false until 2026-09-11. `roundtrip.c` used to *print*
+what the library answered rather than assert what it should answer, and
+`main()` returned 0 regardless — so when `softening` became supported,
+the example went on shipping the line `-> NOT REFUSED, which is a bug`
+about correct behaviour, and the build passed through it. A case that
+prints rather than asserts will print whatever it is given, forever, and
+look fine.
 
 ## Running
 

@@ -163,7 +163,12 @@ static void a_force(struct reb_simulation *const r){ (void)r; }
  * shown below as an accepted setting instead, which is what keeps this
  * function from going stale silently the next time a refusal is
  * retired: every case states which answer it expects. */
-static void show_refusals(void){
+/* Returns the number of cases whose answer was not the one declared.
+ * main() adds it to its exit status: the README calls `make example` a
+ * gate, and a gate that prints UNEXPECTED into a passing build is not
+ * one. This function used to return void and main() returned 0
+ * regardless, which is how the stale line above shipped. */
+static int show_refusals(void){
     static const struct { const char *what; int expect_refusal; } cases[] = {
         { "r->softening = 0.01",       0 },   /* forwarded, not refused */
         { "r->collision = DIRECT",     1 },
@@ -172,6 +177,7 @@ static void show_refusals(void){
         { "1025 particles",            1 }
     };
     size_t k;
+    int surprises = 0;
     for (k = 0; k < sizeof cases / sizeof cases[0]; k++){
         struct reb_simulation *r = build_system();
         char why[256];
@@ -189,16 +195,19 @@ static void show_refusals(void){
             }
         }
         refused = cft_rebound_check(r, why, sizeof why) != 0;
-        if (refused != cases[k].expect_refusal)
+        if (refused != cases[k].expect_refusal){
             printf("  %-26s -> UNEXPECTED: %s, which this example did not "
                    "predict - the refusal list moved under it\n",
                    cases[k].what, refused ? "refused" : "accepted");
+            surprises++;
+        }
         else if (refused)
             printf("  %-26s -> %s\n", cases[k].what, why);
         else
             printf("  %-26s -> accepted; this path honours it\n", cases[k].what);
         reb_simulation_free(r);
     }
+    return surprises;
 }
 
 int main(void){
@@ -236,6 +245,14 @@ int main(void){
     printf("\n  Jupiter is now at x = %.17g AU (binary128 run, binary64 view).\n", b.x[3]);
 
     printf("\n  and the limits, so you meet them here rather than mid-run:\n");
-    show_refusals();
+    {
+        int surprises = show_refusals();
+        if (surprises){
+            printf("\nroundtrip: %d refusal case(s) answered something this\n"
+                   "example did not predict. The refusal list moved and this\n"
+                   "file did not - fix whichever is wrong.\n", surprises);
+            return 1;
+        }
+    }
     return 0;
 }

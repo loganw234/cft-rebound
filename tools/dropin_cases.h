@@ -85,6 +85,10 @@ void cases_wide(void);   /* tools/cases_wide.c - binary128, a smoke test */
 void cases_forces(void); /* tools/cases_forces.c - r->additional_forces at every
                           * substage, and the timestep-modification hooks */
 void cases_modes(void);  /* tools/cases_modes.c - adaptive_mode 0 and 1 */
+void cases_seam(void);   /* tools/cases_seam.c - combinations no single parcel
+                          * could have tested. These belong to no parcel and so
+                          * belong to the integrator; docs/PARCEL-ROUNDS.md says
+                          * why they are the ones that get skipped. */
 void cases_pairs(void);  /* tools/cases_pairs.c - which pairs gravity computes:
                           * r->N_active, r->testparticle_type and
                           * r->gravity_ignore_terms */

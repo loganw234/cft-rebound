@@ -244,6 +244,12 @@ static size_t one_index[1] = { 0 };
 static void p_none(struct reb_simulation *r){ while (r->N) reb_simulation_remove_particle(r, 0); }
 static void p_gravcustom(struct reb_simulation *r){ r->gravity_custom = nop_gravity; }
 static void p_var(struct reb_simulation *r){ reb_simulation_add_variation_1st_order(r, -1); }
+/* The FLAG alone, and no variational particles - that is the whole
+ * point. reb_simulation_init_megno() adds them, so poisoning it the
+ * ordinary way trips the variational row and says nothing about this
+ * one. Setting the flag by hand used to be ACCEPTED here and then
+ * integrated as plain gravity, reporting neither MEGNO nor a refusal. */
+static void p_megno(struct reb_simulation *r){ r->calculate_megno = 1; }
 static void p_forces(struct reb_simulation *r){ r->additional_forces = nop_forces; }
 static void p_tsmods(struct reb_simulation *r){ r->post_timestep_modifications = nop_forces; }
 static void p_veldep(struct reb_simulation *r){ r->force_is_velocity_dependent = 1; }
@@ -282,6 +288,7 @@ static void case_refusals(void){
     refused("no_particles",      "an empty simulation",            p_none);
     refused("gravity_custom",    "a custom gravity routine",       p_gravcustom);
     refused("variational",       "variational particles",          p_var);
+    refused("megno",             "calculate_megno without them",   p_megno);
     refused("additional_forces", "r->additional_forces",           p_forces);
     refused("timestep_mods",     "timestep modifications",         p_tsmods);
     refused("veldep_forces",     "velocity-dependent forces",      p_veldep);

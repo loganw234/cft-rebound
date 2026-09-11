@@ -1057,6 +1057,15 @@ static int s7_stale = 1;
  * is sqrt7(epsilon*5040), fixed for the run and cached in S7B. It is
  * issued only for a system whose error is normal, which is exactly when
  * REBOUND issues it. */
+/* The velocities the step controller must read: the node's, when a
+ * velocity-dependent force made the predictor run, and NULL for the
+ * step's start otherwise. FVP is defined in the IAS15_CFT_LIBRARY
+ * block below this function and cannot be named from here, so
+ * step_attempt() points this at it. The standalone program never
+ * assigns it - it has no force hook, so no velocity-dependent force is
+ * reachable there and the step's start is always right. */
+static V control_v;
+
 static void dtnew_legacy(const V dtnB){
     static V qv, aabs, babs, sqc, comp, x2, v2, skq, dtp, PSKIP;
     static V runa, runb, pnum, pden, pq, errv, epsq, s7;
@@ -1088,36 +1097,41 @@ static void dtnew_legacy(const V dtnB){
          * same for v. The position is the predictor's at h[7], which is
          * what r->particles hold when REBOUND reaches this.
          *
-         * THE VELOCITY IS THE STEP'S START, AND THAT IS NOT ALWAYS
-         * REBOUND'S. This comment used to say the predictor writes
-         * velocities only for a velocity-dependent force or MEGNO and
-         * "neither is supported here", which was true until 2026-09-11
-         * and is not true now: the drop-in supports a velocity-dependent
-         * r->additional_forces. When one is set, REBOUND's node loop
-         * leaves the h[7]-PREDICTED velocities in r->particles
-         * (integrator_ias15.c:446-449), nothing restores them before the
-         * step controller, and its GLOBAL arm reads them at :632. This
-         * port keeps its predicted velocities in FVP and leaves v at the
-         * step start, so the two build v2 from different numbers.
+         * AND SO IS THE VELOCITY, WHEN A VELOCITY-DEPENDENT FORCE RAN.
+         * REBOUND's node loop leaves the h[7]-PREDICTED velocities in
+         * r->particles (integrator_ias15.c:446-449) whenever it predicts
+         * them at all, nothing restores them before the step controller,
+         * and this arm reads them at :632. So the velocities here must be
+         * the node's and not the step's start - which is what control_v
+         * carries, NULL meaning "no predictor ran, use v".
          *
-         * It has not been shown to change an answer, and the reason is
-         * narrow: v2 feeds ONLY the skip predicate
-         * fabs(v2*dt*dt/x2) < 1e-16, never the error estimate, so a
-         * difference matters only when it flips that boolean. An audit
+         * This read the step's start until 2026-09-11, on a comment that
+         * said the predictor runs only for a velocity-dependent force or
+         * MEGNO and "neither is supported here". That was true until the
+         * same day's work put velocity-dependent forces on the drop-in,
+         * and then it was a live defect nobody owned: the force path and
+         * the step criteria were separate parcels, and neither one's gate
+         * crossed them. A documentation audit found the MECHANISM and
          * scanned 260 (speed, drag) configurations tuned to sit on the
-         * threshold and found no flip. So this is a latent divergence
-         * rather than a measured one - but the argument that made it
-         * safe is gone, and nothing gates the combination:
-         * tools/cases_forces.c pins adaptive_mode = 2 and
-         * tools/cases_modes.c sets no force. A case that runs GLOBAL
-         * with a velocity-dependent routine is what would settle it. */
+         * skip threshold without flipping it, so it reported the
+         * divergence as latent. It is not: tools/cases_seam.c runs the
+         * combination the parcels' gates did not, and the pythagorean
+         * problem under GLOBAL with a drag differs from REBOUND in 21 of
+         * 21 values at about 1e-4 relative - a trajectory divergence, so
+         * the step sequences parted rather than a last bit moving.
+         *
+         * Narrow, but only in where it enters: v2 feeds ONLY the skip
+         * predicate fabs(v2*dt*dt/x2) < 1e-16, never the error estimate.
+         * One flipped boolean on one step is enough, and a close
+         * encounter reaches it where a tuned two-body problem does
+         * not. */
         vmul(sqc, x, x, N3);
         for (size_t p = 0; p < NB; p++) memcpy(E(x2, p), E(sqc, 3 * p), ESZ);
         for (int c = 1; c < 3; c++){
             for (size_t p = 0; p < NB; p++) memcpy(E(comp, p), E(sqc, 3 * p + c), ESZ);
             vadd(x2, x2, comp, NB);
         }
-        vmul(sqc, v, v, N3);
+        vmul(sqc, control_v ? control_v : v, control_v ? control_v : v, N3);
         for (size_t p = 0; p < NB; p++) memcpy(E(v2, p), E(sqc, 3 * p), ESZ);
         for (int c = 1; c < 3; c++){
             for (size_t p = 0; p < NB; p++) memcpy(E(comp, p), E(sqc, 3 * p + c), ESZ);
@@ -1580,6 +1594,14 @@ static void step_attempt(void){
 
     for (size_t s = 0; s < E; s++) vcopy(E(SDTDONE, s), E(SDT, s), 1);
     if (adaptive){
+#ifdef IAS15_CFT_LIBRARY
+        /* The node loop has just ended at h[7]. If the predictor ran,
+         * FVP holds exactly what REBOUND leaves in r->particles for its
+         * step controller to read; if it did not, the step's start is
+         * what REBOUND has too. Same condition as the hook above, so
+         * the two cannot disagree about whether a prediction happened. */
+        control_v = (force_fn && force_veldep) ? FVP : NULL;
+#endif
         choose_timestep();
         for (size_t s = 0; s < E; s++){
             if (!active[s]) continue;
