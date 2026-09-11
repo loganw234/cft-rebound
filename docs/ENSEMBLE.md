@@ -113,8 +113,11 @@ adaptive integrator; a member that takes small steps through an
 encounter covers less simulated time than its neighbours in the same
 run. A user who wants every member at the same final time reads the
 per-system times in the record and runs the block again, or uses a
-prescribed shared sequence (`--dt-file`), which is what the Lyapunov
-measurement wants anyway: members that share their sampling times.
+prescribed shared sequence (`--dt-file`, which prescribes every step and
+so needs `--epsilon 0`: the program refuses it alongside an adaptive
+run), which is what the Lyapunov measurement wants anyway: members that
+share their sampling times, which is what tools/divergence.py refuses to
+run without.
 
 The first version was going to be a fixed shared step. It turned out
 that per-system steps cost about as much code as the masking the
@@ -154,7 +157,10 @@ statistics (steps rejected, corrector passes mean and maximum, cap
 hits). Cases: a five-member Kepler family whose members have
 different eccentricities (planet velocity scaled by 1 - 0.08k), fixed
 and adaptive, on the loop engine and on the program engine (the
-`predict-ens` program); a four-member family a few ulps apart; a
+`predict-ens` program); a four-member family offset by `k * 0x1p-40` in
+the planet's x, which is about 16,000 ulps at that coordinate - the
+planet sits at `0x1.ff7d0f16c2e0ap-2`, whose ulp is 2^-54 - and not the
+"few ulps" this line used to claim; a
 five-member family spread in starting radius from 0.5 to 2.1 started
 with a first step of 0.6, which the four inner members reject in the
 same attempt in which the outermost accepts it, on both engines; and
