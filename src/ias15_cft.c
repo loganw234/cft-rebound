@@ -61,7 +61,7 @@
  *             [--arith rebound|fma] [--engine loop|program] [--programs DIR]
  *             [--no-flag-abort] [--artifact PATH] [--dump-constants] [--quiet]
  *             [--member K] [--dt-file FILE] [--dt-out FILE]
- *             [--softening S] [--min-dt M] [--adaptive-mode 2|3]
+ *             [--softening S] [--min-dt M] [--adaptive-mode 0|1|2|3]
  *
  * --artifact opens a tile instead of the software backend; with no flag
  * the program falls back to $CFT_REBOUND_ARTIFACT, which is how the
@@ -362,8 +362,11 @@ static V mass;             /* NB */
 static V G;                /* broadcast */
 /* REBOUND's ias15->adaptive_mode. 2 is PRS23, its default since
  * January 2024 and this port's; 3 is AARSETH85, which shares every
- * sum with it and differs in one expression. 0 and 1 take REBOUND's
- * other branch and are not implemented. */
+ * sum with it and differs in one expression. 0 (INDIVIDUAL) and 1
+ * (GLOBAL) take REBOUND's other error estimate entirely - a different
+ * estimate in the step control (dtnew_legacy) AND a different
+ * predictor-corrector error in the corrector (pc_error), which is the
+ * half that is easy to miss. */
 static int ADAPTIVE_MODE = 2;
 static V SMINDT;           /* broadcast: the step-size floor, +0 by
                             * default - and at +0 the comparison below
@@ -688,11 +691,48 @@ static void correct(int n){
     if (n == 7) pc_error(tmp);
 }
 
-/* predictor_corrector_error = max|tmp| / max|at| over normal values
- * (GLOBAL/PRS23 modes), per system over its own coordinates */
+/* predictor_corrector_error, per system over its own coordinates.
+ *
+ * TWO forms, and which is REBOUND's depends on adaptive_mode - this is
+ * the second place the mode reaches, integrator_ias15.c:580 and :598,
+ * and the one that is easy to miss because it is in the CORRECTOR and
+ * not in the step control. Every mode but INDIVIDUAL takes
+ * max|tmp| / max|at| over the normal values; INDIVIDUAL takes the
+ * largest per-coordinate fractional error |tmp/at|, the same shape of
+ * estimate its step control uses. A port that implemented only the step
+ * control would converge on a different iteration count and diverge at
+ * the first step whose corrector stopped one pass earlier. */
 static void pc_error(const V tmp){
-    static V maxak, maxb6, aabs, tabs; static uint8_t *ca, *ct;
+    static V maxak, maxb6, aabs, tabs, fnum, fden, frac; static uint8_t *ca, *ct, *cf;
     if (!maxak){ maxak = valloc(E); maxb6 = valloc(E); aabs = valloc(N3); tabs = valloc(N3); ca = cbytes(N3); ct = cbytes(N3); }
+    if (ADAPTIVE_MODE == 0){
+        /* errork = fabs(tmp[k]/at[k]), the maximum of the normal ones,
+         * from +0: REBOUND zeroes predictor_corrector_error at the top
+         * of every pass and this runs at n = 7 only, so the maximum is
+         * over this pass's N3 coordinates and nothing else.
+         *
+         * A system that has already left the corrector is not read, and
+         * its lanes are given 1/1 so that they raise nothing - the same
+         * sanitising the quotient below does with maxak and maxb6. Every
+         * lane of a system still IN the corrector is divided, which is
+         * exactly the N3 divisions REBOUND issues for it. */
+        if (!frac){ fnum = valloc(N3); fden = valloc(N3); frac = valloc(N3); cf = cbytes(N3); if (!cf) die("out of memory"); }
+        vcopy(fnum, tmp, N3); vcopy(fden, at, N3);
+        for (size_t s = 0; s < E; s++){
+            if (pc_active[s]) continue;
+            for (size_t k = L * s; k < L * (s + 1); k++){ memcpy(E(fnum, k), K1, ESZ); memcpy(E(fden, k), K1, ESZ); }
+        }
+        vdiv(frac, fnum, fden, N3);
+        vabs(frac, frac, N3);
+        vclass(cf, frac, N3);
+        for (size_t s = 0; s < E; s++){
+            V m = E(SPCE, s);
+            vzero(m, 1);
+            for (size_t k = L * s; k < L * (s + 1); k++)
+                if (is_normal_class(cf[k]) && bits_gt(E(frac, k), m)) memcpy(m, E(frac, k), ESZ);
+        }
+        return;
+    }
     vabs(aabs, at, N3); vabs(tabs, tmp, N3);
     vclass(ca, aabs, N3); vclass(ct, tabs, N3);
     for (size_t s = 0; s < E; s++){
@@ -835,7 +875,7 @@ static void predict_next_step_vec(const V rb, V *_e, V *_b, V *eo, V *bo){
 }
 
 /* ------------------------------------------------------------------ */
-/* sqrt7 and the PRS23 step criterion                                   */
+/* sqrt7 and the four step criteria                                     */
 /* ------------------------------------------------------------------ */
 static void sqrt7(V out, const V ain){
     V aa = valloc(1), scale = valloc(1), xx = valloc(1), x6 = valloc(1), q = valloc(1), d = valloc(1);
@@ -860,26 +900,177 @@ static V EPS, EPS5040;
 static V S7B;
 static int s7_stale = 1;
 
-/* For every active system: accepted[s] and SDTNEW[s], from SDTDONE[s].
+/* ------------------------------------------------------------------ *
+ * REBOUND's OTHER error estimate: adaptive_mode 0 and 1
+ *
+ * integrator_ias15.c:625-663. These two are not a branch inside the
+ * PRS23 arm and could not be written as one: PRS23 and AARSETH85 share
+ * every sum they use - a0 squared and four weighted sums of b - and
+ * these two share none of them. They estimate the integrator error from
+ * the LAST term of the series, b6, against the acceleration at the end
+ * of the sequence, at, and then take
+ *
+ *     dt_new = sqrt7(epsilon / integrator_error) * dt_done
+ *
+ * or dt_done / safety_factor when that error is not normal.
+ *
+ * INDIVIDUAL (0) is the fractional error of every coordinate,
+ * |b6[k]/at[k]|, maximised over the normal ones. Every coordinate is
+ * divided, and so every lane's divide is one REBOUND issues too.
+ *
+ * GLOBAL (1) maximises |at[k]| and |b6[k]| SEPARATELY over the
+ * coordinates of the particles whose motion this step resolves, and
+ * divides the two maxima. REBOUND writes that divide inside the
+ * particle loop, so it is issued once per particle it did not skip, on
+ * the maxima so far, and the value that survives is the last one. The
+ * loop below reproduces that - one divide per particle, all of them in
+ * one call - rather than dividing once at the end. The two give the
+ * same bits, because the maxima only grow; they do not raise the same
+ * flags, and this file's rule is that a lane REBOUND computes is a lane
+ * this port computes.
+ *
+ * Two places where REBOUND's own arithmetic raises, and this port must
+ * raise with it rather than tidy up:
+ *
+ *   - GLOBAL's skip test divides by |x|^2, so a particle AT THE ORIGIN
+ *     makes it 0/0. The quotient is NaN, NaN < 1e-16 is false, and the
+ *     particle is therefore NOT skipped - the flag is REBOUND's
+ *     estimate showing through, not a lane computed and never read.
+ *   - INDIVIDUAL divides by at[k] for every coordinate, so a planar
+ *     problem (az == 0 for all time) divides by zero on every z lane,
+ *     every step. REBOUND gets an infinity or a NaN, isnormal() rejects
+ *     it, and the coordinate drops out of the maximum. That is the
+ *     failure REBOUND's own comment warns about at :620.
+ *
+ * So the standalone program's --no-flag-abort is not optional for these
+ * two modes on most problems; the shim never aborts on flags.
+ *
+ * sqrt7 runs per system and per step here, because its argument is
+ * epsilon/integrator_error and that changes every step - where PRS23's
+ * is sqrt7(epsilon*5040), fixed for the run and cached in S7B. It is
+ * issued only for a system whose error is normal, which is exactly when
+ * REBOUND issues it. */
+static void dtnew_legacy(const V dtnB){
+    static V qv, aabs, babs, sqc, comp, x2, v2, skq, dtp, PSKIP;
+    static V runa, runb, pnum, pden, pq, errv, epsq, s7;
+    static uint8_t *cq, *ca, *cb, *cerr;
+    static size_t *lastp; static int *seen;
+    if (!qv){
+        qv = valloc(N3); aabs = valloc(N3); babs = valloc(N3); sqc = valloc(N3);
+        comp = valloc(NB); x2 = valloc(NB); v2 = valloc(NB); skq = valloc(NB); dtp = valloc(NB);
+        PSKIP = valloc(NB); pnum = valloc(NB); pden = valloc(NB); pq = valloc(NB);
+        runa = valloc(E); runb = valloc(E); errv = valloc(E); epsq = valloc(1); s7 = valloc(1);
+        cq = cbytes(N3); ca = cbytes(N3); cb = cbytes(N3); cerr = cbytes(E);
+        lastp = calloc(E, sizeof *lastp); seen = calloc(E, sizeof *seen);
+        if (!cq || !ca || !cb || !cerr || !lastp || !seen) die("out of memory");
+    }
+    if (ADAPTIVE_MODE == 0){
+        /* errork = fabs(b6[k]/at[k]) for every coordinate; the maximum
+         * of the normal ones within each system, from +0 */
+        vdiv(qv, b[6], at, N3);
+        vabs(qv, qv, N3);
+        vclass(cq, qv, N3);
+        for (size_t s = 0; s < E; s++){
+            V m = E(errv, s);
+            vzero(m, 1);                    /* integrator_error = 0.0 */
+            for (size_t k = L * s; k < L * (s + 1); k++)
+                if (is_normal_class(cq[k]) && bits_gt(E(qv, k), m)) memcpy(m, E(qv, k), ESZ);
+        }
+    }else{
+        /* per particle, in REBOUND's order: (x*x + y*y) + z*z, and the
+         * same for v. The position is the predictor's at h[7], which is
+         * what r->particles hold when REBOUND reaches this; the velocity
+         * is the step's start, because the predictor only writes
+         * velocities when a velocity-dependent force or MEGNO asks for
+         * them and neither is supported here. */
+        vmul(sqc, x, x, N3);
+        for (size_t p = 0; p < NB; p++) memcpy(E(x2, p), E(sqc, 3 * p), ESZ);
+        for (int c = 1; c < 3; c++){
+            for (size_t p = 0; p < NB; p++) memcpy(E(comp, p), E(sqc, 3 * p + c), ESZ);
+            vadd(x2, x2, comp, NB);
+        }
+        vmul(sqc, v, v, N3);
+        for (size_t p = 0; p < NB; p++) memcpy(E(v2, p), E(sqc, 3 * p), ESZ);
+        for (int c = 1; c < 3; c++){
+            for (size_t p = 0; p < NB; p++) memcpy(E(comp, p), E(sqc, 3 * p + c), ESZ);
+            vadd(v2, v2, comp, NB);
+        }
+        /* "Skip slowly varying accelerations":
+         *   if (fabs(v2*r->dt*r->dt/x2) < 1e-16) continue;
+         * r->dt is still dt_done where REBOUND evaluates this.
+         *
+         * The threshold is REBOUND's literal 1e-16 at every format, and
+         * that is a decision rather than an oversight. The corrector's
+         * tolerance IS scaled here (TOL = 1e-16 * 2^(53-p)) because it
+         * asks "has this converged as far as the arithmetic can take
+         * it"; this one asks "does the step move the particle at all",
+         * a question about the problem and not about the precision. At
+         * binary64 the two are the same bits, so the gate cannot tell
+         * them apart and only the reasoning does. */
+        for (size_t p = 0; p < NB; p++) memcpy(E(dtp, p), E(SDTDONE, p / N), ESZ);
+        vmul(skq, v2, dtp, NB); vmul(skq, skq, dtp, NB); vdiv(skq, skq, x2, NB);
+        vabs(skq, skq, NB);
+        vcmplt(PSKIP, skq, K1E16, NB);
+        vabs(aabs, at, N3); vabs(babs, b[6], N3);
+        vclass(ca, aabs, N3); vclass(cb, babs, N3);
+        for (size_t s = 0; s < E; s++){ vzero(E(runa, s), 1); vzero(E(runb, s), 1); seen[s] = 0; }
+        for (size_t p = 0; p < NB; p++){
+            size_t s = p / N;
+            if (pred_at(PSKIP, p)){
+                /* never read; 1/1 so that the lane raises nothing */
+                memcpy(E(pnum, p), K1, ESZ); memcpy(E(pden, p), K1, ESZ);
+                continue;
+            }
+            V ma = E(runa, s), mb = E(runb, s);
+            for (size_t k = 3 * p; k < 3 * p + 3; k++){
+                if (is_normal_class(ca[k]) && bits_gt(E(aabs, k), ma)) memcpy(ma, E(aabs, k), ESZ);
+                if (is_normal_class(cb[k]) && bits_gt(E(babs, k), mb)) memcpy(mb, E(babs, k), ESZ);
+            }
+            memcpy(E(pnum, p), mb, ESZ); memcpy(E(pden, p), ma, ESZ);
+            lastp[s] = p; seen[s] = 1;
+        }
+        vdiv(pq, pnum, pden, NB);           /* integrator_error = maxj/maxa */
+        for (size_t s = 0; s < E; s++){
+            /* the last non-skipped particle's quotient, or - if the step
+             * resolved nobody's motion - the 0.0 REBOUND started from */
+            if (seen[s]) memcpy(E(errv, s), E(pq, lastp[s]), ESZ);
+            else vzero(E(errv, s), 1);
+        }
+    }
+    vclass(cerr, errv, E);
+    for (size_t s = 0; s < E; s++){
+        if (!is_normal_class(cerr[s])){ memcpy(E(SDTNEW, s), E(dtnB, s), ESZ); continue; }
+        vdiv(epsq, EPS, E(errv, s), 1);
+        sqrt7(s7, epsq);
+        vmul(E(SDTNEW, s), s7, E(SDTDONE, s), 1);
+    }
+}
+
+/* PRS23 (2) and AARSETH85 (3): the criterion this port was written
+ * around, and unchanged by the arrival of 0 and 1 above except that
+ * dt_done/safety_factor, which all four need, is now computed by the
+ * caller and handed in.
+ *
  * The per-particle timescale is REBOUND's; every particle's is computed
  * in one call (a particle REBOUND would skip - a0^2 not normal - is
  * given the inputs 1 so that its lane raises nothing, and is never
  * read), the minimum within each system is a selection by bit pattern,
  * and the per-system step logic runs over all E systems at once, each
  * element the scalar operation the system would issue alone, both
- * branches computed and each system keeping its own. The step
- * control's call count is therefore independent of E. */
-static void choose_timestep(void){
-    static V sq, tmp, y[6], a0i, ts2, mints2, num, den, INVB;
-    static V y1m, y2m, y3m, y4m, mim, r, dtnA, dtnB, dtnF, ad, rr, ar, P0, PR, PL, PI; static uint8_t *cls, *cls2, *clsm;
+ * branches computed and each system keeping its own. The step control's
+ * call count is therefore independent of E here - which is exactly what
+ * modes 0 and 1 cannot have, because sqrt7's argument is per system
+ * there and its loop is data-dependent. */
+static void dtnew_prs23(const V dtnB){
+    static V sq, tmp, y[6], a0i, ts2, mints2, num, den;
+    static V y1m, y2m, y3m, y4m, mim, r, dtnA; static uint8_t *cls, *cls2, *clsm;
+    static V S[5];
     if (!sq){
         sq = valloc(N3); tmp = valloc(N3); for (int i = 0; i < 6; i++) y[i] = valloc(NB); a0i = valloc(NB); ts2 = valloc(NB);
         mints2 = valloc(E); num = valloc(NB); den = valloc(NB); cls = cbytes(NB); cls2 = cbytes(NB); clsm = cbytes(E);
-        y1m = valloc(NB); y2m = valloc(NB); y3m = valloc(NB); y4m = valloc(NB); mim = valloc(E); r = valloc(E); dtnA = valloc(E); dtnB = valloc(E); dtnF = valloc(E);
-        ad = valloc(E); rr = valloc(E); ar = valloc(E); P0 = valloc(E); PR = valloc(E); PL = valloc(E); PI = valloc(E);
+        y1m = valloc(NB); y2m = valloc(NB); y3m = valloc(NB); y4m = valloc(NB); mim = valloc(E); r = valloc(E); dtnA = valloc(E);
+        for (int i = 0; i < 5; i++) S[i] = valloc(N3);
         if (!cls || !cls2 || !clsm) die("out of memory");
-        /* 1/safety_factor depends on nothing at all: once, the same bits every step */
-        { V inv = valloc(1); vdiv(inv, K1, K0_25, 1); INVB = valloc(NMAX); vbcast(INVB, inv, NMAX); free(inv); }
     }
     if (s7_stale){
         if (!S7B) S7B = valloc(NMAX);
@@ -888,7 +1079,6 @@ static void choose_timestep(void){
     }
     /* per component: a0^2; (a0+b0+...+b6)^2; (sum (m+1) b_m)^2; (sum m(m+1) b_m)^2; (sum (m-1)m(m+1) b_m)^2 */
     V sums[5];
-    static V S[5]; if (!S[0]) for (int i = 0; i < 5; i++) S[i] = valloc(N3);
     vmul(S[0], a0, a0, N3);
     vadd(tmp, a0, b[0], N3); for (int m = 1; m < 7; m++) vadd(tmp, tmp, b[m], N3);
     vmul(S[1], tmp, tmp, N3);
@@ -945,8 +1135,30 @@ static void choose_timestep(void){
     vclass(clsm, mints2, E);
     for (size_t s = 0; s < E; s++) memcpy(E(mim, s), is_normal_class(clsm[s]) ? E(mints2, s) : K1, ESZ);
     vsqrt(r, mim, E); vmul(r, r, SDTDONE, E); vmul(dtnA, r, S7B, E);
-    vdiv(dtnB, SDTDONE, K0_25, E);
     for (size_t s = 0; s < E; s++) memcpy(E(SDTNEW, s), is_normal_class(clsm[s]) ? E(dtnA, s) : E(dtnB, s), ESZ);
+}
+
+/* For every active system: accepted[s] and SDTNEW[s], from SDTDONE[s].
+ *
+ * The error estimate is one of four and is chosen below. Everything
+ * after it - REBOUND's min_dt floor, its rejection test and its growth
+ * clamp - is the same three steps for all four, and is written once
+ * here rather than once per criterion. */
+static void choose_timestep(void){
+    static V dtnB, dtnF, ad, rr, ar, P0, PR, PL, PI, INVB;
+    if (!dtnB){
+        dtnB = valloc(E); dtnF = valloc(E); ad = valloc(E); rr = valloc(E); ar = valloc(E);
+        P0 = valloc(E); PR = valloc(E); PL = valloc(E); PI = valloc(E);
+        /* 1/safety_factor depends on nothing at all: once, the same bits every step */
+        { V inv = valloc(1); vdiv(inv, K1, K0_25, 1); INVB = valloc(NMAX); vbcast(INVB, inv, NMAX); free(inv); }
+    }
+    /* dt_done / safety_factor. Every one of the four criteria falls back
+     * to it "in the rare case that the error estimate doesn't give a
+     * finite number", and the clamp below raises to it; it depends on no
+     * criterion, so it is computed once, here. */
+    vdiv(dtnB, SDTDONE, K0_25, E);
+    if (ADAPTIVE_MODE < 2) dtnew_legacy(dtnB);
+    else                   dtnew_prs23(dtnB);
     /* REBOUND's floor:
      *   if (fabs(dt_new) < min_dt) dt_new = copysign(min_dt, dt_new);
      * At the default min_dt of +0 the comparison is false for every
@@ -1423,13 +1635,20 @@ int main(int argc, char **argv){
         else if (!strcmp(argv[i], "--min-dt") && i + 1 < argc) mindt_txt = argv[++i];
         else if (!strcmp(argv[i], "--adaptive-mode") && i + 1 < argc){
             ADAPTIVE_MODE = atoi(argv[++i]);
-            /* Validated here rather than left to fall into the PRS23 arm:
-             * an unimplemented mode that silently ran a different one is
-             * exactly the shape of wrong answer this program refuses. */
-            if (ADAPTIVE_MODE != 2 && ADAPTIVE_MODE != 3)
-                die("--adaptive-mode %d: only PRS23 (2) and AARSETH85 (3) are "
-                    "implemented; INDIVIDUAL (0) and GLOBAL (1) take REBOUND's "
-                    "other error estimate entirely", ADAPTIVE_MODE);
+            /* Validated here rather than left to fall into one of the two
+             * arms: an unimplemented mode that silently ran a different
+             * one is exactly the shape of wrong answer this program
+             * refuses. All four of REBOUND's are implemented now, so what
+             * is left to catch is a number that is not one of them.
+             *
+             * 0 and 1 divide by quantities that are legitimately zero -
+             * see dtnew_legacy() - so on most problems they need
+             * --no-flag-abort, which is REBOUND's own estimate showing
+             * through and not a fault in this port. */
+            if (ADAPTIVE_MODE < 0 || ADAPTIVE_MODE > 3)
+                die("--adaptive-mode %d: REBOUND's modes are INDIVIDUAL (0), "
+                    "GLOBAL (1), PRS23 (2, its default since January 2024) and "
+                    "AARSETH85 (3)", ADAPTIVE_MODE);
         }
         else if (!strcmp(argv[i], "--steps") && i + 1 < argc) steps = atol(argv[++i]);
         else if (!strcmp(argv[i], "--sample") && i + 1 < argc) sample = atol(argv[++i]);

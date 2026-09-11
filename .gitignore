@@ -31,3 +31,8 @@ gate_real.bin
 # without --build, which is what a bare ./build/gate_restart does.
 gate1_one.bin
 gate1_two.bin
+
+# Agent worktrees. `git worktree add` puts them here; each is a
+# separate checkout with its own .git file, so `git add -A` would
+# stage them as embedded repositories. It did once.
+.claude/worktrees/

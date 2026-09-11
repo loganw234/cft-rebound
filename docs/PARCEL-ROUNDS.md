@@ -60,6 +60,17 @@ of 48".
 kept in step by a comment is a number that will drift. If a test needs a
 constant the code defines, have it *read* the definition.
 
+There are two grades of this and it is worth being precise about which
+you are asking for, because a brief that conflates them is wrong about
+the thing it is trying to protect. **Derived**: the consumer reads the
+definition, so there is one value and no way to disagree — a test that
+greps the header for a `#define`. **Declared once and checked**: the
+count is still a literal, but it sits beside the list it counts and a
+selftest asserts it against the list, so a disagreement is caught on the
+next run rather than at the next release. The second is often all that a
+macro-generated list allows. Ask for the first where it is possible and
+the second where it is not, and do not call the second the first.
+
 That second rule pays immediately and visibly. When a cap moved from one
 header to another in this repo, the test that reads it stopped with
 `no #define CFT_MAX_BODIES in src/ias15_cft.c` — naming the file it
@@ -247,6 +258,32 @@ requiring the verifier to state *what it actually ran*, command by
 command, and by making "found nothing" an acceptable, unpenalised
 answer. A verifier under pressure to produce findings invents them, and
 that is worse than no verifier.
+
+### What the first run of this taught
+
+**Give it a numbered list to attack, and expect its best work to be
+outside the list.** The first verifier run here confirmed all eight
+items it was handed and found two genuine divergences nobody had
+thought to ask about — the more serious being that a user callback
+writing anything other than the field the port reads back was silently
+discarded, where the original would have used it. Eight confirmations
+were worth the run; the two findings were worth more. So: name what you
+suspect, then ask explicitly what *else* is there.
+
+**One technique worth copying.** To prove a change did not touch a build
+it was not supposed to, diff the **preprocessed translation unit** at
+both commits, not the source. Here the same file compiles two ways and
+only one was in scope; the preprocessed output at the two commits was
+3610 lines each and differed by a single line, which settles the
+question in a way that reading a diff cannot.
+
+**Distinguish "the shipped code is right" from "the gate would catch it
+if it weren't."** Four of that run's findings were of the second kind —
+correct behaviour with nothing holding it down, including a bit
+comparison that could be swapped for a value comparison and still pass
+the entire suite while breaking signed zero. Those are worth as much as
+defects, because they are the defects of the next change, and a
+verifier is the only role positioned to notice them.
 
 ---
 

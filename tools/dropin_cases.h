@@ -53,7 +53,8 @@ extern const struct body five[];          /* 5, and the first 4 are a system too
 extern int    wide_format;    /* the cft side's format; --wide makes it CFT_FP128 */
 extern double soften;         /* r->softening, on BOTH sides */
 extern double min_dt;         /* IAS15's step floor, on both sides */
-extern int    adaptive_mode;  /* 2 PRS23, 3 AARSETH85 */
+extern int    adaptive_mode;  /* IAS15's step criterion: 0 INDIVIDUAL,
+                               * 1 GLOBAL, 2 PRS23, 3 AARSETH85 */
 extern int    accurate;       /* state->accurate; diverges from REBOUND, so it is
                                * off for every equivalence case */
 
@@ -83,5 +84,6 @@ void cases_core(void);   /* tools/cases_core.c - the binary64 equivalence set */
 void cases_wide(void);   /* tools/cases_wide.c - binary128, a smoke test */
 void cases_forces(void); /* tools/cases_forces.c - r->additional_forces at every
                           * substage, and the timestep-modification hooks */
+void cases_modes(void);  /* tools/cases_modes.c - adaptive_mode 0 and 1 */
 
 #endif /* DROPIN_CASES_H */
