@@ -92,6 +92,32 @@ int    ias15_engine_remove_body(size_t index);
  * old count is still the engine's. A no-op for an ensemble. */
 void   ias15_engine_alias_resize(size_t n_new);
 
+/* The shadow ias15_engine_alias_resize() performs that re-reading
+ * through: six flat arrays, one per seven-level coefficient family,
+ * holding exactly what REBOUND's own six allocations hold - including
+ * the tail above the live region that a shrink strands and that a
+ * regrow under the high-water mark reads straight back.
+ *
+ * Borrowed, like ias15_engine_view()'s vectors, and for the same
+ * caller: src/cft_archive.c has to put this in a Simulationarchive and
+ * take it back out, because within one process the shadow is what makes
+ * a remove-then-regrow bit-identical to REBOUND and across a checkpoint
+ * nothing carried it (ROADMAP.md, "What the collision work leaves open,
+ * across a checkpoint").
+ *
+ * The shadow does not exist until a body count change needs it, so
+ * `create` says what to do about that: 0 reports what is there, and
+ * `flat[0]` is NULL when nothing is - which is how a caller asks "has
+ * this run ever resized". 1 allocates it, zeroed, as alias_resize()
+ * would. n_elem is its full length, 7*3*capacity; a caller writing
+ * fewer elements than that must zero the rest itself. */
+struct ias15_engine_alias_view {
+    unsigned char *flat[6];   /* g, b, e, csb, er, br - alias_resize()'s order */
+    size_t n_elem;            /* elements in EACH: 7 * 3 * ias15_engine_capacity() */
+    size_t elem_size;         /* 8, 16 or 32 */
+};
+void   ias15_engine_alias_view(struct ias15_engine_alias_view *out, int create);
+
 /* IAS15's adaptive_mode: 2 (PRS23) or 3 (AARSETH85). They share every
  * sum and differ in one expression; 0 and 1 are REBOUND's other
  * branch and are not implemented. */

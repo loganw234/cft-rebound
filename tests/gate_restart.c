@@ -91,6 +91,33 @@ static void run_format(int format){
     struct cft_archive_info info;
     cft_archive_probe(path("gate1_two.bin"), -1, &info);
 
+    /* The return value said "restored exactly"; the state has to say so
+     * too, because a caller may discard a return value and until
+     * 2026-09-11 nothing else recorded it. Both loads, because a
+     * promoted one would also come back non-NULL. */
+    int okp = 1;
+    for (int k = 0; k < 2; k++){
+        struct cft_ias15_state *s = (struct cft_ias15_state*)(k ? c : b)->integrator.state;
+        if (!s || s->provenance != CFT_PROV_EXACT){
+            printf("  %-9s FAIL  the %s load's state says provenance \"%s\", wanted "
+                   "\"%s\"\n", fn, k ? "appended-diff" : "one-snapshot",
+                   cft_ias15_provenance_str(s ? s->provenance : -1),
+                   cft_ias15_provenance_str(CFT_PROV_EXACT));
+            okp = 0;
+        }
+    }
+    /* Nothing here ever removed a particle, so the high-water mark is
+     * the live count and the alias family must be absent - which is
+     * also what keeps this archive byte for byte what the project wrote
+     * before that family existed. */
+    if (info.hiwater_n_elem || info.n_alias_blobs_seen){
+        printf("  %-9s FAIL  a run that never shrank wrote %d of %d high-water blobs "
+               "and cft_hiwater_n_elem=%llu\n", fn, info.n_alias_blobs_seen,
+               CFT_N_ALIAS_BLOBS, (unsigned long long)info.hiwater_n_elem);
+        okp = 0;
+    }
+    if (!okp) fail = 1;
+
     int ok1 = (la == lb) && memcmp(sa, sb, la) == 0;
     int ok2 = (la == lc) && memcmp(sa, sc, la) == 0;
     printf("  %-9s %s  %zu state bytes, %d/%d blobs non-zero, %d cft_ fields, "
@@ -113,9 +140,11 @@ int main(int argc, char **argv){
     cft_shim_register();
     printf("gate 1: mid-run archive, restart, bit-identical continuation\n");
     int shape = cft_archive_selftest();
-    printf("  descriptor lists: %s\n", shape ?
-           "MALFORMED" :
-           "every blob + 11 scalars at each of fp64/fp128/fp256, every name cft_-prefixed and unique, cft_n_elem last");
+    if (shape) printf("  descriptor lists: MALFORMED\n");
+    else printf("  descriptor lists: %d blobs of n_elem + %d of hiwater_n_elem + %d "
+                "scalars at each of fp64/fp128/fp256, every name cft_-prefixed and "
+                "unique, every walker index a distinct member, cft_n_elem last\n",
+                CFT_N_BLOBS, CFT_N_ALIAS_BLOBS, CFT_N_SCALARS);
     if (shape) fail = 1;
     run_format(CFT_FP64);
     run_format(CFT_FP128);
