@@ -27,6 +27,10 @@ on Windows does not work**, and **nothing has ever run on macOS**.
 
 ---
 
+This file is one round. The method behind it - why P0 exists, what a
+brief has to carry, where a verifier earns its place - is
+docs/PARCEL-ROUNDS.md, written to be reused.
+
 ## The rule this round is built around
 
 ROADMAP.md's last section is the post-mortem of round 1, and its
@@ -287,9 +291,15 @@ refusing a mismatched wheel.
   they belong to no parcel, so they belong to the integrator. Each
   merge gets a test that exercises *two* parcels together — forces plus
   test particles, a mode change across a checkpoint.
-- **The integrator-only files**, which no parcel may touch: `README.md`,
-  `docs/COMPATIBILITY.md`, `docs/COMPLIANCE.md`, `docs/BENCHMARKS.md`,
-  `docs/SCALING.md`, `.github/workflows/gates.yml`.
+- **The integrator-only files**, which no parcel may touch:
+  `README.md`, `ROADMAP.md`, `docs/VALIDATION.md`, and this file.
+  (The round's first briefs also listed `docs/COMPATIBILITY.md`,
+  `COMPLIANCE.md`, `BENCHMARKS.md`, `SCALING.md` and
+  `.github/workflows/gates.yml` — a list carried over from
+  cft-fp256, where those actually live. **None of the five exists
+  here.** Harmless as a prohibition, and a good illustration of why
+  docs/PARCEL-ROUNDS.md says to check that every path in a brief
+  exists.)
 - **Every merge, and the full `make check` after each one** — including
   the fp128 and fp256 legs, which parcels are not expected to run.
 - **The VALIDATION entries.**
@@ -301,7 +311,7 @@ refusing a mismatched wheel.
 | ~~first~~ | integrator | ~~P0~~ **done**, suite green before and after |
 | then, in parallel | P1 · P2 · P3 · P4 · P5 | five worktrees, no shared owned file |
 | as each lands | integrator | merge, seam test, full suite |
-| last | integrator | README support table, COMPATIBILITY, VALIDATION |
+| last | integrator | README support table, docs/VALIDATION.md |
 
 P1 is the long pole and should be dispatched first of the five. P3 and
 P4 are the most likely to finish early. If the day runs short, **P3 and
