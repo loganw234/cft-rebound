@@ -154,8 +154,6 @@ int cft_rebound_check(const struct reb_simulation *r, char *why, size_t n){
         say(why, n, "a custom gravity routine is not supported"); return 1; }
     if (r->gravity_ignore_terms != REB_GRAVITY_IGNORE_TERMS_NONE){
         say(why, n, "r->gravity_ignore_terms must be NONE; this port computes every pair"); return 1; }
-    if (r->softening != 0.0){
-        say(why, n, "non-zero softening is not supported (r->softening != 0)"); return 1; }
     if (r->collision != REB_COLLISION_NONE){
         say(why, n, "collision detection is not supported (r->collision != NONE)"); return 1; }
     if (r->boundary != REB_BOUNDARY_NONE){
@@ -355,6 +353,11 @@ int cft_rebound_steps(struct reb_simulation *r, long nsteps,
                             : (opt->format == CFT_REBOUND_FP128) ? 24
                             : 0;    /* binary64: leave REBOUND's 12 alone */
             if (mi > 0) k += sprintf(cmd + k, " --max-iter %d", mi);
+        if (r->softening != 0.0){
+            char sb[40];
+            hexfloat_print(r->softening, sb);
+            k += sprintf(cmd + k, " --softening %s", sb);
+        }
         }
         if (art) k += sprintf(cmd + k, " --artifact \"%s\"", art);
         k += sprintf(cmd + k, " > \"%s\"", recpath);

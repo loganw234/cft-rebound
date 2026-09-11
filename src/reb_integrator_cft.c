@@ -147,9 +147,6 @@ static int supported(struct reb_simulation *r, struct cft_ias15_state *st){
         refuse(r, "ias15_cft: only REB_GRAVITY_BASIC is supported, r->gravity is %d "
                   "(the tree code, the compensated and the Jacobi modules and a custom "
                   "gravity routine all are not).", (int)r->gravity); return 0; }
-    if (r->softening != 0.0){
-        refuse(r, "ias15_cft: non-zero softening is not supported (r->softening = %g). "
-                  "The engine's pair term adds a softening of exactly +0.", r->softening); return 0; }
     if (r->collision != REB_COLLISION_NONE){
         refuse(r, "ias15_cft: collision detection is not supported (r->collision = %d). "
                   "A collision removes a particle mid-run, which the wide state cannot "
@@ -411,6 +408,10 @@ static void cft_ias15_step(struct reb_simulation *r, void *p){
     for (size_t i = 0; i < N; i++) tmp_m[i] = r->particles[i].m;
     ias15_engine_set_masses_f64(tmp_m);
     ias15_engine_set_G_f64(r->G);
+    /* Set every step for the same reason G and the masses are: a user
+     * may change it between steps and should get what they asked for
+     * rather than what the first step saw. */
+    ias15_engine_set_softening_f64(r->softening);
 
     /* --- the particles ------------------------------------------------
      * The wide state is the truth. r->particles are re-promoted only if

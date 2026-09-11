@@ -72,6 +72,9 @@ static const struct body five[] = {
 };
 
 static int wide_format = CFT_FP64;   /* --wide runs the cft side at binary128 */
+static double soften = 0.0;          /* applied by build() to BOTH sides, so
+                                      * the softening case compares like with
+                                      * like; set and reset around it */
 
 static struct reb_simulation *build(const struct body *bs, size_t n, double dt, double epsilon,
                                     int use_cft){
@@ -79,6 +82,7 @@ static struct reb_simulation *build(const struct body *bs, size_t n, double dt, 
     r->G = 1.0;
     r->dt = dt;
     r->exact_finish_time = 1;
+    r->softening = soften;
     if (use_cft){
         struct cft_ias15_state *s = reb_simulation_set_integrator(r, "ias15_cft");
         if (!s){ fprintf(stderr, "check_dropin: ias15_cft not registered\n"); exit(2); }
@@ -321,7 +325,6 @@ static int refused(const char *what, void (*poison)(struct reb_simulation *)){
     return 1;
 }
 
-static void p_softening(struct reb_simulation *r){ r->softening = 1e-6; }
 static void p_forces(struct reb_simulation *r){ r->additional_forces = nop_forces; }
 static void p_veldep(struct reb_simulation *r){ r->force_is_velocity_dependent = 1; }
 static void p_ghost(struct reb_simulation *r){ r->N_ghost_x = 1; }
@@ -364,7 +367,6 @@ static void p_mode(struct reb_simulation *r){ cft_ias15_get_state(r)->adaptive_m
 
 static void case_refusals(void){
     printf("refusals: each unsupported feature named and the integration stopped\n");
-    refused("non-zero softening",        p_softening);
     refused("additional_forces",         p_forces);
     refused("velocity-dependent forces", p_veldep);
     refused("ghost boxes",               p_ghost);
@@ -429,6 +431,20 @@ int main(int argc, char **argv){
     case_add_particle("kepler, a particle added", 0.05, 1e-9);
 
     printf("\n");
+    /* Softening: not "is it accepted" but "is it still REBOUND's IAS15
+     * with one set", which is the only question worth asking. Both
+     * sides get the same value, and 0.01 is the order of the kepler
+     * problem's closest approach - a softening far below that would
+     * change nothing and the case would pass while exercising
+     * nothing. */
+    printf("\nwith r->softening = 0.01, which REBOUND adds inside the "
+           "square root:\n");
+    soften = 0.01;
+    case_steps("kepler, softened, fixed step",   kepler, 2,      0.05, 0.0,  400);
+    case_steps("kepler, softened, adaptive",     kepler, 2,      0.05, 1e-9, 400);
+    case_steps("pythagorean, softened",          pythagorean, 3, 0.01, 1e-9, 400);
+    soften = 0.0;
+
     case_refusals();
 
     printf("\n");

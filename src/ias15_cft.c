@@ -61,6 +61,7 @@
  *             [--arith rebound|fma] [--engine loop|program] [--programs DIR]
  *             [--no-flag-abort] [--artifact PATH] [--dump-constants] [--quiet]
  *             [--member K] [--dt-file FILE] [--dt-out FILE]
+ *             [--softening S]
  *
  * --artifact opens a tile instead of the software backend; with no flag
  * the program falls back to $CFT_REBOUND_ARTIFACT, which is how the
@@ -354,6 +355,10 @@ static size_t L;           /* lanes per system, 3N */
 static size_t PS, P;       /* pairs per system, pairs in all */
 static V mass;             /* NB */
 static V G;                /* broadcast */
+static V SOFT2;            /* broadcast: r->softening squared, +0 by
+                            * default, so a simulation that sets none
+                            * issues the same operation on the same
+                            * bits it always did */
 #ifndef IAS15_CFT_LIBRARY
 static int member = -1;    /* --member k: run system k of an ensemble file alone */
 static V X0, V0;           /* the initial condition as read (N3) */
@@ -391,6 +396,7 @@ static void read_problem(const char *path){
     NMAX = N3 > P ? N3 : P; if (NMAX < 8) NMAX = 8;
     mass = valloc(NB);
     G = valloc(NMAX);
+    SOFT2 = valloc(NMAX); vzero(SOFT2, NMAX);
     X0 = valloc(N3); V0 = valloc(N3);
     body_names = calloc(NB, sizeof *body_names);
     sys_names = calloc(E, sizeof *sys_names);
@@ -542,7 +548,7 @@ static void gravity(void){
         vadd(ps, pt1, pt2, P);
         vmul(pt1, pdz, pdz, P);
         vadd(ps, ps, pt1, P);
-        vadd(ps, ps, K0, P);                                      /* + softening2, which is 0*0 = +0 */
+        vadd(ps, ps, SOFT2, P);                                   /* + softening2; +0 unless a caller set one */
         vsqrt(pr, ps, P);                                         /* _r */
         vmul(pr3, pr, pr, P);                                     /* _r*_r*_r */
         vmul(pr3, pr3, pr, P);
@@ -1194,6 +1200,8 @@ static void read_dt_file(const char *path, long steps){
 
 int main(int argc, char **argv){
     const char *problem = NULL, *artifact = NULL, *fmtname = "fp64", *dt_file = NULL, *dt_out_path = NULL;
+    const char *soft_txt = NULL;   /* --softening; NULL is +0, which is
+                                    * the addend the port always issued */
     const char *dt_txt = "0.01", *eps_txt = "1e-9";
     long steps = 1000, sample = 100;
     int tol_shift = -1, quiet = 0, do_dump = 0;
@@ -1202,6 +1210,7 @@ int main(int argc, char **argv){
         else if (!strcmp(argv[i], "--problem") && i + 1 < argc) problem = argv[++i];
         else if (!strcmp(argv[i], "--dt") && i + 1 < argc) dt_txt = argv[++i];
         else if (!strcmp(argv[i], "--epsilon") && i + 1 < argc) eps_txt = argv[++i];
+        else if (!strcmp(argv[i], "--softening") && i + 1 < argc) soft_txt = argv[++i];
         else if (!strcmp(argv[i], "--steps") && i + 1 < argc) steps = atol(argv[++i]);
         else if (!strcmp(argv[i], "--sample") && i + 1 < argc) sample = atol(argv[++i]);
         else if (!strcmp(argv[i], "--cs") && i + 1 < argc){ const char *m = argv[++i]; if (!strcmp(m, "kahan")) cs_augmented = 0; else if (!strcmp(m, "augmented")) cs_augmented = 1; else die("--cs kahan|augmented"); }
@@ -1243,6 +1252,16 @@ int main(int argc, char **argv){
     read_problem(problem);
     make_constants(tol_shift, quiet);
     alloc_state();
+    /* After alloc_state: the broadcast is NMAX wide and NMAX is not
+     * known until the pair count is. A decimal or an exact hex float,
+     * like --dt and --epsilon. */
+    if (soft_txt){
+        V t = from_text(soft_txt, is_hex_text(soft_txt));
+        V q = valloc(1);
+        vmul(q, t, t, 1);
+        vbcast(SOFT2, q, NMAX);
+        free(t); free(q);
+    }
 
     /* dt and epsilon from their decimal text, correctly rounded in the
      * format - at binary64 the same bits a C literal would be - or from
@@ -1443,6 +1462,7 @@ int ias15_engine_alloc(size_t n_cap, int max_iter_, int arith_fma_, int cs_aug, 
     NMAX = N3 > P ? N3 : P; if (NMAX < 8) NMAX = 8;
     mass = valloc(NB);
     G = valloc(NMAX);
+    SOFT2 = valloc(NMAX); vzero(SOFT2, NMAX);
     body_names = calloc(NB, sizeof *body_names);
     sys_names = calloc(E, sizeof *sys_names);
     if (!body_names || !sys_names) die("out of memory");
@@ -1496,6 +1516,17 @@ int ias15_engine_adaptive(void){ return adaptive; }
 
 void ias15_engine_set_G_f64(double g_){
     V s = valloc(1); eng_promote(s, &g_, 1); vbcast(G, s, NMAX); free(s);
+}
+
+/* softening SQUARED, taken in the run's format. At binary64 that is
+ * REBOUND's own fl64(s*s); above it, the more accurate square, which
+ * is what a caller asking for a wide format is asking for. */
+void ias15_engine_set_softening_f64(double s_){
+    V a = valloc(1), b = valloc(1);
+    eng_promote(a, &s_, 1);
+    vmul(b, a, a, 1);
+    vbcast(SOFT2, b, NMAX);
+    free(a); free(b);
 }
 
 void ias15_engine_set_masses_f64(const double *m){

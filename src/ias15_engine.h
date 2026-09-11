@@ -76,6 +76,9 @@ void   ias15_engine_set_max_iter(int n);
 void   ias15_engine_set_arith_fma(int on);
 
 void   ias15_engine_set_G_f64(double G);
+/* r->softening. Squared internally in the run's format; 0 is the
+ * default and issues the same +0 addend the port always issued. */
+void   ias15_engine_set_softening_f64(double softening);
 void   ias15_engine_set_masses_f64(const double *m);      /* n_bodies values */
 
 void   ias15_engine_put_xv_f64(const double *x, const double *v);  /* 3n each */
