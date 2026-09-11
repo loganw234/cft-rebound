@@ -52,20 +52,40 @@ static void say_megno(const struct cft_support_ctx *c, char *b, size_t n){
     snprintf(b, n, "MEGNO is not supported; it needs variational particles.");
 }
 
+/* Refused on the subprocess path and NOT on the drop-in.
+ *
+ * The drop-in calls it: the engine's force hook is
+ * reb_simulation_update_acceleration's second half, issued after the
+ * wide gravity at the top of every step attempt and at each of the
+ * seven Gauss-Radau nodes, with r->t set to REBOUND's own
+ * t_beginning + r->dt*h[n] - which is what makes a time-dependent
+ * force see the time REBOUND shows it.
+ *
+ * The subprocess API cannot: it hands the problem to the standalone
+ * ias15_cft program, in another process, which has no way to call a
+ * function pointer in this one. */
 static int hit_additional_forces(const struct cft_support_ctx *c){
     return c->r->additional_forces != NULL;
 }
 static void say_additional_forces(const struct cft_support_ctx *c, char *b, size_t n){
     (void)c;
-    snprintf(b, n, "r->additional_forces is not supported. The engine issues "
-                   "REBOUND's basic pairwise gravity and nothing else.");
+    snprintf(b, n, "r->additional_forces is not supported by this API: the run is "
+                   "handed to the standalone ias15_cft program, in another process, "
+                   "which cannot call a function pointer in this one. The drop-in "
+                   "integrator supports it - it calls the routine after gravity at "
+                   "every Gauss-Radau node, exactly where REBOUND's IAS15 does.");
 }
 
 /* Refused on the subprocess path and NOT on the drop-in, which is not
  * an oversight: the drop-in's step re-promotes any coordinate that
  * changed under it, which is how a callback that edits a particle is
- * meant to work. A REBOUNDx FORCE still reaches the drop-in unrefused
- * and uncomputed, which is the open item README names. */
+ * meant to work. REBOUND's DRIVER calls them, not IAS15 -
+ * reb_simulation_step() at simulation.c:523 and :564, either side of
+ * the integrator callback - so they needed a gate case rather than a
+ * mechanism, and tools/cases_forces.c is it. A REBOUNDx FORCE used to
+ * reach the drop-in unrefused and uncomputed, which was the open item
+ * README named; it is computed now, at every Gauss-Radau node, by the
+ * hook the additional_forces row above describes. */
 static int hit_timestep_mods(const struct cft_support_ctx *c){
     return c->r->pre_timestep_modifications != NULL ||
            c->r->post_timestep_modifications != NULL;
@@ -75,13 +95,25 @@ static void say_timestep_mods(const struct cft_support_ctx *c, char *b, size_t n
     snprintf(b, n, "timestep modifications are not supported (REBOUNDx and the like).");
 }
 
+/* The same split, and for the same reason: the flag only means anything
+ * to a force routine, and the subprocess path cannot run one. On the
+ * drop-in it selects whether the node's velocities are predicted from
+ * the b polynomial before the routine is called - REBOUND's own
+ * `r->calculate_megno || (r->additional_forces &&
+ * r->force_is_velocity_dependent)` at integrator_ias15.c:434 - so the
+ * refusal was inherited from additional_forces rather than required by
+ * anything, and goes with it. */
 static int hit_veldep(const struct cft_support_ctx *c){
     return c->r->force_is_velocity_dependent != 0;
 }
 static void say_veldep(const struct cft_support_ctx *c, char *b, size_t n){
     (void)c;
-    snprintf(b, n, "velocity-dependent forces are not supported "
-                   "(r->force_is_velocity_dependent = 1).");
+    snprintf(b, n, "velocity-dependent forces are not supported by this API "
+                   "(r->force_is_velocity_dependent = 1); they need a force "
+                   "routine, and this API runs the integration in another "
+                   "process. The drop-in integrator supports them: it predicts "
+                   "the velocities at each Gauss-Radau node exactly where "
+                   "REBOUND's IAS15 does.");
 }
 
 static int hit_gravity_module(const struct cft_support_ctx *c){
@@ -268,12 +300,14 @@ static void say_max_iter(const struct cft_support_ctx *c, char *b, size_t n){
  * nothing else depends on it: every row here stops the run.
  *
  * The `paths` column is the whole of the difference between the two
- * entry points. Five rows are one-sided, and each says why above its
- * predicate: the drop-in supports collisions and attached ODE sets,
- * the subprocess API refuses those and also refuses timestep
- * modifications, ignore-terms, a foreign integrator and a body count
- * past the cap; MEGNO, the ensemble count, the format and max_iter are
- * settings only the drop-in has.
+ * entry points, and each one-sided row says why above its predicate:
+ * the drop-in supports collisions, attached ODE sets, additional
+ * forces and velocity-dependent forces, all of which need something
+ * running in THIS process between or during the steps; the subprocess
+ * API refuses those and also refuses timestep modifications,
+ * ignore-terms, a foreign integrator and a body count past the cap;
+ * MEGNO, the ensemble count, the format and max_iter are settings only
+ * the drop-in has.
  */
 const struct cft_support_row cft_support_rows[] = {
     /* the simulation */
@@ -282,9 +316,9 @@ const struct cft_support_row cft_support_rows[] = {
     { "gravity_custom",    CFT_PATH_BOTH,       hit_gravity_custom,    say_gravity_custom    },
     { "variational",       CFT_PATH_BOTH,       hit_variational,       say_variational       },
     { "megno",             CFT_PATH_DROPIN,     hit_megno,             say_megno             },
-    { "additional_forces", CFT_PATH_BOTH,       hit_additional_forces, say_additional_forces },
+    { "additional_forces", CFT_PATH_SUBPROCESS, hit_additional_forces, say_additional_forces },
     { "timestep_mods",     CFT_PATH_SUBPROCESS, hit_timestep_mods,     say_timestep_mods     },
-    { "veldep_forces",     CFT_PATH_BOTH,       hit_veldep,            say_veldep            },
+    { "veldep_forces",     CFT_PATH_SUBPROCESS, hit_veldep,            say_veldep            },
     { "gravity_module",    CFT_PATH_BOTH,       hit_gravity_module,    say_gravity_module    },
     { "ignore_terms",      CFT_PATH_SUBPROCESS, hit_ignore_terms,      say_ignore_terms      },
     { "collision",         CFT_PATH_BOTH,       hit_collision,         say_collision         },
