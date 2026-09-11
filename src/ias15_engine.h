@@ -76,6 +76,43 @@ void   ias15_engine_set_max_iter(int n);
 void   ias15_engine_set_arith_fma(int on);
 
 void   ias15_engine_set_G_f64(double G);
+
+/* ---- which pairs gravity computes ----------------------------------
+ *
+ * REBOUND's reb_gravity_basic_calculate_acceleration() (gravity.c:167)
+ * is two loops and three settings, not one loop over the triangle, and
+ * all three change WHICH addends a particle receives and in what order
+ * - so they cannot be had by zeroing a mass, and this is where they
+ * live. Set them together; the pair-to-particle table is rebuilt once.
+ *
+ *   n_active           r->N_active. (size_t)-1 - REBOUND's SIZE_MAX
+ *                      default - means every particle is active, which
+ *                      is what the engine starts at. Clamped to N.
+ *   testparticle_type  r->testparticle_type. 0: the particles at and
+ *                      above n_active feel the active ones and do not
+ *                      pull back. 1: they pull back.
+ *   ignore_terms       r->gravity_ignore_terms, by value:
+ *                      0 NONE, 1 BETWEEN_0_AND_1, 2 INVOLVING_0.
+ *
+ * A caller reproducing IAS15 will only ever pass 0 for ignore_terms:
+ * reb_integrator_ias15_step() writes NONE over the field at the top of
+ * every step (integrator_ias15.c:875), so no value a user sets survives
+ * to reach gravity under that integrator. The argument exists so that
+ * the value is read from the simulation rather than assumed.
+ *
+ * Cheap on every step - it returns having touched nothing when the
+ * three are unchanged. 0 on success, -1 if not allocated, -2 if
+ * ignore_terms is not one of the three. */
+int    ias15_engine_set_active(size_t n_active, int testparticle_type,
+                               int ignore_terms);
+
+/* One gravity evaluation over the x, masses and restrictions the engine
+ * holds now; the answer is where ias15_engine_get_a_f64() reads it.
+ * Not part of a step: it is how a gate puts this gravity beside
+ * REBOUND's own for one configuration, which is the only way to reach a
+ * setting REBOUND's IAS15 overwrites before gravity ever sees it. */
+void   ias15_engine_gravity(void);
+
 /* Remove one body from the wide state, shifting every vector down so
  * that each survivor keeps its own polynomial and its own wide tail.
  * This is NOT what REBOUND does - REBOUND shifts its particles and

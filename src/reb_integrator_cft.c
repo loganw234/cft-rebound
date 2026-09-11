@@ -469,6 +469,16 @@ static void cft_ias15_step(struct reb_simulation *r, void *p){
     ias15_engine_set_softening_f64(r->softening);
     ias15_engine_set_min_dt_f64(st->min_dt);
     ias15_engine_set_adaptive_mode(st->adaptive_mode);
+    /* And the three settings of the SUM, read where REBOUND's gravity
+     * reads them - after the line at the top of this function that
+     * writes NONE over gravity_ignore_terms, because that line is
+     * reb_integrator_ias15_step() (integrator_ias15.c:875) and gravity
+     * runs downstream of it. So r->gravity_ignore_terms is always NONE
+     * by the time it is passed here, which is exactly what REBOUND's
+     * IAS15 computes; it is read rather than hard-coded so that the
+     * port follows the field rather than a claim about it. */
+    ias15_engine_set_active(r->N_active, r->testparticle_type,
+                            (int)r->gravity_ignore_terms);
 
     /* --- the particles ------------------------------------------------
      * The wide state is the truth. r->particles are re-promoted only if

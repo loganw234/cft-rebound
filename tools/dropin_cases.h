@@ -85,5 +85,8 @@ void cases_wide(void);   /* tools/cases_wide.c - binary128, a smoke test */
 void cases_forces(void); /* tools/cases_forces.c - r->additional_forces at every
                           * substage, and the timestep-modification hooks */
 void cases_modes(void);  /* tools/cases_modes.c - adaptive_mode 0 and 1 */
+void cases_pairs(void);  /* tools/cases_pairs.c - which pairs gravity computes:
+                          * r->N_active, r->testparticle_type and
+                          * r->gravity_ignore_terms */
 
 #endif /* DROPIN_CASES_H */

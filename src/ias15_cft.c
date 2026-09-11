@@ -498,6 +498,89 @@ static V pxi, pxj, pmi, pmj, pdx, pdy, pdz, pt1, pt2, ps, pr, pr3, ppf, ppfi, pp
 static V pcxi, pcyi, pczi, pcxj, pcyj, pczj;
 static V addend;
 
+/* ---- which pairs REBOUND computes, and who receives which of them ----
+ *
+ * reb_gravity_basic_calculate_acceleration() (gravity.c:167), OPENMP
+ * off, is TWO loops and three settings, not one loop over the triangle:
+ *
+ *   active-active   i = starti .. N_active-1, j = startj .. i-1
+ *                   mutual: i takes prefactj, j takes prefacti
+ *   test-active     i = MAX(N_active, starti) .. N-1, j = startj .. N_active-1
+ *                   one-way into i, and into j as well iff testparticle_type
+ *
+ * and gravity_ignore_terms is entirely two bounds (gravity.c:180-181):
+ *
+ *   NONE             starti 1, startj 0   every pair i > j
+ *   BETWEEN_0_AND_1  starti 2, startj 0   only the (1,0) pair is dropped
+ *   INVOLVING_0      starti 2, startj 1   every pair touching 0 is dropped
+ *
+ * What the port has to reproduce is not the SUM but the SEQUENCE: which
+ * addends each particle receives and in what order. Working the loops
+ * through, every particle still receives its partners in ASCENDING
+ * partner index under all three settings and under testparticle_type -
+ * as the `i` of its own pairs (j ascending, all below it), then as the
+ * `j` of later pairs (i ascending, all above it), then the test-active
+ * loop appending indices at or above N_active. So the shape of the
+ * scatter below is the shape the port already had; what changes is the
+ * membership of each particle's list.
+ *
+ * The list is held explicitly because the lengths now differ per
+ * particle: `scat` holds, for particle p of the whole run, the pairs it
+ * receives in order, each encoded as 2*l + side where l indexes the
+ * pair vectors and side is 0 for "p is this pair's i, take pcx/y/zi"
+ * and 1 for "p is its j, take pcx/y/zj".
+ *
+ * The PAIR VECTORS THEMSELVES stay the full triangle. A pair no list
+ * names is computed and never read: that costs time on a run with many
+ * test particles - N(N-1)/2 pair terms where REBOUND does far fewer -
+ * and changes no bit of the answer, which is the trade taken here. What
+ * it buys is that pair_i, pair_j, P and PS are exactly what they were,
+ * so ias15_engine_set_masses_f64()'s gather through pair_i/pair_j and
+ * energy()'s closed-form index s*PS + j*(j-1)/2 + i both keep meaning
+ * what they meant. */
+#define IGN_NONE            0    /* rebound.h:282-284, by value: this file */
+#define IGN_BETWEEN_0_AND_1 1    /* may not include rebound.h (see         */
+#define IGN_INVOLVING_0     2    /* src/ias15_engine.h for why).           */
+
+static size_t eng_active = (size_t)-1;  /* r->N_active; -1 is "every particle" */
+static int    eng_tptype;               /* r->testparticle_type */
+static int    eng_ignore;               /* IGN_* above */
+static size_t *scat;                    /* NB rows of scat_w, 2*l + side */
+static size_t *scat_n;                  /* how many of each row are used */
+static size_t  scat_w;                  /* row stride: the capacity's N - 1 */
+static size_t  scat_max;                /* the longest row, so the shortest
+                                         * scatter loop that covers them all */
+
+static void build_scatter(void){
+    const size_t na     = (eng_active == (size_t)-1 || eng_active > N) ? N : eng_active;
+    const size_t starti = (eng_ignore == IGN_NONE) ? 1 : 2;
+    const size_t startj = (eng_ignore == IGN_INVOLVING_0) ? 1 : 0;
+    memset(scat_n, 0, NB * sizeof *scat_n);
+    for (size_t s = 0; s < E; s++){
+        const size_t base = s * N, pbase = s * PS;
+        /* all active particle pairs; i > j throughout, so the pair's
+         * index is the triangle's own */
+        for (size_t i = starti; i < na; i++)
+            for (size_t j = startj; j < i; j++){
+                const size_t l = pbase + i * (i - 1) / 2 + j;
+                scat[(base + i) * scat_w + scat_n[base + i]++] = 2 * l;
+                scat[(base + j) * scat_w + scat_n[base + j]++] = 2 * l + 1;
+            }
+        /* interactions of test particles with active particles. i is at
+         * or above N_active and j is below it, so i > j here too. */
+        const size_t startitestp = na > starti ? na : starti;
+        for (size_t i = startitestp; i < N; i++)
+            for (size_t j = startj; j < na; j++){
+                const size_t l = pbase + i * (i - 1) / 2 + j;
+                scat[(base + i) * scat_w + scat_n[base + i]++] = 2 * l;
+                if (eng_tptype)
+                    scat[(base + j) * scat_w + scat_n[base + j]++] = 2 * l + 1;
+            }
+    }
+    scat_max = 0;
+    for (size_t p = 0; p < NB; p++) if (scat_n[p] > scat_max) scat_max = scat_n[p];
+}
+
 static void alloc_state(void){
     x = valloc(N3); v = valloc(N3); a = valloc(N3);
     x0 = valloc(N3); v0 = valloc(N3); a0 = valloc(N3); csx = valloc(N3); csv = valloc(N3); csa0 = valloc(N3); at = valloc(N3);
@@ -530,6 +613,17 @@ static void alloc_state(void){
     pcxi = valloc(P); pcyi = valloc(P); pczi = valloc(P); pcxj = valloc(P); pcyj = valloc(P); pczj = valloc(P);
     addend = valloc(N3);
     for (l = 0; l < P; l++){ memcpy(E(pmi, l), E(mass, pair_i[l]), ESZ); memcpy(E(pmj, l), E(mass, pair_j[l]), ESZ); }
+    /* The scatter table, sized for THIS N and never resized: the engine
+     * allocates at its capacity and ias15_engine_set_bodies() only ever
+     * shortens the run, so a fixed row stride keeps every row's address
+     * valid as N falls. No particle can receive more than N - 1 pairs
+     * under any of the settings above - active-active gives it at most
+     * N_active - 1 and test-active at most N - N_active. */
+    scat_w = N > 1 ? N - 1 : 1;
+    scat = calloc(NB * scat_w, sizeof *scat);
+    scat_n = calloc(NB, sizeof *scat_n);
+    if (!scat || !scat_n) die("out of memory");
+    build_scatter();
 }
 
 /* Masking. A system that must not change while the shared vectors do
@@ -577,17 +671,24 @@ static void gravity(void){
         vmul(pcxi, ppfj, pdx, P); vmul(pcyi, ppfj, pdy, P); vmul(pczi, ppfj, pdz, P);   /* what particle i receives */
         vmul(pcxj, ppfi, pdx, P); vmul(pcyj, ppfi, pdy, P); vmul(pczj, ppfi, pdz, P);   /* what particle j receives */
     }
-    /* ax = 0, then each particle's partners in ascending order, which is
-     * the order REBOUND's (i, j<i) loop delivers them; every system's
-     * particles at once, each with its own partners */
+    /* ax = 0, then each particle's pairs in the order REBOUND's two
+     * loops deliver them - build_scatter() above holds that order, one
+     * row per particle; every system's particles at once, each with its
+     * own row.
+     *
+     * The rows are no longer all the same length, so a particle whose
+     * row has run out contributes +0 for the rest of the loop. That is
+     * exact: the running sum starts at +0 (vzero is a memset) and can
+     * never BE -0 - a cancellation rounds to +0 and +0 + -0 is +0 - so
+     * x + (+0) returns x's bits for every value the sum can hold. */
     vzero(a, N3);
-    for (size_t t = 0; t + 1 < N; t++){
+    for (size_t t = 0; t < scat_max; t++){
         for (size_t pg = 0; pg < NB; pg++){
-            size_t s = pg / N, p = pg % N;
-            size_t q = (t < p) ? t : t + 1;   /* the t-th partner of p, within the system */
-            size_t l; V cx, cy, cz;
-            if (q < p){ l = s * PS + p * (p - 1) / 2 + q; cx = pcxi; cy = pcyi; cz = pczi; }
-            else      { l = s * PS + q * (q - 1) / 2 + p; cx = pcxj; cy = pcyj; cz = pczj; }
+            if (t >= scat_n[pg]){ memset(E(addend, 3 * pg), 0, 3 * ESZ); continue; }
+            const size_t enc = scat[pg * scat_w + t], l = enc >> 1;
+            V cx, cy, cz;
+            if (enc & 1){ cx = pcxj; cy = pcyj; cz = pczj; }   /* pg is this pair's j */
+            else        { cx = pcxi; cy = pcyi; cz = pczi; }   /* pg is its i */
             memcpy(E(addend, 3 * pg),     E(cx, l), ESZ);
             memcpy(E(addend, 3 * pg + 1), E(cy, l), ESZ);
             memcpy(E(addend, 3 * pg + 2), E(cz, l), ESZ);
@@ -1994,8 +2095,53 @@ int ias15_engine_set_bodies(size_t n){
     size_t l = 0;
     for (size_t s = 0; s < E; s++)
         for (size_t i = 1; i < N; i++) for (size_t j = 0; j < i; j++){ pair_i[l] = s * N + i; pair_j[l] = s * N + j; l++; }
+    build_scatter();                        /* the rows depend on N too */
     return 0;
 }
+
+/* REBOUND's three gravity restrictions, which are settings of the SUM
+ * and not of the particles: how many of them are active, whether the
+ * inactive ones pull back, and which pairs are dropped outright. All
+ * three reach gravity through one table, so they are set together and
+ * the table is rebuilt once.
+ *
+ *   n_active            r->N_active; (size_t)-1, REBOUND's SIZE_MAX
+ *                       default, means every particle. Clamped to N.
+ *   testparticle_type   r->testparticle_type: 0, the inactive ones do
+ *                       not pull on the active ones; 1, they do.
+ *   ignore_terms        r->gravity_ignore_terms: 0 NONE,
+ *                       1 BETWEEN_0_AND_1, 2 INVOLVING_0.
+ *
+ * REBOUND's own IAS15 writes NONE over gravity_ignore_terms at the top
+ * of every step (integrator_ias15.c:875), so a caller reproducing IAS15
+ * will only ever pass 0 here; the argument exists because the value is
+ * READ from the simulation rather than assumed, and because gravity's
+ * job is to be gravity.
+ *
+ * Cheap to call every step: it returns without touching anything when
+ * nothing changed, which is the common case. Returns 0, or -1 if the
+ * engine has not been allocated. */
+int ias15_engine_set_active(size_t n_active, int testparticle_type, int ignore_terms){
+    if (!eng_cap) return -1;
+    if (ignore_terms != IGN_NONE && ignore_terms != IGN_BETWEEN_0_AND_1 &&
+        ignore_terms != IGN_INVOLVING_0) return -2;
+    if (n_active == eng_active && testparticle_type == eng_tptype &&
+        ignore_terms == eng_ignore) return 0;
+    eng_active = n_active;
+    eng_tptype = testparticle_type;
+    eng_ignore = ignore_terms;
+    build_scatter();
+    return 0;
+}
+
+/* One gravity evaluation over the x, the masses and the restrictions the
+ * engine holds now, leaving the answer where ias15_engine_get_a_f64()
+ * reads it. Not part of a step: it exists so that a gate can put the
+ * port's gravity beside REBOUND's own
+ * reb_gravity_basic_calculate_acceleration() for one configuration at a
+ * time, which is the only way to reach a setting REBOUND's IAS15
+ * overwrites before it ever reaches gravity. */
+void ias15_engine_gravity(void){ if (eng_cap) gravity(); }
 
 int ias15_engine_set_epsilon_f64(double eps){
     if (!eng_cap) return -1;
