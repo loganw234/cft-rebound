@@ -3011,3 +3011,54 @@ regrow at `state->accurate = 1` is still inexact, by construction.
 Reading a cft archive from Python on **Windows** is ungated - the wheel
 is MSVC/UCRT and mingw64 links `msvcrt`, two heaps, and the load path
 frees blobs REBOUND's loader allocated.
+
+## 32. The gate cache, and the control that decides whether to trust it
+
+`make check` reached about an hour during round 2 - five case files in
+`check_dropin` where there was one, a new `gate_subprocess` leg, and the
+archive gates carrying the alias family. That is the wrong instrument
+for "I edited a docstring, did I break anything", so `make check-quick`
+now skips a leg whose inputs have not changed since it passed
+(`tools/gate_cache.py`).
+
+The design decision worth recording is what the key is over: **the
+artifacts a leg executes**, its own script, the data it reads and
+`$CFT_REBOUND_ARTIFACT` - never source files. A source list must
+enumerate every header and flag, and missing one skips a leg that would
+have failed. A binary is the closed-over result of all of them. Finding
+the inputs by grepping each checker rather than assuming immediately
+justified itself: `gate_subprocess` spawns `ias15_cft`, so its key names
+**both** binaries, and a key covering only the gate's own executable
+would have skipped it after the program it drives had changed.
+
+### Three runs, measured
+
+| run | result |
+|---|---|
+| cold, cache deleted | every leg executed, **zero** skips, 14 stamps written, about 18 minutes |
+| warm, nothing changed | **14 of 14 skipped by name**, `rc = 0`, **5 seconds** |
+| invalidated: a comment appended to `src/ias15_cft.c`, rebuilt | the legs that link it **re-ran and re-passed** |
+
+The third is the one that matters, and it is the reason this entry
+exists: a cache that never invalidates is worse than no cache, and it is
+the same shape as the seven gates-that-cannot-fail entry 31 records - a
+mechanism reporting success without doing the work.
+
+`check_dropin`, `check_dropin --wide`, `check_equivalence`,
+`check_program_engine`, `check_records` and `check_ensemble` all re-ran
+and passed before a `timeout 900` on the harness cut the run short -
+`Error 143`, SIGTERM, not a gate. So the invalidation is demonstrated on
+six legs rather than twelve; the remainder were never reached.
+
+### Two legs skipped, and both correctly
+
+`constants` keys only on `tools/gen_constants.py`, which was untouched.
+
+`check_archive` is the informative one, because it was the specific
+outcome that would have meant an under-inclusive key. It does not
+re-run, and it should not: `gate_restart`, `gate_write`, `gate_stock`
+and `gate_promote` link `tests/cft_shim_stub.c` plus `src/cft_archive.c`
+and `src/cft_ias15_fields.c` - a deliberate **stub** shim, so the
+archive is testable without the engine. `src/ias15_cft.c` is not in
+those binaries at all, so touching it cannot change their behaviour. The
+per-leg key was right rather than merely broad.

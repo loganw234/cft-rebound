@@ -476,6 +476,47 @@ convention for a fixed step.
   `--dt-out FILE` records one; `--dt` and `--epsilon` take a decimal
   or an exact hex float.
 
+### The two suite targets, and why one of them skips
+
+`make check` runs every gate at every format. On this host that is about
+an hour, and **it never skips anything** - it is the target whose
+meaning must not change, so it always executes.
+
+`make check-quick` runs the same gates with the cheaper arguments and
+consults a cache: a leg whose inputs are byte for byte what they were
+when that leg last passed is skipped. Measured on this host: **eighteen
+minutes with an empty cache, five seconds when nothing has changed.**
+
+The key is over the **artifacts a leg executes** - the binaries, its own
+script, the data files it reads, and `$CFT_REBOUND_ARTIFACT` - and never
+over source files. A source list has to enumerate every header and every
+compiler flag, and the cost of missing one is skipping a leg that would
+have failed, which is the single outcome this repository exists to
+prevent. A binary is the closed-over result of all of it: if
+`check_dropin` is byte-identical, nothing that could change its answer
+changed. It works here because every verdict in this suite is
+bit-identity - no tolerance, no timing, no seed - so a rerun of the same
+bytes cannot answer differently.
+
+Four things keep it from becoming a gate that cannot fail:
+
+- **`make check` never reads it.** "The full suite passed" means what it
+  has always meant.
+- **Every skip prints itself**, by name and key, with a tally at the
+  end. `make gate-cache-report` shows what is held.
+- **A failure retires the stamp**, so a leg that failed cannot be
+  skipped tomorrow on yesterday's pass.
+- **The cache lives under the build tree** and is written by atomic
+  rename, so it cannot travel between `build/` and `build2/` or between
+  machines, and a half-written stamp cannot be read as valid.
+
+`$CFT_REBOUND_ARTIFACT` is part of every key, so a pass on the software
+backend can never satisfy a run against a card.
+
+One honest consequence: a documentation-only change invalidates nothing,
+so `check-quick` will skip every leg and pass having executed none. That
+is correct, and it is why the skip lines are loud.
+
 ### Running the gates on a card
 
     export CFT_REBOUND_ARTIFACT=/path/to/cft_hw_quad.xclbin

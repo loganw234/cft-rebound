@@ -9,8 +9,18 @@
 #                         drop-in gate and the two libraries
 #   make constants        re-derive and re-check the IAS15 constants
 #   make programs         generate and assemble the sequencer programs
-#   make check            every gate at every format (about half an hour)
-#   make check-quick      the same at binary64 only (a few minutes)
+#   make check            every gate at every format. About an hour on
+#                         this host, and it NEVER skips: it is the thing
+#                         whose meaning must not change.
+#   make check-quick      the same gates with the cheaper arguments, and
+#                         it SKIPS any leg whose inputs are byte for byte
+#                         what they were when that leg last passed
+#                         (tools/gate_cache.py). Measured: eighteen
+#                         minutes cold, five seconds when nothing has
+#                         changed. Every skip prints itself by name.
+#   make gate-cache-report
+#                         what the cache currently holds, and whether
+#                         each stamp came from a full run or a quick one
 #   make archive          the Simulationarchive gate programs
 #   make check-archive    just those gates (seconds)
 #   make dropin           the drop-in library and its gate
@@ -554,6 +564,12 @@ check: all programs $(ARCHIVE_GATES)
 
 # the same gates at binary64 only, in a few minutes
 .PHONY: check-quick
+# What the cache holds, and whether each stamp came from a full run or
+# a quick one. Reads nothing else and changes nothing.
+.PHONY: gate-cache-report
+gate-cache-report:
+	@$(PYTHON) tools/gate_cache.py --report --cache-dir $(B)/.gate-cache
+
 check-quick: all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg constants --mode quick --input tools/gen_constants.py -- $(PYTHON) tools/gen_constants.py --no-write
 	$(GATE_CACHE) --leg check_dropin --mode quick $(IN_DROPIN) -- $(B)/check_dropin$(EXE)
