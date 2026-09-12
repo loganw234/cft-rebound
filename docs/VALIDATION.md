@@ -3062,3 +3062,63 @@ and `src/cft_ias15_fields.c` - a deliberate **stub** shim, so the
 archive is testable without the engine. `src/ias15_cft.c` is not in
 those binaries at all, so touching it cannot change their behaviour. The
 per-leg key was right rather than merely broad.
+
+## 33. --light, and the banner that overstated it
+
+`make check-light` runs every case with most step counts scaled to a
+tenth, floor twenty: **559 s end to end** against the full suite's hour,
+and **159 s against 585** on `check_dropin` alone, the same 130 cases,
+zero failures. It is a fast signal from everything, and never a
+substitute for `make check`.
+
+Three things it had wrong first, every one of them found by measurement
+rather than by design.
+
+### Two cases must opt out, not one
+
+The merge cases fire at step 1291 of 2000; at 200 the merge never
+happens. Both refused to pass vacuously - `no collision occurred (N is
+still 3)` - which is the guard those cases have carried since they were
+written, and the third time in one day it earned its place.
+
+The binary64 exemption went in first. The binary128 one was missed
+because the probe ran `check_dropin --light` and never `--wide --light`,
+and the first end-to-end `make check-light` failed on exactly that, at
+`rc = 2`. Three green component measurements did not add up to a green
+target: **a suite is only as tested as the composition you actually
+ran.** Same shape as entry 30's seam - every part correct, the
+combination untested.
+
+### One family is not scaled, and must not be
+
+`dt_sequence` (`tools/cases_modes.c`) drives `reb_simulation_steps(r, 1)`
+inside its own `for (i < steps)` loop, and `light_steps(1)` returns 1,
+so the step-sequence cases run at **full length** under `--light`. That
+is correct: their subject is where two adaptive criteria diverge over
+many steps, and a tenth of the steps is a different question. The
+integrate-to-a-time cases are likewise untouched - they name a time, not
+a count. Both were already truthful, and "fixing" either would have made
+it lie in the other direction.
+
+### The banners overstated the work
+
+A banner is the only place in this suite that states a step count
+without executing it, so under `--light` it was the only place that
+could overstate the work done. Every one of them printed the declared
+count:
+
+    kepler, fixed step (N = 2, dt = 0.05, epsilon = 0, 400 steps)
+      ok   kepler, fixed step: 2 particles x 9 values and the clock, bit for bit
+
+over a run of 40. The suite exited 0, all 130 cases passed, and the
+leg's own 159-against-585 seconds was the only evidence to the contrary.
+Fourteen banners now print `light_ran(steps)` - the count that runs.
+The three families above are excluded by hand, having been right
+already.
+
+**The control.** Without `--light`, `light_ran(n)` is `n`, so the whole
+non-light log must be byte for byte what it was before the change.
+Captured before, diffed after: `check_dropin` and `check_dropin --wide`,
+both **identical**. That is what separates a printf change from a
+behaviour change, and it is cheap enough that there was no excuse for
+not running it.

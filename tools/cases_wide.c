@@ -39,7 +39,8 @@
 static void case_wide(void){
     const size_t steps = 2000;
     const double dt = 0.05;
-    printf("binary128 through the shim (kepler, fixed dt = %g, %zu steps)\n", dt, steps);
+    printf("binary128 through the shim (kepler, fixed dt = %g, %zu steps)\n",
+           dt, light_ran(steps));
     struct reb_simulation *ra = build(kepler, 2, dt, 0.0, 0);   /* REBOUND's own, binary64 */
     struct reb_simulation *rb = build(kepler, 2, dt, 0.0, 1);   /* the shim at binary128 */
     double e0 = reb_simulation_energy(ra);
@@ -225,7 +226,8 @@ static void wide_take(struct reb_simulation *r, struct wide_snap *s){
 static void case_wide_force(void){
     const size_t steps = 1000;
     const double dt = 0.05;
-    printf("the force hook at binary128 (kepler, fixed dt = %g, %zu steps)\n", dt, steps);
+    printf("the force hook at binary128 (kepler, fixed dt = %g, %zu steps)\n",
+           dt, light_ran(steps));
 
     /* the two ias15_cft runs, one after the other */
     struct wide_snap bare, nop;

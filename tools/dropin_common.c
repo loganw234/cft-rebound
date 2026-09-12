@@ -34,6 +34,20 @@ long light_steps(long n){
     return n / 10 < 20 ? 20 : n / 10;
 }
 
+/* What a banner should print: the count that will actually run.
+ *
+ * A banner is the only place in this suite that states a step count
+ * without executing it, so under --light it is the only place that can
+ * overstate the work done. Measured before this existed: a --light run
+ * printed "400 steps" over a leg that ran 40 in 159 s of the full
+ * run's 585.
+ *
+ * Not every count is scaled, and a banner that is not must NOT use
+ * this: dt_sequence (tools/cases_modes.c) steps one at a time in its
+ * own loop and light_steps(1) is 1, so the step-sequence cases run at
+ * full length under --light and say so truthfully as they are. */
+size_t light_ran(size_t n){ return (size_t)light_steps((long)n); }
+
 /* ------------------------------------------------------------------ */
 /* Problems. Both simulations are built from the same doubles, so the   */
 /* initial conditions cannot be the source of a difference.             */

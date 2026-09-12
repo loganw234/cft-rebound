@@ -371,7 +371,7 @@ static void case_pairs(const char *label, const struct body *bs, size_t n,
                        double dt, double epsilon, size_t steps,
                        size_t n_active, int tp_type){
     printf("%s (N = %zu, N_active = %zu, testparticle_type = %d, %zu steps)\n",
-           label, n, n_active, tp_type, steps);
+           label, n, n_active, tp_type, light_ran(steps));
     struct reb_simulation *ra = build(bs, n, dt, epsilon, 0);
     struct reb_simulation *rb = build(bs, n, dt, epsilon, 1);
     for (int i = 0; i < 2; i++){

@@ -515,18 +515,43 @@ backend can never satisfy a run against a card.
 
 `make check-light` is the third tier, for when you have changed
 something and want a fast signal from *everything* rather than a
-thorough one from part of it. It runs every case with the step counts
-scaled down. Measured on `check_dropin`: **159 seconds against 585, the
-same 130 cases, zero failures.**
+thorough one from part of it. It runs every case, with most step counts
+scaled to a tenth. Measured: **559 seconds end to end**, and on
+`check_dropin` alone **159 seconds against 585, the same 130 cases, zero
+failures.**
 
-One case opts out by name, and the reason is the interesting part. The
-merge case fires its collision at step 1291 of 2000; a tenth of the
-steps is a run in which nothing happens. It does not pass vacuously - it
+Two cases opt out by name, and the reason is the interesting part. The
+merge cases fire their collision at step 1291 of 2000; a tenth of the
+steps is a run in which nothing happens. Neither passes vacuously - each
 reports "no collision occurred ... so this case proves nothing" and
-fails - because that guard has been there since the case was written.
-Scaling it would have turned a real case into a no-op, silently, if the
-guard had not been. It steps through `(reb_simulation_steps)(...)`,
-where the parentheses suppress the scaling macro.
+fails - because that guard has been there since the cases were written.
+Scaling them would have turned two real cases into no-ops, silently, if
+the guard had not been. They step through `(reb_simulation_steps)(...)`,
+where the parentheses suppress the scaling macro. The binary128 one was
+found the hard way: the first `make check-light` failed on it, because
+the probe that cleared the binary64 case had never run `--wide --light`.
+
+Three families are not scaled at all, and that is deliberate too:
+
+- the **integrate-to-a-time** cases name a time rather than a count, so
+  there is no count to scale;
+- the **step-sequence** cases - the ones whose whole subject is two
+  adaptive criteria choosing *different* steps - drive
+  `reb_simulation_steps(r, 1)` in their own loop, and the scaler leaves
+  a 1 alone. Scaling a case about where two sequences diverge over many
+  steps would be scaling away the case;
+- the two merge cases above.
+
+All three were already truthful about it, which is why none of them is
+touched by the banner rule below.
+
+Every banner prints the count it actually ran, not the one its case
+declares. That is a repair rather than a design: the first green
+`check-light` printed `400 steps` over a leg that ran 40, and the only
+thing that caught it was reading the log instead of the exit code. A
+banner is the one place in this suite that states a step count without
+executing it, so it is the one place that can overstate the work done -
+which is the defect this suite exists to find.
 
 `check-light` is never a substitute for `make check`. It says whether a
 change is obviously wrong, not whether it is right.

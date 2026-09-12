@@ -217,7 +217,8 @@ static void case_force(const char *label, const struct body *bs, size_t n,
                        double dt, double epsilon, size_t steps,
                        void (*force)(struct reb_simulation *), int veldep){
     printf("%s (N = %zu, dt = %g, epsilon = %g, %zu steps%s)\n",
-           label, n, dt, epsilon, steps, veldep ? ", velocity-dependent" : "");
+           label, n, dt, epsilon, light_ran(steps),
+           veldep ? ", velocity-dependent" : "");
     struct reb_simulation *ra = build(bs, n, dt, epsilon, 0);
     struct reb_simulation *rb = build(bs, n, dt, epsilon, 1);
     for (int i = 0; i < 2; i++){
@@ -408,7 +409,7 @@ static void case_call_stream(const char *label, const struct body *bs, size_t n,
 static void case_attach_detach(const char *label, const struct body *bs, size_t n,
                                double dt, double epsilon, size_t block){
     printf("%s (%zu steps bare, %zu with a force attached, %zu after detaching it)\n",
-           label, block, block, block);
+           label, light_ran(block), light_ran(block), light_ran(block));
     struct reb_simulation *ra = build(bs, n, dt, epsilon, 0);
     struct reb_simulation *rb = build(bs, n, dt, epsilon, 1);
     reb_simulation_steps(ra, block); reb_simulation_steps(rb, block);
@@ -429,7 +430,7 @@ static void case_attach_detach(const char *label, const struct body *bs, size_t 
 static void case_veldep_flip(const char *label, const struct body *bs, size_t n,
                              double dt, double epsilon, size_t block){
     printf("%s (%zu steps with force_is_velocity_dependent clear, %zu with it set)\n",
-           label, block, block);
+           label, light_ran(block), light_ran(block));
     struct reb_simulation *ra = build(bs, n, dt, epsilon, 0);
     struct reb_simulation *rb = build(bs, n, dt, epsilon, 1);
     ra->additional_forces = f_drag; rb->additional_forces = f_drag;
@@ -450,7 +451,7 @@ static void case_veldep_flip(const char *label, const struct body *bs, size_t n,
 static void case_count_with_force(const char *label, double dt, double epsilon,
                                   size_t block){
     printf("%s (%zu steps of 2 bodies, a third added, %zu, removed again, %zu)\n",
-           label, block, block, block);
+           label, light_ran(block), light_ran(block), light_ran(block));
     struct reb_simulation *ra = build(kepler, 2, dt, epsilon, 0);
     struct reb_simulation *rb = build(kepler, 2, dt, epsilon, 1);
     ra->additional_forces = f_constant; rb->additional_forces = f_constant;
@@ -544,7 +545,7 @@ static void case_timestep_mods(const char *label, const struct body *bs, size_t 
     printf("%s (%s, %zu steps)\n", label,
            pre && post ? "both hooks" : (pre ? "pre_timestep_modifications"
                                              : "post_timestep_modifications"),
-           steps);
+           light_ran(steps));
     struct reb_simulation *ra = build(bs, n, dt, epsilon, 0);
     struct reb_simulation *rb = build(bs, n, dt, epsilon, 1);
     for (int i = 0; i < 2; i++){

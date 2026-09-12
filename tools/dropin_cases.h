@@ -90,6 +90,7 @@ int accepted(const char *row, const char *what, void (*prepare)(struct reb_simul
  * the wrapper can name the real function. */
 extern int light;            /* --light: scale the step counts down */
 long light_steps(long n);    /* n, or a tenth of it with a floor */
+size_t light_ran(size_t n);  /* the same count, for a banner to print */
 #define reb_simulation_steps(r, n) \
         reb_simulation_steps((r), light_steps((long)(n)))
 

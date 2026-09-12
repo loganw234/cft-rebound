@@ -87,7 +87,7 @@ static void case_mode_force(const char *label, const struct body *bs, size_t n,
 
     printf("%s (%s, %s force, N = %zu, %zu steps)\n",
            label, NM[mode], veldep ? "velocity-dependent" : "velocity-independent",
-           n, steps);
+           n, light_ran(steps));
     compare(ra, rb, label);
     reb_simulation_free(ra);
     reb_simulation_free(rb);

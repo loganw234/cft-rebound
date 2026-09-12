@@ -19,7 +19,8 @@
 /* ------------------------------------------------------------------ */
 static void case_steps(const char *label, const struct body *bs, size_t n,
                        double dt, double epsilon, size_t steps){
-    printf("%s (N = %zu, dt = %g, epsilon = %g, %zu steps)\n", label, n, dt, epsilon, steps);
+    printf("%s (N = %zu, dt = %g, epsilon = %g, %zu steps)\n",
+           label, n, dt, epsilon, light_ran(steps));
     struct reb_simulation *ra = build(bs, n, dt, epsilon, 0);
     struct reb_simulation *rb = build(bs, n, dt, epsilon, 1);
     reb_simulation_steps(ra, steps);
@@ -151,7 +152,8 @@ static void case_two_calls(const char *label, const struct body *bs, size_t n,
  * works and is REBOUND's own behaviour. */
 static void case_user_edit(const char *label, const struct body *bs, size_t n,
                            double dt, double epsilon){
-    printf("%s (200 steps, a coordinate nudged, 200 more)\n", label);
+    printf("%s (%zu steps, a coordinate nudged, %zu more)\n",
+           label, light_ran(200), light_ran(200));
     struct reb_simulation *ra = build(bs, n, dt, epsilon, 0);
     struct reb_simulation *rb = build(bs, n, dt, epsilon, 1);
     reb_simulation_steps(ra, 200); reb_simulation_steps(rb, 200);
@@ -169,7 +171,8 @@ static void case_user_edit(const char *label, const struct body *bs, size_t n,
  * the port performs REBOUND's re-slice rather than approximating it,
  * the two below that change the count without passing the mark. */
 static void case_add_particle(const char *label, double dt, double epsilon){
-    printf("%s (150 steps of 2 bodies, a third added, 150 more)\n", label);
+    printf("%s (%zu steps of 2 bodies, a third added, %zu more)\n",
+           label, light_ran(150), light_ran(150));
     struct reb_simulation *ra = build(kepler, 2, dt, epsilon, 0);
     struct reb_simulation *rb = build(kepler, 2, dt, epsilon, 1);
     reb_simulation_steps(ra, 150); reb_simulation_steps(rb, 150);
@@ -198,8 +201,8 @@ static void case_add_particle(const char *label, double dt, double epsilon){
  * here. Four bodies so that the mark is 4, a removal leaves 3, and the
  * one added back lands under it. */
 static void case_remove_then_add(const char *label, double dt, double epsilon){
-    printf("%s (4 bodies, 200 steps, one removed, 200, one added back under the mark, 200)\n",
-           label);
+    printf("%s (4 bodies, %zu steps, one removed, %zu, one added back under the mark, %zu)\n",
+           label, light_ran(200), light_ran(200), light_ran(200));
     struct reb_simulation *ra = build(five, 4, dt, epsilon, 0);
     struct reb_simulation *rb = build(five, 4, dt, epsilon, 1);
     reb_simulation_steps(ra, 200); reb_simulation_steps(rb, 200);

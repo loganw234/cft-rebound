@@ -18,11 +18,13 @@
 #                         (tools/gate_cache.py). Measured: eighteen
 #                         minutes cold, five seconds when nothing has
 #                         changed. Every skip prints itself by name.
-#   make check-light      every gate, every case, with the step counts
-#                         scaled down - a fast signal from everything
-#                         rather than a thorough one. Measured on
-#                         check_dropin: 159 s against 585 s, the same
-#                         130 cases. Never a substitute for `make check`.
+#   make check-light      every gate, every case, with most step counts
+#                         scaled to a tenth - a fast signal from
+#                         everything rather than a thorough one.
+#                         Measured: 559 s end to end, and on check_dropin
+#                         alone 159 s against 585, the same 130 cases.
+#                         Every banner prints the count it actually ran.
+#                         Never a substitute for `make check`.
 #   make gate-cache-report
 #                         what the cache currently holds, and whether
 #                         each stamp came from a full run or a quick one

@@ -231,7 +231,7 @@ int main(int argc, char **argv){
         if (!strcmp(argv[i], "-v")) verbose = 1;
         else if (!strcmp(argv[i], "--wide")){ wide = 1; wide_format = CFT_FP128; }
         else if (!strcmp(argv[i], "--light")) light = 1;
-        else { fprintf(stderr, "usage: check_dropin [-v] [--wide]\n"); return 2; }
+        else { fprintf(stderr, "usage: check_dropin [-v] [--wide] [--light]\n"); return 2; }
 
     cft_ias15_register("ias15_cft");
     /* Several of the step's scratch vectors are sized at their first use,

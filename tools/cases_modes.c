@@ -59,7 +59,7 @@ static void case_mode_steps(const char *label, const struct body *bs, size_t n,
     int save = adaptive_mode;
     adaptive_mode = mode;
     printf("%s (N = %zu, dt = %g, epsilon = %g, %zu steps, adaptive_mode %d %s)\n",
-           label, n, dt, epsilon, steps, mode, mode_name(mode));
+           label, n, dt, epsilon, light_ran(steps), mode, mode_name(mode));
     struct reb_simulation *ra = build(bs, n, dt, epsilon, 0);
     struct reb_simulation *rb = build(bs, n, dt, epsilon, 1);
     reb_simulation_steps(ra, steps);
