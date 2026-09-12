@@ -113,8 +113,14 @@ static void case_wide_collision(void){
         for (size_t k = 0; k < r->N; k++) r->particles[k].r = 0.02;
     }
     size_t n_before = ra->N;
-    reb_simulation_steps(ra, steps);
-    reb_simulation_steps(rb, steps);
+    /* NOT scaled by --light - the parentheses suppress the macro in
+     * tools/dropin_cases.h. Same reason as case_collision in
+     * cases_core.c: the merge fires at step 1291 of 2000, so a tenth
+     * of the steps is a run where nothing happens. This one was
+     * missed when that one was exempted, because the probe ran the
+     * binary64 leg and not --wide; `make check-light` caught it. */
+    (reb_simulation_steps)(ra, steps);
+    (reb_simulation_steps)(rb, steps);
 
     if (rb->status == REB_STATUS_GENERIC_ERROR){
         printf("  FAIL binary128 merge: the step refused\n"); failures++;
