@@ -230,6 +230,7 @@ int main(int argc, char **argv){
     for (int i = 1; i < argc; i++)
         if (!strcmp(argv[i], "-v")) verbose = 1;
         else if (!strcmp(argv[i], "--wide")){ wide = 1; wide_format = CFT_FP128; }
+        else if (!strcmp(argv[i], "--light")) light = 1;
         else { fprintf(stderr, "usage: check_dropin [-v] [--wide]\n"); return 2; }
 
     cft_ias15_register("ias15_cft");

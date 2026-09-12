@@ -21,6 +21,18 @@
 
 int verbose;
 int failures;
+int light;      /* --light: every step count scaled down */
+
+/* A tenth of the steps, never fewer than twenty - below that a case has
+ * not got past its own transient. The floor is deliberately NOT a
+ * safety net for a case that must REACH something: a merge that fires
+ * at step 1291 does not fire at 200, and such a case fails in light
+ * mode rather than passing vacuously. Which cases those are is the
+ * thing to measure, not to guess. */
+long light_steps(long n){
+    if (!light || n <= 20) return n;
+    return n / 10 < 20 ? 20 : n / 10;
+}
 
 /* ------------------------------------------------------------------ */
 /* Problems. Both simulations are built from the same doubles, so the   */

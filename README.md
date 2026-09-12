@@ -513,6 +513,24 @@ Four things keep it from becoming a gate that cannot fail:
 `$CFT_REBOUND_ARTIFACT` is part of every key, so a pass on the software
 backend can never satisfy a run against a card.
 
+`make check-light` is the third tier, for when you have changed
+something and want a fast signal from *everything* rather than a
+thorough one from part of it. It runs every case with the step counts
+scaled down. Measured on `check_dropin`: **159 seconds against 585, the
+same 130 cases, zero failures.**
+
+One case opts out by name, and the reason is the interesting part. The
+merge case fires its collision at step 1291 of 2000; a tenth of the
+steps is a run in which nothing happens. It does not pass vacuously - it
+reports "no collision occurred ... so this case proves nothing" and
+fails - because that guard has been there since the case was written.
+Scaling it would have turned a real case into a no-op, silently, if the
+guard had not been. It steps through `(reb_simulation_steps)(...)`,
+where the parentheses suppress the scaling macro.
+
+`check-light` is never a substitute for `make check`. It says whether a
+change is obviously wrong, not whether it is right.
+
 One honest consequence: a documentation-only change invalidates nothing,
 so `check-quick` will skip every leg and pass having executed none. That
 is correct, and it is why the skip lines are loud.

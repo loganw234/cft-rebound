@@ -79,6 +79,20 @@ int  compare(struct reb_simulation *ra, struct reb_simulation *rb, const char *l
 int refused(const char *row, const char *what, void (*poison)(struct reb_simulation *));
 int accepted(const char *row, const char *what, void (*prepare)(struct reb_simulation *));
 
+/* ---- --light ------------------------------------------------------- *
+ * Scales every step count, so a change gets a fast signal from every
+ * topic rather than a thorough one from all of them. The full suite is
+ * what says a run is right; this says whether it is obviously wrong.
+ *
+ * As a macro over reb_simulation_steps rather than an argument through
+ * eighty call sites: every cases_*.c includes this header, and the
+ * preprocessor does not expand a macro inside its own replacement, so
+ * the wrapper can name the real function. */
+extern int light;            /* --light: scale the step counts down */
+long light_steps(long n);    /* n, or a tenth of it with a floor */
+#define reb_simulation_steps(r, n) \
+        reb_simulation_steps((r), light_steps((long)(n)))
+
 /* ---- the topics ---------------------------------------------------- */
 void cases_core(void);   /* tools/cases_core.c - the binary64 equivalence set */
 void cases_wide(void);   /* tools/cases_wide.c - binary128, a smoke test */

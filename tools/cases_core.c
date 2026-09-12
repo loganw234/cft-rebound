@@ -72,8 +72,14 @@ static void case_collision(const char *label, double dt, double epsilon, size_t 
         for (size_t k = 0; k < r->N; k++) r->particles[k].r = 0.02;
     }
     size_t n_before = ra->N;
-    reb_simulation_steps(ra, steps);
-    reb_simulation_steps(rb, steps);
+    /* NOT scaled by --light, and the parentheses are what say so: they
+     * suppress the macro in tools/dropin_cases.h. This case's step count
+     * IS the case - the merge fires at step 1291 of 2000, so a tenth of
+     * the steps is a run where nothing happens and the assertion below
+     * has nothing to assert about. Measured: light mode broke exactly
+     * this case out of 131, and it said so rather than passing. */
+    (reb_simulation_steps)(ra, steps);
+    (reb_simulation_steps)(rb, steps);
 
     /* Did one actually happen? Without this the case passes whether or
      * not the collision search ever fired, which would make it a test

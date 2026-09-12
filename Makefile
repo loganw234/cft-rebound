@@ -18,6 +18,11 @@
 #                         (tools/gate_cache.py). Measured: eighteen
 #                         minutes cold, five seconds when nothing has
 #                         changed. Every skip prints itself by name.
+#   make check-light      every gate, every case, with the step counts
+#                         scaled down - a fast signal from everything
+#                         rather than a thorough one. Measured on
+#                         check_dropin: 159 s against 585 s, the same
+#                         130 cases. Never a substitute for `make check`.
 #   make gate-cache-report
 #                         what the cache currently holds, and whether
 #                         each stamp came from a full run or a quick one
@@ -574,6 +579,33 @@ check-quick: all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg constants --mode quick --input tools/gen_constants.py -- $(PYTHON) tools/gen_constants.py --no-write
 	$(GATE_CACHE) --leg check_dropin --mode quick $(IN_DROPIN) -- $(B)/check_dropin$(EXE)
 	$(GATE_CACHE) --leg check_dropin_wide --mode quick $(IN_DROPIN) -- $(B)/check_dropin$(EXE) --wide
+	$(GATE_CACHE) --leg check_equivalence --mode quick --input tools/check_equivalence.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_equivalence.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_program_engine --mode quick --input tools/check_program_engine.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) -- $(PYTHON) tools/check_program_engine.py --build $(B) --formats fp64
+	$(GATE_CACHE) --leg check_records --mode quick --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_ensemble --mode quick --input tools/check_ensemble.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_ensemble.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_archive --mode quick --input tools/check_archive.py $(IN_ARCHIVE) -- $(PYTHON) tools/check_archive.py --build $(B)
+	$(GATE_CACHE) --leg check_bodycount --mode quick --input tools/check_bodycount.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_bodycount.py --build $(B) --quick
+	$(GATE_CACHE) --leg gate_real_fp64 --mode quick $(IN_REAL) -- $(B)/gate_real$(EXE) --fp64
+	$(GATE_CACHE) --leg gate_real_fp128 --mode quick $(IN_REAL) -- $(B)/gate_real$(EXE) --fp128
+	$(GATE_CACHE) --leg gate_real_fp256 --mode quick $(IN_REAL) -- $(B)/gate_real$(EXE) --fp256
+	$(GATE_CACHE) --leg gate_subprocess --mode quick $(IN_SUBPROC) -- $(B)/gate_subprocess$(EXE) --build $(B)
+	$(GATE_CACHE) --leg check_checkpoint --mode quick --input tools/check_checkpoint.py $(IN_REAL) -- $(PYTHON) tools/check_checkpoint.py --build $(B) --quick
+	@$(PYTHON) tools/gate_cache.py --report --cache-dir $(B)/.gate-cache
+
+# Every case touched, none of them thoroughly - the step counts are
+# scaled (tools/dropin_cases.h, light_steps). Measured on check_dropin:
+# 159 s against 585 s, the same 130 cases, zero failures. The one case
+# whose step count IS the case opts out by name; see case_collision.
+#
+# Its check_dropin legs are named apart from check-quick's on purpose.
+# The cache keys on the command, so the two could never cross-satisfy -
+# but sharing a stamp file would make each overwrite the other's and
+# neither would ever skip.
+.PHONY: check-light
+check-light: all programs $(ARCHIVE_GATES)
+	$(GATE_CACHE) --leg constants --mode quick --input tools/gen_constants.py -- $(PYTHON) tools/gen_constants.py --no-write
+	$(GATE_CACHE) --leg check_dropin_light --mode quick $(IN_DROPIN) -- $(B)/check_dropin$(EXE) --light
+	$(GATE_CACHE) --leg check_dropin_wide_light --mode quick $(IN_DROPIN) -- $(B)/check_dropin$(EXE) --wide --light
 	$(GATE_CACHE) --leg check_equivalence --mode quick --input tools/check_equivalence.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_equivalence.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_program_engine --mode quick --input tools/check_program_engine.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) -- $(PYTHON) tools/check_program_engine.py --build $(B) --formats fp64
 	$(GATE_CACHE) --leg check_records --mode quick --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B) --quick
