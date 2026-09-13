@@ -82,6 +82,14 @@ for n in 64 256 512; do
   fi
 done
 
+# A record with the two fields that cannot match removed: which backend
+# produced it, and how long it took. Everything else is kept - the data
+# lines and the physics counters - so a real divergence still shows.
+# Comparing the raw files instead reports "differ" on every row while
+# every value is byte-identical, which is a comparison that can only
+# ever fail (measured, 2026-09-13).
+norm_record() { sed -E 's#backend=[^ ]+#backend=X#; s/ seconds=[0-9.]+//; s/ steps_per_s=[0-9.]+//' "$1"; }
+
 run_one() {  # <out> <artifact|""> <fmt> <problem> <steps>
   local out=$1 art=$2 fmt=$3 prob=$4 nsteps=$5 t0 t1
   local -a extra=()
@@ -117,8 +125,8 @@ for pi in "${!PROBS[@]}"; do
         printf '%-22s %-6s %-10s %9s %7s %-10s %s\n' "$pname" "$fmt" "${LABELS[$i]}" "$c_s" - "rc=$c_rc" "$(tail -c 140 "$T/card-$i.txt" | tr '\n' ' ')"
         continue
       fi
-      local_rec="differs"
-      cmp -s "$T/sw.txt" "$T/card-$i.txt" && local_rec="identical"
+      ndiff=$(diff <(norm_record "$T/sw.txt") <(norm_record "$T/card-$i.txt") | grep -c '^[<>]')
+      if [ "$ndiff" -eq 0 ]; then local_rec="identical"; else local_rec="DIFFER:$ndiff"; fi
       cpasses=$(grep -oE 'mean_pc_iterations=[0-9.]+' "$T/card-$i.txt" | head -1 | cut -d= -f2)
       printf '%-22s %-6s %-10s %9s %7s %-10s %s\n' "$pname" "$fmt" "${LABELS[$i]}" "$c_s" \
              "$(awk -v a="$sw_s" -v b="$c_s" 'BEGIN { printf "%.2f", (b > 0) ? a / b : 0 }')" \

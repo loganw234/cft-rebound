@@ -40,6 +40,9 @@ L=$HOME/f128-logs-$NAME; T=/tmp/f128-$NAME
 mkdir -p "$L" "$T"
 LOG=$L/cardtest.log
 log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
+# A record with the two fields that cannot match removed: which backend
+# produced it, and how long it took. Nothing else is touched.
+norm_record() { sed -E 's#backend=[^ ]+#backend=X#; s/ seconds=[0-9.]+//; s/ steps_per_s=[0-9.]+//' "$1"; }
 therm() { xbutil examine -d 0000:02:00.1 -r thermal -r electrical 2>/dev/null | grep -E "FPGA|Int Vcc|^\s*Power  " | sed 's/^\s*//; s/\s\+/ /g' | tr '\n' ';'; }
 last() { tail -n "${2:-1}" "$1" 2>/dev/null | tr '\n' ' ' | cut -c1-"${3:-300}"; }
 {
@@ -116,8 +119,20 @@ last() { tail -n "${2:-1}" "$1" 2>/dev/null | tr '\n' ' ' | cut -c1-"${3:-300}";
     sw=$(awk -v a="$t0" -v b="$t1" 'BEGIN { printf "%.2f", b - a }')
     t0=$(date +%s.%N); build/ias15_cft "$@" --artifact "$X" --quiet > "$T/time-card.txt" 2>&1; t1=$(date +%s.%N)
     card=$(awk -v a="$t0" -v b="$t1" 'BEGIN { printf "%.2f", b - a }')
-    local same="records differ"
-    cmp -s "$T/time-sw.txt" "$T/time-card.txt" && same="records identical"
+    # Compare the RECORD, not the file. Two comment lines cannot match
+    # and must not be allowed to say the arithmetic did not: the header
+    # names the backend, and the trailer carries the elapsed time. A
+    # plain cmp reported "records differ" on every row of this table on
+    # 2026-09-13 while every data line was byte-identical. Everything
+    # else is kept, the physics counters included, so a real divergence
+    # in steps_done, flags_seen, calls or the values themselves still
+    # shows.
+    local same="records DIFFER"
+    if diff -q <(norm_record "$T/time-sw.txt") <(norm_record "$T/time-card.txt") > /dev/null; then
+      same="records identical"
+    else
+      same="records DIFFER in $(diff <(norm_record "$T/time-sw.txt") <(norm_record "$T/time-card.txt") | grep -c '^[<>]') lines"
+    fi
     # The physics counter beside the timing: identical records prove
     # the backends agree, and the corrector's pass count proves the
     # problem posed was the one meant (bit-identity is not validity).
