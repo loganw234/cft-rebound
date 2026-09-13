@@ -50,8 +50,15 @@ struct ias15_engine_view {
 
 /* fmt is a cft_format: CFT_FP64 = 1, CFT_FP128 = 2, CFT_FP256 = 3.
  * artifact NULL selects the software backend.
- * 0 on success; -1 already open, -2 bad format, -3 cft_open failed. */
+ * 0 on success; -1 already open, -2 bad format, -3 cft_open failed,
+ * -4 the device opened but does not carry fmt - a bitstream built
+ * without that rung (cft-rebound's own f128 image has no binary256;
+ * docs/BITSTREAM.md). The device says so itself in CAPS[3:0], libcft
+ * refuses the format before a byte is issued, and this engine refuses
+ * at open rather than at the first operation, by name: the sentence is
+ * in ias15_engine_error() until the next open. */
 int    ias15_engine_open(int fmt, const char *artifact);
+const char *ias15_engine_error(void);
 int    ias15_engine_is_open(void);
 int    ias15_engine_format(void);
 
