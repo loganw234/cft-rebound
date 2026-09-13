@@ -127,8 +127,10 @@ static int engine_check_format(const char *artifact){
     return -1;
 }
 
+#ifndef IAS15_CFT_LIBRARY
 /* --probe: the device's own word on itself, for a reader deciding
- * which image to load - one line per fact, nothing computed. */
+ * which image to load - one line per fact, nothing computed. The
+ * standalone program's alone: the library has no stdout to own. */
 static void probe_device(const char *artifact){
     cft_caps c;
     int f;
@@ -152,6 +154,7 @@ static void probe_device(const char *artifact){
            (unsigned long)c.max_consts, (unsigned long)c.max_scratch,
            (unsigned long)c.seq_features, (int)c.buffers_resident);
 }
+#endif /* !IAS15_CFT_LIBRARY */
 static int         FI;          /* 0 fp64, 1 fp128, 2 fp256 */
 static size_t      ESZ;
 static uint32_t    flags_union;
