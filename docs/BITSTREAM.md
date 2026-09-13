@@ -154,6 +154,88 @@ what is left. The number that transfers is the path delay: 6.640 ns
 here against the full tile's 7.197 at its own ask. Read 150 MHz as at
 or very near this tile's single-CU ceiling, not as a floor.
 
+### What it computes, on the card
+
+Everything this repo and cft-fp256 can ask of the rungs it carries
+(`hw/cardtest-f128.sh`, 2026-09-13, log `~/f128-logs-f128s/cardtest.log`):
+
+| gate | result |
+|---|---|
+| `cft-selftest` over cft-fp256's published vectors | 111 sets, **892,548 cases, all matching**, in 168 s; the binary256 sets skipped by name |
+| `device-test`, three modes | 813, 2004 and 687 checks, **0 failed** |
+| `gate_real --fp64` | **PASS**, 170 s |
+| `gate_real --fp128` | **PASS**, 253 s |
+| `check_dropin --light` | **every case passed**, all 14 drop-in refusal rows exercised, 3,062 s |
+| `check_program_engine fp128` | **PASS**; the FMA form against REBOUND's own rounding sequence differs by 3.245e-34 at most |
+
+892,548 rather than the full tile's 1,071,635 because one format of
+four is gone; nothing else in the census changed.
+
+### The rate
+
+The engine's own, with the operands already resident on the card
+(`cft-resident`, n = 1,048,576, 20 reps), against the staged path the
+library uses by default (`cft-bench`, same n):
+
+| format | resident M elem/s | Mbeat/s per tile | staged M elem/s | staged GB/s |
+|---|---|---|---|---|
+| fp32 | 883.9 | 110.5 | 169.9 | 2.72 |
+| fp64 | 458.3 | 114.6 | 95.6 | 3.06 |
+| fp128 | 234.2 | 117.1 | 46.2 | 2.96 |
+
+Every resident row came back `status 0x0`, with the hardware's bytes
+identical to the software backend's, identical across repeats, and
+identical across compute units. Power at the wall of the tile was
+15.0 W with the card at 37 C.
+
+**The clock reaches the arithmetic.** cft-fp256's read-ahead pair
+measured 100.6 to 106.8 Mbeat/s per tile on the full tile at 135 MHz
+(its docs/BENCHMARKS.md, "The engine, measured"); this tile at 150 MHz
+runs 110.5 to 117.1. That is about 1.10x against a clock ratio of
+1.11x, so the extra megahertz turn into arithmetic almost exactly and
+nothing new became the wall.
+
+**The staged path does not move and cannot.** All three formats sit
+between 2.7 and 3.1 GB/s, the same band every image of this project has
+measured, because that path stages operands across PCIe on every call.
+A faster tile cannot show there. This matters for reading the wall-clock
+table below: `cft_run` is what IAS15 issues.
+
+### What it does for IAS15
+
+Wall clock against the software backend on one core, the program engine
+in the FMA form, `--max-iter 60`. The pass count is printed because
+bit-identity alone would not prove the problem posed was the one meant.
+
+| problem | steps | format | software | card | ratio | corrector passes |
+|---|---|---|---|---|---|---|
+| Kepler, N=2 | 200 | fp64 | 2.61 s | 22.02 s | **0.12x** | 3.43 |
+| Kepler, N=2 | 200 | fp128 | 6.67 s | 40.25 s | **0.17x** | 8.56 |
+| outer, N=6 | 100 | fp128 | 8.67 s | 24.20 s | **0.36x** | 8.42 |
+| nbody, N=64 | 20 | fp64 | 24.19 s | 8.77 s | **2.76x** | 3.20 |
+| nbody, N=64 | 20 | fp128 | 69.63 s | 22.49 s | **3.10x** | 7.95 |
+
+Every one of those records is **byte-identical to the software
+backend's** in every value and every physics counter. The crossover and
+the plateau are exactly where docs/HARDWARE.md put them from the full
+tile: a card loses badly on a handful of coordinates, where per-call
+cost is the whole story, and wins by about 3x from a few dozen bodies
+up. **Removing a rung did not move the crossover**, which is the
+expected result and worth stating: the crossover is set by per-call
+overhead and the scatter in gravity, not by how many rungs the silicon
+carries.
+
+So the honest summary of the single tile is that it is 1.10x the full
+tile where the tile's own rate is what is being measured, and
+indistinguishable from it where IAS15's wall clock is.
+
+**A trap this table set for me.** The first run of it reported "records
+differ" on all five rows while every data line was byte-identical: the
+comparison was `cmp` on the whole file, and a record carries a header
+naming the backend and a trailer carrying elapsed seconds, neither of
+which can ever match. Both scripts now normalise exactly those two
+fields and compare everything else, counters included.
+
 ### What it refuses, on the card
 
 Every layer, measured on this image 2026-09-13 (`hw/cardtest-f128.sh`,
