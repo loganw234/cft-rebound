@@ -247,6 +247,9 @@ Nothing is vendored by hand.
     docs/ENSEMBLE.md         E systems in one run: the layout, the step decision, the gate
     docs/HORIZON.md          when binary64 stops being enough, measured
     docs/HARDWARE.md         the resident design, its break-even, what is unverified
+    docs/BITSTREAM.md        the f128 image: fp32/fp64/fp128 tiles with binary256
+                             left out, how it refuses, how it is built, what it measured
+    hw/                      that image's build flow and card series
     docs/INTEGRATORS.md      which other REBOUND integrators port well, ranked
     docs/PYTHON.md           reaching the integrator from rebound.Simulation, and
                              the four sharp edges that come with it

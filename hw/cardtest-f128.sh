@@ -60,6 +60,15 @@ last() { tail -n "${2:-1}" "$1" 2>/dev/null | tr '\n' ' ' | cut -c1-"${3:-300}";
   done
   CFT_REBOUND_ARTIFACT=$X build/gate_real --fp256 > "$T/gate_real-fp256.txt" 2>&1; rc=$?
   log "gate_real --fp256 (drop-in path): rc=$rc; $(grep -m1 -E 'carries|ERROR|ias15_cft' "$T/gate_real-fp256.txt" | cut -c1-360)"
+  # libcft's own word, with no help from this repo: the status, the
+  # sentence (or its absence) and whether the output was touched.
+  cc -std=c99 -O2 -Wall -I"$H/include" -o "$T/refusal_probe" hw/refusal_probe.c "$H/libcft.a" \
+     -lm -L"$XILINX_XRT/lib" -lxrt_coreutil -lstdc++ -lpthread -luuid > "$T/refusal_probe.build" 2>&1 \
+     || log "refusal_probe did not build: $(last "$T/refusal_probe.build" 3 300)"
+  for fmt in fp128 fp256; do
+    "$T/refusal_probe" "$X" "$fmt" > "$T/refusal-$fmt.txt" 2>&1; rc=$?
+    log "refusal_probe $fmt (libcft directly): rc=$rc; $(tr '\n' ';' < "$T/refusal-$fmt.txt" | cut -c1-420)"
+  done
   # The tile's own refusal: cft-resident reads no CAPS and issues MODE
   # precision 3 to the kernel; the run must end with STATUS[3] and
   # nothing written. Its non-zero rc IS the pass here.
