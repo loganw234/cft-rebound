@@ -115,13 +115,118 @@ Vivado 2022.2's wrapper spells the bit `1'B0` and the check knew only
 negatives cost minutes and whose false positives cost a link of the
 wrong tile.
 
-## Measured
+## Measured: the single tile
 
-TBD - filled from the single at 150 MHz and the multi-tile image.
+`~/cardday-f128s/cft_hw_f128_1x.xclbin` on amd-arc-box, one compute
+unit at **150 MHz**, built 2026-09-13 from cft-fp256 `ca19fe3` (`rtl/`
+tree `0aef8eea`, byte-identical to the revision-4 pair's) by
+cft-rebound `247f5c9`, sha256 `90457667...`, 36,646,752 bytes,
+`hw/verify-image.sh` 8 of 8 PASS.
+
+**It closes at a clock the full tile has never been asked for.** The
+full tile's shipped images are 135 MHz; this one closed 150 with every
+endpoint met.
+
+| | full tile (rev-4 single, 135 MHz) | f128 (150 MHz) |
+|---|---|---|
+| kernel WNS | +0.210 ns | +0.027 ns |
+| failing endpoints | 0 of 129,804 | 0 of 105,669 |
+| implied path delay | 7.197 ns | 6.640 ns |
+| CLB LUTs (placed, shell included) | 252,733 | 220,335 |
+| CLB registers | 230,610 | 216,079 |
+| DSPs | 311 | 168 |
+| BRAM tiles | 258 | 258 |
+| URAM | 12 | 12 |
+
+Net of the 123,897-LUT shell the tile is **96,438 LUTs against
+128,836**, so the binary256 rung was 32,398 LUTs and 143 DSPs - a
+quarter of the tile, close to cft-fp256's model of 35,333 (its
+`docs/LAYOUTS.md`). Block RAM and UltraRAM do not move: they belong to
+the engine and the sequencer, which are `BEAT_BITS`-wide and do not
+shrink with the rungs. `docs/LAYOUTS.md` guessed 150 MHz for this
+variant and marked it "target, unmeasured"; it is measured now, and
+the guess was right to the megahertz.
+
+**+0.027 ns is not headroom, it is arrival.** Vivado works a path
+exactly as hard as the constraint asks and then stops, so a closing
+build always lands just above zero and the slack says nothing about
+what is left. The number that transfers is the path delay: 6.640 ns
+here against the full tile's 7.197 at its own ask. Read 150 MHz as at
+or very near this tile's single-CU ceiling, not as a floor.
+
+### What it refuses, on the card
+
+Every layer, measured on this image 2026-09-13 (`hw/cardtest-f128.sh`,
+log `~/f128-logs-f128s/cardtest.log`):
+
+- **The tile.** `cft-resident -f fp256` issues `MODE` precision 3 with
+  no capability check and the run comes back `status 0x8` - `STATUS[3]`,
+  the refusal bit - with the hardware's flags clean and its output
+  differing from software, because the tile computed nothing.
+- **libcft.** `cft_run(FMA, fp256)` and `cft_reduce(SUM, fp256)` both
+  answer status 2, "operation or format not available on this device",
+  and the output buffer is **untouched** - not zeroed, which would be
+  the worst shape of a wrong answer. `cft_last_error()` is empty, which
+  is ask 3 below.
+- **cft-fp256's own tools.** `device-test` prints "fp256 not on this
+  device, skipped" and passes 813, 2004 and 687 checks with 0 failed in
+  its three modes; the counts are lower than a full tile's because one
+  format of four is gone.
+- **This repo.** The standalone program exits 3 and the drop-in fails
+  the simulation, both with: *"carries fp32 fp64 fp128 (CAPS[3:0] =
+  0x7, 1 tile, contract 0x00000800) and this run asked for fp256"*.
+
+`ias15_cft --probe` on it reports `formats: fp32 fp64 fp128`,
+`format_mask: 0x7`, contract `0x00000800`, and every revision-4
+sequencer capacity intact: 64 deposits, 16,384 instructions, 512
+constants, 256 scratch slots, `seq_features 0xf1f`, resident buffers.
 
 ## The tile count, derived
 
-TBD - `hw/fit.py` on the linked single.
+From the linked single, not from a model of one. `hw/fit.py` takes the
+placed LUT total of a one-tile image and the per-compute-unit cost, and
+the per-CU cost is itself derived from a linked pair. cft-fp256's
+revision-4 pair calibrates it: single 252,733 and quad 640,500 placed,
+so three extra compute units cost 387,767, i.e. **419 LUTs of crossbar
+per CU beyond the tile itself**. (cft-fp256's `hw/gen_layouts.py` uses
+12,626, differenced from 2026-09-02 builds; the revision-4 pair is the
+same RTL generation and the same tools as this image, so it is the
+better calibration. Both are in `hw/fit.py`.)
+
+    # the per-CU cost, from cft-fp256's OWN linked pair, once:
+    python3 hw/fit.py --single-luts 252733 --quad-luts 640500   # -> 419
+    # then this tile's table, from its linked single and that cost:
+    python3 hw/fit.py --single-luts 220335 --per-cu 419
+
+Passing a `--quad-luts` this script itself predicted would derive the
+per-CU cost from the per-CU cost, and the table would then say only
+that the arithmetic is self-consistent. `--per-cu` exists so that
+cannot happen by accident.
+
+| tiles | HBM PCs | model LUT | of device | verdict |
+|---|---|---|---|---|
+| 4 | 16 | 510,909 | 58.7% | fits |
+| 5 | 20 | 607,767 | 69.8% | fits |
+| **6** | **24** | **704,625** | **80.9%** | **tight** |
+| 7 | 28 | 801,483 | 92.0% | no |
+
+**Six is the attempt.** It sits at 80.9% of the device, the same
+neighbourhood as the full-tile quad that closed at 80.6% on 2026-09-02,
+and inside the HBM wall at 24 of 32 pseudo-channels. Seven is 92%,
+past cft-fp256's 85% practical routing limit. Against the shipped
+four-tile full image that is 50% more compute units.
+
+The clock for it is **140 MHz**, not 150. The full tile lost 0.188 ns
+of path going from one compute unit to four at the same ask (+0.210 to
++0.022 at 135 MHz); six units at a higher occupancy should cost at
+least as much, which puts this tile's six-CU ceiling near 145 MHz.
+140 asks for 7.143 ns against a single-CU path of 6.640 and leaves
+about 0.2 ns for the crowding. Six tiles at 140 MHz against four at
+135 is 1.56x the aggregate tile-clock product.
+
+### Measured: the multi-tile image
+
+TBD - the six-tile link started 2026-09-13 12:43.
 
 ## What it asked of cft-fp256
 

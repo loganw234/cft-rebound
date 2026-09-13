@@ -37,16 +37,28 @@ def main() -> int:
     ap.add_argument("--quad-luts", type=int,
                     help="placed CLB LUTs of a four-tile image of the same tile; "
                          "derives the per-CU crossbar cost from the pair")
+    ap.add_argument("--per-cu", type=int,
+                    help="the per-CU crossbar cost, already derived from a linked "
+                         "pair of ANY tile (it is plumbing, not arithmetic, so it "
+                         "carries across variants). Do NOT pass a --quad-luts that "
+                         "this script's own model produced: that derives the cost "
+                         "from itself and the table then says only that the "
+                         "arithmetic is consistent.")
     ap.add_argument("--shell", type=int, default=SHELL_1CU)
     ap.add_argument("--device", type=int, default=LUT_DEVICE)
     a = ap.parse_args()
 
+    if a.quad_luts and a.per_cu:
+        ap.error("--quad-luts and --per-cu both give the per-CU cost; pass one")
     tile = a.single_luts - a.shell
     per_cu = SHELL_PER_EXTRA_CU
     src = "cft-fp256 hw/gen_layouts.py"
     if a.quad_luts:
         per_cu = (a.quad_luts - a.shell - 4 * tile) // 3
         src = "derived from the single/quad pair"
+    elif a.per_cu is not None:
+        per_cu = a.per_cu
+        src = "given"
     print(f"tile: {tile:,} LUT (single {a.single_luts:,} less shell {a.shell:,}); "
           f"each further CU {per_cu:,} ({src}); device {a.device:,}")
     print(f"{'tiles':>5} {'HBM PCs':>7} {'model LUT':>10} {'of device':>9}  verdict")
