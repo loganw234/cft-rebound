@@ -42,3 +42,7 @@ gate1_two.bin
 # Never history - the lead folds what is durable into VALIDATION or
 # ROADMAP and deletes the directory.
 .ledger/
+
+# Bitstream build trees (hw/build-variant.sh --tag NAME): the .xo, the
+# v++ temp dir and the image; gigabytes, never history.
+build-hw-*/
