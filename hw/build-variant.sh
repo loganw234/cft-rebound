@@ -193,9 +193,14 @@ grep -E "^WRAPPER" "$LOGDIR/verify_xo.log" | sed 's/^/    /' | tee -a "$S"
 [ "$rc" -eq 0 ] || die "wrapper check failed (rc=$rc): $LOGDIR/verify_xo.log"
 for g in $GENERICS; do
   n=${g%%=*}; v=${g#*=}
-  # .EN_FP256("0") / .EN_FP256(1'b0) / .EN_FP256(0): strip the spellings.
+  # .EN_FP256("0") / .EN_FP256(1'b0) / .EN_FP256(1'B0) / .EN_FP256(0):
+  # strip the spellings. Vivado 2022.2 writes the sized form with an
+  # UPPERCASE B, which the first version of this line did not know, and
+  # it refused a correctly packaged .xo - the right outcome for a check
+  # whose false negatives cost minutes and whose false positives cost
+  # a two-hour link of the wrong tile.
   got=$(grep -E "^WRAPPER_PARAM: *\.$n *\(" "$LOGDIR/verify_xo.log" | head -1 \
-        | sed -E "s/^WRAPPER_PARAM: *\.$n *\(([^)]*)\).*/\1/" | tr -d '" ' | sed -E "s/^[0-9]+'b//")
+        | sed -E "s/^WRAPPER_PARAM: *\.$n *\(([^)]*)\).*/\1/" | tr -d '" ' | sed -E "s/^[0-9]+'[bB]//")
   [ -n "$got" ] || die "the synthesis wrapper names no $n override at all - the generic did not survive packaging"
   [ "$got" = "$v" ] || die "the synthesis wrapper passes .$n($got), wanted $v"
   echo "    wrapper passes .$n($got) - the generic survived packaging" | tee -a "$S"
