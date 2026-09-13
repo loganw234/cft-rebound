@@ -188,12 +188,24 @@ identical to the software backend's, identical across repeats, and
 identical across compute units. Power at the wall of the tile was
 15.0 W with the card at 37 C.
 
-**The clock reaches the arithmetic.** cft-fp256's read-ahead pair
-measured 100.6 to 106.8 Mbeat/s per tile on the full tile at 135 MHz
-(its docs/BENCHMARKS.md, "The engine, measured"); this tile at 150 MHz
-runs 110.5 to 117.1. That is about 1.10x against a clock ratio of
-1.11x, so the extra megahertz turn into arithmetic almost exactly and
-nothing new became the wall.
+**The clock reaches the arithmetic.** Measured against the full tile
+back to back, same card, same session, same tool, rather than against a
+figure quoted from cft-fp256's record:
+
+| format | full tile @135 MHz | f128 @150 MHz | ratio |
+|---|---|---|---|
+| fp32 | 808.92 M/s (101.11 Mbeat/s) | 897.27 M/s (112.16) | 1.109 |
+| fp64 | 417.23 M/s (104.31 Mbeat/s) | 462.03 M/s (115.51) | 1.107 |
+| fp128 | 211.96 M/s (105.98 Mbeat/s) | 234.95 M/s (117.47) | 1.108 |
+
+The clock ratio is 150/135 = 1.1111 and the measured gain is 99.7 to
+99.8% of it at all three rungs, so the extra megahertz turn into
+arithmetic and removing the rung introduced no new wall. The per-format
+digests are **identical between the two images**
+(`0ab39ba8b1e1ef3a`, `b4dd984b36bc7e7c`, `ca3e223f7f0acad8`): the
+determinism claim holds across a change of silicon, not only across
+backends. Run-to-run spread is about 1.5%, so the back-to-back pair is
+the one the ratio is taken from.
 
 **The staged path does not move and cannot.** All three formats sit
 between 2.7 and 3.1 GB/s, the same band every image of this project has
