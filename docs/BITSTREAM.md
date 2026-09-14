@@ -320,7 +320,27 @@ about 0.2 ns for the crowding. Six tiles at 140 MHz against four at
 
 ### Measured: the multi-tile image
 
-TBD - the six-tile link started 2026-09-13 12:43.
+**Six tiles do not close at 140 MHz.** 389 minutes, kernel WNS
+**-0.558 ns**, 3,015 of 632,233 endpoints failing, no image. Details
+and the lesson in docs/VALIDATION.md entry 35; the short version is
+that the **area** model above was right to within 0.9% (698,188 LUTs
+placed against 704,620 predicted, with block RAM, UltraRAM and DSPs
+exact) and the **timing** estimate was not.
+
+The estimate scaled the full tile's one-unit-to-four penalty of
+0.188 ns, measured at 73.6% occupancy, to six units at 80.19%. The real
+penalty was about 1.06 ns. Area is a sum; timing is not. A per-unit
+timing penalty measured at one occupancy does not predict a higher one,
+because congestion cost is flat while the router has room and steep
+once it does not. The measured six-unit ceiling is a 7.701 ns path,
+about **130 MHz**.
+
+Relaunched at **125 MHz** (8.000 ns, so 0.3 ns of real margin over a
+path the tools have demonstrated) rather than 130 (7.692 ns, nine
+picoseconds under it). Six tiles at 125 against the shipped four at 135
+would be **1.39x** the aggregate tile-clock product.
+
+TBD - the 125 MHz link started 2026-09-13 19:16.
 
 ## What it asked of cft-fp256
 

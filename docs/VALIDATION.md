@@ -3389,3 +3389,102 @@ the claim, and passed.
   configuration had never been simulated before it was linked; and
   fp32 has no generic, so the fp64/fp128-only tile this workload would
   actually want cannot be expressed.
+
+## 35. Six tiles do not close at 140 MHz: the area model was right and the timing extrapolation was not
+
+**2026-09-13, amd-arc-box, same toolchain and pins as entry 34, which
+this entry closes the open item of.** Entry 34 left the six-tile image
+"in placement, not a result". It is a result now, and the result is a
+failure: **389 minutes, kernel WNS -0.558 ns, no image produced.**
+
+### What was asked and what happened
+
+Six compute units of the f128 tile at **140 MHz**, cft-fp256's card-day
+recipe (`RETIMING=1 PHYS_OPT=1`, default directives). Placement
+succeeded and was not memory-killed; routing ran to completion and
+missed.
+
+    kernel_wns_ns: -0.558
+    kernel_failing_endpoints: 3015 of 632233
+    violating_clocks: clk_out1_ulp_clk_wiz_0 -0.558 3015/632233;
+                      hbm_aclk -0.005 9/103249
+
+**3,015 failing endpoints of 632,233 is 0.48% - broad and shallow.**
+That is the signature of routing congestion rather than one pathological
+path: a single bad path fails by a lot at a handful of endpoints, and
+this failed by half a nanosecond across three thousand of them. The
+`hbm_aclk` violation at -0.005 ns on 9 endpoints is the shell's own and
+is the same one Vitis has auto-scaled away on past builds; it is not
+this design's problem.
+
+The implied path delay is 7.143 + 0.558 = **7.701 ns**, so six of these
+tiles top out at about **130 MHz**, not 140.
+
+### The area model was accurate
+
+Predicted from the linked single and cft-fp256's own revision-4 pair
+(entry 34's table), against what actually placed:
+
+| resource | predicted | placed | error |
+|---|---|---|---|
+| CLB LUTs | 704,620 (80.9%) | 698,188 (80.19%) | 0.9% pessimistic |
+| Block RAM | 643.8 | 642.5 (47.81%) | 0.2% |
+| URAM | 52 | 52 (8.13%) | exact |
+| DSPs | 988 | 988 (16.60%) | exact |
+
+Three of four exact and the fourth within one percent, which also
+confirms the tile really did replicate six times rather than something
+being shared or dropped. The super-logic-region split was **84.17% in
+SLR0 against 75.96% in SLR1**.
+
+### The timing extrapolation was not, and the reason is the interesting part
+
+The estimate that chose 140 MHz came from cft-fp256's full tile, where
+going from one compute unit to four cost **0.188 ns** of path at a
+fixed ask (+0.210 at one unit, +0.022 at four, both at 135 MHz). Six
+units being more crowded than four, that was scaled to an assumed
+0.2 to 0.3 ns and taken off the f128 single's 6.640 ns path, giving a
+predicted six-unit ceiling of 144 to 146 MHz and 140 as the safe ask.
+
+The actual penalty was about **1.06 ns**, three to five times the
+assumption.
+
+**Area is a sum and timing is not.** The full tile's four units sit at
+73.6% of the device; these six sit at 80.19%. Six and a half points of
+occupancy turned a 0.188 ns penalty into roughly a nanosecond, because
+the cost of congestion is not linear in how full the part is - it is
+flat until the router has room to spare and then it is not. Every LUT
+figure in entry 34 extrapolated correctly because adding a tile adds
+its LUTs; the timing did not, because adding a tile does not add a
+fixed quantity of delay, it changes how hard every other tile is to
+route.
+
+So the transferable rule, and the one this project had already written
+down in another form: **a per-unit penalty measured at one occupancy
+does not predict timing at a higher one.** cft-fp256's "read the path
+delay, not the slack" says the tool works exactly as hard as the ask;
+this adds that how hard it *can* work depends on how full the die is,
+and that relationship has to be sampled rather than extrapolated. Two
+points at different occupancies would have been worth the six and a half
+hours this cost, and one point plus an assumption was not.
+
+### What was done about it
+
+Relaunched at **125 MHz**, 19:16, same six tiles and the same recipe.
+125 asks for 8.000 ns against the 7.701 ns the router actually
+achieved while failing, so there is 0.3 ns of real margin rather than
+an extrapolation. 130 MHz was rejected deliberately: it asks for
+7.692 ns, nine picoseconds *under* a path the tools have already
+demonstrated, and a coin flip is not worth six and a half hours.
+
+If it closes, six tiles at 125 MHz against the shipped four at 135 is
+**1.39x** the aggregate tile-clock product rather than the 1.56x
+entry 34 projected at 140. Whether IAS15 collects any of it is the same
+open question, and entry 34's wall-clock table is the reason to expect
+very little: the clock bought 1.108x of arithmetic rate and 1.00x of
+IAS15 wall clock, because per-call staging and the scatter in gravity
+set that number and neither is a function of the silicon's rung count
+or its clock.
+
+The failed build's manifest is kept. It records the timing it reached
+and is the only evidence of this tile's six-unit ceiling.
