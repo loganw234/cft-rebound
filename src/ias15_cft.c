@@ -161,6 +161,21 @@ static uint32_t    flags_union;
 static int         flag_abort = 1;
 static unsigned long long ncalls, ncalls_divsqrt;
 
+/* Where a step's wall clock goes, by category - the measurement that
+ * decides which of residency, call count and the gather is the wall
+ * (docs/HARDWARE.md, "Moving the state onto the card"). Every library
+ * call is timed and bucketed, gravity() is timed inclusively, and the
+ * bytes each call presents to the library are summed as what a staged
+ * backend would move: operands in, results out, at the format's width.
+ * Wall time rather than clock(), because on a device the wait is the
+ * point. Appended to the trailer as key=value; nothing else changes. */
+static unsigned long long ncalls_program, nbytes_staged;
+static double t_program, t_elem, t_divsqrt, t_gravity;
+static double now_s(void){
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + 1e-9 * (double)ts.tv_nsec;
+}
+
 static void die(const char *fmt, ...){
     va_list ap; va_start(ap, fmt);
     fprintf(stderr, "ias15_cft: ");
@@ -219,23 +234,23 @@ static void *cbytes(size_t n){
 /* Elementwise operations. d may alias any input (cft_run's rule).      */
 /* ------------------------------------------------------------------ */
 static void vfma(V d, const V a, const V b, const V c, size_t n){
-    uint32_t fl = 0; cft_status st = cft_run(dev, CFT_FMA, F, CFT_RNE, a, b, c, d, n, &fl, NULL); note(st, fl, "fma"); }
+    uint32_t fl = 0; double _t0 = now_s(); nbytes_staged += (unsigned long long)n * ESZ * 4; cft_status st = cft_run(dev, CFT_FMA, F, CFT_RNE, a, b, c, d, n, &fl, NULL); t_elem += now_s() - _t0; note(st, fl, "fma"); }
 static void vadd(V d, const V a, const V c, size_t n){
-    uint32_t fl = 0; cft_status st = cft_run(dev, CFT_ADD, F, CFT_RNE, a, NULL, c, d, n, &fl, NULL); note(st, fl, "add"); }
+    uint32_t fl = 0; double _t0 = now_s(); nbytes_staged += (unsigned long long)n * ESZ * 3; cft_status st = cft_run(dev, CFT_ADD, F, CFT_RNE, a, NULL, c, d, n, &fl, NULL); t_elem += now_s() - _t0; note(st, fl, "add"); }
 static void vsub(V d, const V a, const V c, size_t n){
-    uint32_t fl = 0; cft_status st = cft_run(dev, CFT_SUB, F, CFT_RNE, a, NULL, c, d, n, &fl, NULL); note(st, fl, "sub"); }
+    uint32_t fl = 0; double _t0 = now_s(); nbytes_staged += (unsigned long long)n * ESZ * 3; cft_status st = cft_run(dev, CFT_SUB, F, CFT_RNE, a, NULL, c, d, n, &fl, NULL); t_elem += now_s() - _t0; note(st, fl, "sub"); }
 static void vcopysign(V d, const V a, const V b, size_t n){
-    uint32_t fl = 0; cft_status st = cft_run(dev, CFT_COPYSIGN, F, CFT_RNE, a, b, NULL, d, n, &fl, NULL); note(st, fl, "copysign"); }
+    uint32_t fl = 0; double _t0 = now_s(); nbytes_staged += (unsigned long long)n * ESZ * 3; cft_status st = cft_run(dev, CFT_COPYSIGN, F, CFT_RNE, a, b, NULL, d, n, &fl, NULL); t_elem += now_s() - _t0; note(st, fl, "copysign"); }
 static void vmul(V d, const V a, const V b, size_t n){
-    uint32_t fl = 0; cft_status st = cft_run(dev, CFT_MUL, F, CFT_RNE, a, b, NULL, d, n, &fl, NULL); note(st, fl, "mul"); }
+    uint32_t fl = 0; double _t0 = now_s(); nbytes_staged += (unsigned long long)n * ESZ * 3; cft_status st = cft_run(dev, CFT_MUL, F, CFT_RNE, a, b, NULL, d, n, &fl, NULL); t_elem += now_s() - _t0; note(st, fl, "mul"); }
 static void vneg(V d, const V a, size_t n){
-    uint32_t fl = 0; cft_status st = cft_run(dev, CFT_NEG, F, CFT_RNE, a, NULL, NULL, d, n, &fl, NULL); note(st, fl, "neg"); }
+    uint32_t fl = 0; double _t0 = now_s(); nbytes_staged += (unsigned long long)n * ESZ * 2; cft_status st = cft_run(dev, CFT_NEG, F, CFT_RNE, a, NULL, NULL, d, n, &fl, NULL); t_elem += now_s() - _t0; note(st, fl, "neg"); }
 static void vabs(V d, const V a, size_t n){
-    uint32_t fl = 0; cft_status st = cft_run(dev, CFT_ABS, F, CFT_RNE, a, NULL, NULL, d, n, &fl, NULL); note(st, fl, "abs"); }
+    uint32_t fl = 0; double _t0 = now_s(); nbytes_staged += (unsigned long long)n * ESZ * 2; cft_status st = cft_run(dev, CFT_ABS, F, CFT_RNE, a, NULL, NULL, d, n, &fl, NULL); t_elem += now_s() - _t0; note(st, fl, "abs"); }
 static void vdiv(V d, const V a, const V b, size_t n){
-    uint32_t fl = 0; ncalls_divsqrt++; cft_status st = cft_div(dev, F, CFT_RNE, a, b, d, n, &fl, NULL); note(st, fl, "div"); }
+    uint32_t fl = 0; ncalls_divsqrt++; double _t0 = now_s(); nbytes_staged += (unsigned long long)n * ESZ * 3; cft_status st = cft_div(dev, F, CFT_RNE, a, b, d, n, &fl, NULL); t_divsqrt += now_s() - _t0; note(st, fl, "div"); }
 static void vsqrt(V d, const V a, size_t n){
-    uint32_t fl = 0; ncalls_divsqrt++; cft_status st = cft_sqrt(dev, F, CFT_RNE, a, d, n, &fl, NULL); note(st, fl, "sqrt"); }
+    uint32_t fl = 0; ncalls_divsqrt++; double _t0 = now_s(); nbytes_staged += (unsigned long long)n * ESZ * 2; cft_status st = cft_sqrt(dev, F, CFT_RNE, a, d, n, &fl, NULL); t_divsqrt += now_s() - _t0; note(st, fl, "sqrt"); }
 static void vclass(uint8_t *cls, const V a, size_t n){
     ncalls++; cft_status st = cft_class(dev, F, a, cls, n);
     if (st != CFT_OK) die("class: %s", cft_strerror(st)); }
@@ -725,7 +740,9 @@ static void zero_sys(V dst, size_t s){ memset(E(dst, L * s), 0, L * ESZ); }
 /* ------------------------------------------------------------------ */
 /* Gravity, as REBOUND's reb_gravity_basic_calculate_acceleration       */
 /* ------------------------------------------------------------------ */
-static void gravity(void){
+static void gravity_body(void);
+static void gravity(void){ double _t0 = now_s(); gravity_body(); t_gravity += now_s() - _t0; }
+static void gravity_body(void){
     if (P){
         /* per pair, in the order of REBOUND's loop, vectorised over pairs */
         for (size_t l = 0; l < P; l++){ memcpy(E(pxi, l), E(x, 3 * pair_i[l]), ESZ); memcpy(E(pxj, l), E(x, 3 * pair_j[l]), ESZ); }
@@ -974,7 +991,11 @@ static void run_program(cft_program *prog, const V a_, const V bb, const V c, si
     ra.scratch_out = nsout ? prog_sout : NULL; ra.scratch_out_bytes = nsout * N3 * ESZ;
     ra.deposits = prog_dep; ra.counts = NULL;
     uint32_t fl = 0, bus = 0; ra.flags_out = &fl; ra.bus_out = &bus;
+    ncalls_program++;
+    nbytes_staged += (unsigned long long)ESZ * (3 * N3 + nbank + (nsin + nsout) * N3 + N3);
+    double _t0 = now_s();
     cft_status st = cft_program_run_ex(prog, &ra);
+    t_program += now_s() - _t0;
     if (st == CFT_OK && (bus & CFT_STATUS_DEPOSIT_OVERFLOW)) die("%s: deposit overflow", what);
     note(st, fl, what);
 }
@@ -2018,7 +2039,7 @@ int main(int argc, char **argv){
     }
 
     V Eo = valloc(E);
-    clock_t c0 = clock();
+    clock_t c0 = clock(); double w0 = now_s();
     long k = 0, blocks_done = 0;
     while (1){
         energy_all(Eo);
@@ -2057,6 +2078,8 @@ int main(int argc, char **argv){
            done[0], mx_all, rej_all,
            att_all ? (double)pc_all / (double)att_all : 0.0, pcmax_all,
            flags_union, ncalls, ncalls_divsqrt, secs, secs > 0 ? done[0] / secs : 0.0);
+    printf(" wall_seconds=%.3f t_program=%.3f t_elem=%.3f t_divsqrt=%.3f t_gravity=%.3f program_calls=%llu staged_bytes=%llu",
+           now_s() - w0, t_program, t_elem, t_divsqrt, t_gravity, ncalls_program, nbytes_staged);
     if (E > 1) printf(" E=%zu system_steps_per_s=%.2f pc_lane_efficiency=%.3f", E, secs > 0 ? (double)done[0] * (double)E / secs : 0.0,
                       pc_lane_max ? (double)pc_lane_sum / (double)pc_lane_max : 0.0);
     printf("\n");
