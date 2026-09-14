@@ -61,16 +61,28 @@ def run_timed(cmd, env=None):
 
 
 def data_only(record: str) -> str:
-    """Just the numbers, for comparing across PROGRAMS.
+    """The values the equivalence claim is actually about, for comparing
+    across PROGRAMS - defined the way tools/check_equivalence.py defines
+    it, not a fresh way.
 
-    ias15_ref and ias15_cft write different header lines - one is
-    REBOUND's own settings, the other carries cs, arith, engine and the
-    tolerance shift - so a whole-record compare between them can never
-    match and would report a divergence that is not there. What the
-    equivalence claim is about is the values, and those are the
-    non-comment lines."""
-    return "\n".join(l for l in record.splitlines()
-                     if l.strip() and not l.startswith("#"))
+    Two things are excluded and both would otherwise report a divergence
+    that is not one. The header lines differ because the programs differ
+    (one carries REBOUND's settings, the other cs, arith, engine and the
+    tolerance shift). And everything after the `|` is the exact-time
+    pair, a double-double decomposition of the instant the sample was
+    taken: ias15_ref and ias15_cft split the same time differently
+    between the high and low word, so those two fields differ while `t`
+    itself and every coordinate are bit-identical. The gate's own parser
+    truncates at the `|` for exactly this reason."""
+    out = []
+    for line in record.splitlines():
+        if not line.startswith("sample "):
+            continue
+        toks = line.split()
+        if "|" in toks:
+            toks = toks[:toks.index("|")]
+        out.append(" ".join(toks))
+    return "\n".join(out)
 
 
 def normalise(record: str) -> str:
