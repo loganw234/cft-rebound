@@ -67,6 +67,16 @@
  * the program falls back to $CFT_REBOUND_ARTIFACT, which is how the
  * whole gate suite reaches a card without any gate taking a flag.
  */
+/* clock_gettime and CLOCK_MONOTONIC, for the per-category wall clock in
+ * the trailer. Under -std=c99 glibc declares neither without a POSIX
+ * feature macro, and mingw declares both regardless - which is exactly
+ * how the instrumentation compiled clean on Windows and broke the Linux
+ * build (2026-09-14). 200112L rather than 199309L: cft-fp256 found the
+ * older value hides snprintf on Darwin. Before any header, because the
+ * first one pulls the system headers in. */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200112L
+#endif
 #include "cft.h"
 #include "ias15_constants.h"
 #include "ias15_limits.h"
