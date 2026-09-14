@@ -492,7 +492,15 @@ static int bind_engine(struct reb_simulation *r, struct cft_ias15_state *st){
     if (!engine_ready){
         size_t cap = reserve_N > r->N ? reserve_N : r->N;
         const char *art = resolve_artifact();
-        if (ias15_engine_open(st->format, art) != 0){
+        int orc = ias15_engine_open(st->format, art);
+        if (orc == -4){
+            /* The device opened and lacks the format. The engine's
+             * sentence names the artifact, what it carries and what was
+             * asked; nothing was computed, and nothing will be. */
+            refuse(r, "ias15_cft: %s", ias15_engine_error());
+            return 0;
+        }
+        if (orc != 0){
             refuse(r, "ias15_cft: cft_open(%s) failed: %s",
                    art ? art : "software backend", cft_last_error());
             return 0;

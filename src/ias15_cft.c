@@ -82,6 +82,79 @@
 /* ------------------------------------------------------------------ */
 static cft_device *dev;
 static cft_format  F;
+
+/* What the opened device carries, checked against what the run asked
+ * for, BEFORE anything is issued. libcft already refuses an absent
+ * format (cft_run answers CFT_ERR_UNSUPPORTED from CAPS[3:0], and the
+ * tile itself would refuse with STATUS[3] if asked), but that refusal
+ * arrives at the first operation as a bare status with no sentence -
+ * die() would print "fma: operation or format not available on this
+ * device ()", which names neither the artifact, nor what it does
+ * carry, nor what was asked. A bitstream built without a rung
+ * (docs/BITSTREAM.md: the f128 image has no binary256) is a
+ * deliberate product, so its refusal is written out in full, once, at
+ * open. eng_err holds the sentence for the library path, where there
+ * is no stderr to own. */
+static char eng_err[640];
+
+static int engine_check_format(const char *artifact){
+    cft_caps c;
+    char have[64] = "";
+    int f;
+    memset(&c, 0, sizeof c);
+    c.struct_size = sizeof c;
+    if (cft_get_caps(dev, &c) != CFT_OK){
+        snprintf(eng_err, sizeof eng_err, "cft_get_caps(%s) failed: %s",
+                 artifact ? artifact : "software backend", cft_last_error());
+        return -1;
+    }
+    if (cft_supports(dev, CFT_FMA, F)) return 0;
+    for (f = 0; f < 4; f++)
+        if (c.format_mask & (1u << f)){
+            size_t l = strlen(have);
+            snprintf(have + l, sizeof have - l, "%s%s", l ? " " : "",
+                     cft_format_name((cft_format)f));
+        }
+    snprintf(eng_err, sizeof eng_err,
+             "%s carries %s (CAPS[3:0] = 0x%x, %u tile%s, contract 0x%08x) and this run asked "
+             "for %s. The image publishes what it implements and libcft refuses the rest "
+             "before a byte is issued, so nothing was computed. Run at a format the image "
+             "carries, or point CFT_REBOUND_ARTIFACT at an image that carries %s "
+             "(docs/BITSTREAM.md).",
+             artifact ? artifact : "the software backend", have[0] ? have : "no format",
+             (unsigned)(c.format_mask & 0xFu), (unsigned)c.tiles, c.tiles == 1 ? "" : "s",
+             (unsigned)c.device_version, cft_format_name(F), cft_format_name(F));
+    return -1;
+}
+
+#ifndef IAS15_CFT_LIBRARY
+/* --probe: the device's own word on itself, for a reader deciding
+ * which image to load - one line per fact, nothing computed. The
+ * standalone program's alone: the library has no stdout to own. */
+static void probe_device(const char *artifact){
+    cft_caps c;
+    int f;
+    memset(&c, 0, sizeof c);
+    c.struct_size = sizeof c;
+    printf("artifact: %s\n", artifact ? artifact : "(software backend)");
+    if (cft_get_caps(dev, &c) != CFT_OK){
+        printf("cft_get_caps: failed: %s\n", cft_last_error());
+        return;
+    }
+    printf("backend: %s\ntiles: %u\ncontract: 0x%08x\nformats:", c.backend,
+           (unsigned)c.tiles, (unsigned)c.device_version);
+    for (f = 0; f < 4; f++)
+        if (c.format_mask & (1u << f)) printf(" %s", cft_format_name((cft_format)f));
+    printf("\nformat_mask: 0x%x\n", (unsigned)(c.format_mask & 0xFu));
+    printf("supports %s: %s\n", cft_format_name(F),
+           cft_supports(dev, CFT_FMA, F) ? "yes" : "NO - a run at this format is refused by name");
+    printf("max_deposits: %lu\nmax_insns: %lu\nmax_consts: %lu\nmax_scratch: %lu\n"
+           "seq_features: 0x%lx\nbuffers_resident: %d\n",
+           (unsigned long)c.max_deposits, (unsigned long)c.max_insns,
+           (unsigned long)c.max_consts, (unsigned long)c.max_scratch,
+           (unsigned long)c.seq_features, (int)c.buffers_resident);
+}
+#endif /* !IAS15_CFT_LIBRARY */
 static int         FI;          /* 0 fp64, 1 fp128, 2 fp256 */
 static size_t      ESZ;
 static uint32_t    flags_union;
@@ -1789,7 +1862,7 @@ int main(int argc, char **argv){
                                     * the addend the port always issued */
     const char *dt_txt = "0.01", *eps_txt = "1e-9";
     long steps = 1000, sample = 100;
-    int tol_shift = -1, quiet = 0, do_dump = 0;
+    int tol_shift = -1, quiet = 0, do_dump = 0, do_probe = 0;
     for (int i = 1; i < argc; i++){
         if (!strcmp(argv[i], "--format") && i + 1 < argc) fmtname = argv[++i];
         else if (!strcmp(argv[i], "--problem") && i + 1 < argc) problem = argv[++i];
@@ -1829,6 +1902,7 @@ int main(int argc, char **argv){
         else if (!strcmp(argv[i], "--dt-out") && i + 1 < argc) dt_out_path = argv[++i];
         else if (!strcmp(argv[i], "--no-flag-abort")) flag_abort = 0;
         else if (!strcmp(argv[i], "--dump-constants")) do_dump = 1;
+        else if (!strcmp(argv[i], "--probe")) do_probe = 1;
         else if (!strcmp(argv[i], "--quiet")) quiet = 1;
         else die("unknown argument %s", argv[i]);
     }
@@ -1846,6 +1920,11 @@ int main(int argc, char **argv){
     }
     cft_status st = cft_open(artifact, 0, &dev);
     if (st != CFT_OK) die("cft_open(%s): %s (%s)", artifact ? artifact : "software", cft_strerror(st), cft_last_error());
+    /* --probe reports and never refuses: it is how a reader learns
+     * which format an image would refuse. Everything else is refused
+     * here, by name, before a constant is derived or a byte issued. */
+    if (do_probe){ probe_device(artifact); return 0; }
+    if (engine_check_format(artifact)) die("%s", eng_err);
     if (!problem){
         if (do_dump){ NMAX = 8; make_constants(tol_shift, quiet); dump_constants(); return 0; }
         die("usage: ias15_cft --format F --problem FILE [--dt DT] [--epsilon EPS] [--steps N] [--sample K] [--cs kahan|augmented] [--member K] [--dt-file FILE]");
@@ -2045,7 +2124,14 @@ int ias15_engine_open(int fmt, const char *artifact){
         default: return -2;
     }
     ESZ = cft_format_size(F);
+    eng_err[0] = 0;
     if (cft_open(artifact, 0, &dev) != CFT_OK) return -3;
+    if (engine_check_format(artifact)){
+        /* The device is real and lacks the format: close it, say so in
+         * ias15_engine_error(), and let the caller refuse by name. */
+        cft_close(dev); dev = NULL;
+        return -4;
+    }
     /* A REBOUND user's process must not be killed by an underflow that
      * REBOUND's own IAS15 would have taken silently. The flags are still
      * accumulated and readable through ias15_engine_flags(). */
@@ -2055,6 +2141,7 @@ int ias15_engine_open(int fmt, const char *artifact){
 }
 
 int ias15_engine_is_open(void){ return eng_open; }
+const char *ias15_engine_error(void){ return eng_err; }
 int ias15_engine_format(void){ return (int)F; }
 size_t ias15_engine_capacity(void){ return eng_cap; }
 uint32_t ias15_engine_flags(void){ return flags_union; }

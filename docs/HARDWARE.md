@@ -388,3 +388,161 @@ card, and what needs the card to confirm:
 4. A mixed ensemble (members needing 10 and 23 passes in the same
    step) to price idle lanes on the tile in wall time, which is what
    decides whether the lane-mask ask is worth its library change.
+
+## The specialised bitstream: tried, measured, and worth 2%
+
+**2026-09-13/14.** Everything above treats the tile as given. It is not:
+cft-fp256's kernel carries trim generics, so an image can be built with
+the binary256 rung left out - smaller, faster, and refusing binary256 by
+name. That was built, on the reasoning that this integrator's own
+precision study (docs/HORIZON.md) says binary128 is the rung worth
+having. Three images now exist and have been measured against each other
+on the card. **docs/BITSTREAM.md is the full account; docs/VALIDATION.md
+entries 34 to 36 are the measurements.** The conclusion belongs here,
+because it changes what this document's to-do list is for.
+
+What the hardware did, all of it as designed:
+
+- one tile, no binary256, closes **150 MHz** where the full tile ships at
+  135, with a quarter of the tile gone (32,398 LUTs and 143 DSPs);
+- its engine runs **1.108x** the full tile's rate, measured back to back,
+  which is 99.7% of the clock ratio;
+- six such tiles fit and close at 125 MHz and deliver **1.39x** the
+  shipped quad's aggregate arithmetic, against 1.389 predicted;
+- every record byte-identical to software across one, four and six tiles
+  and two different bitstreams.
+
+What it did for IAS15:
+
+- **more tiles is slower, monotonically** - one tile beat four beat six
+  in all ten card rows, at every body count and both formats. The
+  library partitions every `cft_run` across every tile a device
+  presents, so one call becomes a kernel launch and a staging round per
+  tile, and this integrator issues thousands of small calls per step.
+  Tile count is a divisor on an already short vector and a multiplier on
+  a fixed cost;
+- **the specialised image itself is worth 1 to 3%**, isolated by running
+  both one-compute-unit images head to head.
+
+**So the arithmetic is about a fifth of the wall clock.** An 11% faster
+engine moving the integration by 2% puts it there directly, and that is
+the single most useful number this document now contains: **four fifths
+of a card-side IAS15 step is not arithmetic**, and no bitstream
+addresses any of it. The items in "What to do first" below are therefore
+not a list of nice-to-haves beside a hardware lever. They are the whole
+lever.
+
+Read the ranked asks in that light:
+
+1. **State resident on the card across a step.** The engine's vectors are
+   plain `calloc` today (`valloc` in src/ias15_cft.c), so every operand
+   of every call is staged across PCIe and staged back. libcft has
+   carried device-resident `cft_alloc` buffers since ABI 0.11, and
+   cft-fp256 measured 3.0 to 3.3x on the raw path from exactly this
+   change. Nothing in this repository uses it yet. **This is the
+   cheapest large item and it needs no hardware.**
+2. **Fewer, larger calls.** The program engine already removed 60% of
+   them; the remainder is gravity, the end-of-step update and the step
+   control. Every call removed is a launch and a staging round removed
+   per tile.
+3. **A device-side scatter for gravity's accumulate half**, which is
+   36-42% of card wall clock as N-1 narrow vector adds, and projects
+   1.99x to 3.1x. This is the one that needs a sequencer feature rather
+   than a library change.
+4. **The convergence test, removed exactly** via a recorded corrector
+   schedule - 13-19% of calls, worth 4-9% on the card and nothing in
+   software.
+
+And one negative result worth carrying: **do not reach for a wider
+image to make this faster.** It was tried. Measure the partitioning cost
+with the images that already exist before building another one; two
+existing images predict the whole outcome in an hour, and two multi-tile
+links cost thirteen.
+
+## Moving the state onto the card: what it would actually take
+
+The section above designs a resident integrator. This one prices the
+gap between that design and `--engine program` as it stands, because
+the 2% result makes this the work that matters. Written 2026-09-14
+after reading both sides of the seam.
+
+### What the library already does, verified rather than assumed
+
+The pinned libcft (`ca19fe3`, ABI 0.12) binds **every** operand of
+`cft_program_run_ex` through the device-resident buffer registry - the
+three streams, the deposit window, **and both scratch blocks**
+(`host/src/device.c`, `bind_role` for `CFT_ROLE_SI` and `CFT_ROLE_SO`).
+Its comment names this document's first ask as the reason. So the
+library-side item this file has carried since 2026-09-10 is **done**,
+and nothing below is blocked on cft-fp256.
+
+What is missing is on this side: `valloc` in src/ias15_cft.c is
+`calloc`, so not one buffer in this port is a `cft_alloc` buffer, and
+the registry has nothing to recognise. Every call stages.
+
+### What a substep-pass moves today, in elements of `N3`
+
+`run_program` rebuilds its scratch block on the host from `b[]`, `csx`,
+`a0`, `g[]` and `csb[]` before every run, and reads it back after:
+
+| per run | host memcpy | staged over PCIe |
+|---|---|---|
+| predictor | 8 x N3 in, N3 out | 12 x N3 |
+| corrector (each of 7) | 22 x N3 in, 22 x N3 out | 46 x N3 |
+
+A corrector pass is seven of each, so about **406 x N3 elements cross
+the bus per pass** and roughly the same is memcpy'd on the host first.
+At 512 bodies and binary128 that is 10 MB a pass and about 80 MB a step,
+each way - and the memcpy is pure waste, because the values it moves
+came from the device and are going straight back to it.
+
+### The three changes, cheapest first
+
+1. **Allocate through `cft_alloc` (hours).** `x0`, `v0`, `a0` are
+   written once a step and read fifty-odd times; `at` once a substep.
+   Making those and the four program buffers resident stops the streams
+   being re-staged. It is perhaps 7% of the traffic on its own - the
+   scratch block is the bulk - but it is the prerequisite for everything
+   else and it makes residency *measurable*, through
+   `cft_buffer_get_info`'s resident and staged bind counts.
+
+2. **Keep the scratch block on the device between passes (the real
+   one).** The corrector reads `g/b/csb` out of `scratch_out` and writes
+   the same values back into `scratch_in` for the next pass, through the
+   host, 44 x N3 elements at a time. If the program's output layout is
+   its own input layout, `scratch_out` **is** next pass's `scratch_in`
+   and the host never touches it: cft-fp256's `resume-fp64` program
+   demonstrates exactly that shape, two runs through one block with
+   identical hashes. The host would then read the block once at the end
+   of a step rather than fourteen times a pass, for the end-of-step
+   update, the step control, `dpcast` and the checkpoint. This removes
+   most of the 406 and all of the matching memcpy, and it is the change
+   docs/HARDWARE.md's resident design has always described.
+
+3. **The convergence test, which survives both of the above.**
+   `pc_error` reads `tmp` and `at` in full, element by element on the
+   host, every pass, so even a fully resident corrector pays one
+   `from_device` of 2 x N3 per pass. Two ways out, and they are
+   different in kind: the **recorded corrector schedule** replays a
+   known pass count and removes the test exactly, bit for bit (13-19%
+   of calls, and it has been costed here before); or a device-side
+   maximum, for which **ABI 0.12 added `CFT_MAXALL`** - though
+   `pc_error` maximises over *normal* values only and per system, which
+   that reduction does not express, so this route needs thought rather
+   than a substitution.
+
+Gravity's gather and scatter (steps 2 and 3 of the resident design) are
+untouched by any of this and still need a device-side mechanism that
+does not exist. They are the next wall, not this one.
+
+### The measurement that should come first
+
+None of the above says which of per-call latency, staged bytes and the
+host's own gather actually dominates - the byte counts here are
+analytic, and the wall clock is measured, and nothing in this repository
+connects them. `ias15_cft` already counts library calls; adding staged
+bytes beside that count, and timing a step with the gravity stubbed out,
+would turn this ranking from an argument into a number. Do that before
+writing any of the three, because a day spent on residency when the wall
+is the gather would be the same mistake the six-tile image already made
+once.

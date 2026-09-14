@@ -247,6 +247,9 @@ Nothing is vendored by hand.
     docs/ENSEMBLE.md         E systems in one run: the layout, the step decision, the gate
     docs/HORIZON.md          when binary64 stops being enough, measured
     docs/HARDWARE.md         the resident design, its break-even, what is unverified
+    docs/BITSTREAM.md        the f128 image: fp32/fp64/fp128 tiles with binary256
+                             left out, how it refuses, how it is built, what it measured
+    hw/                      that image's build flow and card series
     docs/INTEGRATORS.md      which other REBOUND integrators port well, ranked
     docs/PYTHON.md           reaching the integrator from rebound.Simulation, and
                              the four sharp edges that come with it
@@ -590,6 +593,21 @@ each in software. That is the per-call cost at two and five bodies,
 not a surprise - docs/HARDWARE.md predicts it and the ensemble numbers
 are where the card earns its keep. What the two runs establish is that
 the answer does not depend on the backend.
+
+**Which image to load, measured 2026-09-14: a one-tile one.** The
+library partitions every call across every compute unit a device
+presents, and this integrator issues thousands of small calls per step,
+so tile count costs more than it buys here - one tile beat four beat six
+in all ten cases measured, at every body count and both formats. A
+four-tile image is the wrong thing to point `CFT_REBOUND_ARTIFACT` at
+for IAS15, however good it is for work with long vectors.
+
+This repository can also build its own image - cft-fp256's tile with
+binary256 left out, which closes 150 MHz against the full tile's 135 and
+refuses binary256 by name at three layers. It is worth **2%** on this
+workload, because four fifths of a card-side step is not arithmetic.
+The flow, the numbers and that conclusion are in docs/BITSTREAM.md;
+docs/HARDWARE.md says what would actually move the integrator.
 
 `make check` runs every gate at every format (about half an hour);
 

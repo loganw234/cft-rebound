@@ -3122,3 +3122,511 @@ Captured before, diffed after: `check_dropin` and `check_dropin --wide`,
 both **identical**. That is what separates a printf change from a
 behaviour change, and it is cheap enough that there was no excuse for
 not running it.
+
+## 34. A bitstream without binary256: what the rung cost, what the image refuses, and what IAS15 made of it
+
+**2026-09-13, amd-arc-box (Ubuntu 24.04, 36 threads, 46 GB, Vitis
+2022.2, Alveo U50C at `02:00.0` on the GA 6.8 kernel), cft-fp256 at
+`ca19fe3` (ABI 0.12, XRT backend), REBOUND at `bdfda4bd`. Unlike every
+entry above this one, the numbers here are from a card.** The build
+flow is this repository's, in `hw/`; nothing in cft-fp256 was modified,
+and every manifest records its `rtl/` tree hash so that claim is
+checkable rather than asserted.
+
+The occasion is the precision entries above and docs/HORIZON.md:
+binary128 recovers the four orders binary64 loses to round-off, and
+binary256 matches binary128 to every printed digit at every step a user
+of this integrator would take. So binary256 is the rung this workload
+can do without, and it is the most expensive one the tile carries. This
+entry is what came of leaving it out - a **performance** artifact for a
+port whose correctness was settled on the full image first.
+
+### The packaging gap, and a check that caught its own mistake
+
+cft-fp256's `rtl/cft_krnl.sv` has carried `EN_FP64`, `EN_FP128` and
+`EN_FP256` since 2026-08-29, and its `docs/LAYOUTS.md` publishes a
+catalogue of narrow layouts built on them. None of them had ever been
+built, and the reason is one line of Tcl: `hw/package_kernel.tcl`
+removes **every** user parameter from the packaged IP, so the `.xo` it
+writes can only ever carry the RTL defaults. The generics were real,
+reachable from simulation, and unreachable from a bitstream.
+
+`hw/package_variant.tcl` here sets the value on the packaged IP's HDL
+parameter *before* that removal. `hw/verify_variant_xo.tcl` then
+instantiates the packaged IP in a throwaway project and prints the
+overrides its synthesis wrapper hands to `cft_krnl`, because "the `.xo`
+was written" and "the `.xo` carries the generic" are different claims
+and only the second one matters:
+
+    HDLPARAM: EN_FP64 = 1  EN_FP128 = 1  EN_FP256 = 0
+    WRAPPER_PARAM: .EN_FP256(1'B0),
+
+**That check refused the first correctly packaged `.xo` it was given.**
+Vivado 2022.2 writes the sized bit literal with an uppercase `B` and
+the normalisation knew only `1'b0`. It cost ten minutes, and it is the
+direction a check of this kind should fail in: its false negatives cost
+minutes, its false positives cost a two-hour link of the wrong tile
+that nothing downstream would contradict.
+
+### The single tile: 150 MHz, and a quarter of the tile gone
+
+One compute unit, `EN_FP256=0`, cft-fp256's card-day recipe unchanged
+(`RETIMING=1 PHYS_OPT=1`, default directives). 135 minutes to link.
+`hw/verify-image.sh`: **8 of 8 PASS**. sha256 `90457667...`,
+36,646,752 bytes, staged at `~/cardday-f128s/cft_hw_f128_1x.xclbin`.
+
+| | full tile (rev-4 single) | f128 |
+|---|---|---|
+| kernel clock asked | 135 MHz | **150 MHz** |
+| kernel WNS | +0.210 ns | +0.027 ns |
+| failing endpoints | 0 of 129,804 | **0 of 105,669** |
+| implied path delay | 7.197 ns | 6.640 ns |
+| CLB LUTs, placed | 252,733 | 220,335 |
+| CLB registers | 230,610 | 216,079 |
+| DSPs | 311 | 168 |
+| Block RAM tiles | 258 | 258 |
+| URAM | 12 | 12 |
+
+Net of the 123,897-LUT shell the tile is **96,438 LUTs against
+128,836**: the binary256 rung was **32,398 LUTs and 143 DSPs**, a
+quarter of the tile, against cft-fp256's own model of 35,333. Block RAM
+and UltraRAM do not move at all, which is the expected result stated as
+a check: they belong to the engine and the sequencer, which are
+`BEAT_BITS`-wide and do not shrink with the rungs.
+
+cft-fp256's `docs/LAYOUTS.md` predicted 150 MHz for this variant and
+marked it "target, unmeasured". It is measured now and the prediction
+was right to the megahertz.
+
+**+0.027 ns is arrival, not headroom.** Vivado works a path exactly as
+hard as the constraint asks and stops, so a closing build always lands
+just above zero. The number that transfers between builds is the path
+delay: 6.640 ns here against the full tile's 7.197 at its own ask. Read
+150 MHz as at or near this tile's single-unit ceiling.
+
+### The tile count, derived from a linked pair rather than a model
+
+`hw/fit.py`. The per-compute-unit cost beyond the tile itself comes
+from cft-fp256's **own linked revision-4 pair** - single 252,733 and
+quad 640,500 placed, so three extra units cost 387,767 and each carries
+**419 LUTs** of crossbar. (cft-fp256's `hw/gen_layouts.py` uses 12,626,
+differenced from 2026-09-02 builds; the revision-4 pair is the same RTL
+generation and the same tools as this image and is the better
+calibration for it.)
+
+| tiles | HBM PCs | model LUT | of device | verdict |
+|---|---|---|---|---|
+| 4 | 16 | 510,906 | 58.7% | fits |
+| 5 | 20 | 607,763 | 69.8% | fits |
+| **6** | **24** | **704,620** | **80.9%** | **tight** |
+| 7 | 28 | 801,477 | 92.0% | no |
+
+Six is the maximum worth attempting: it sits where the full-tile quad
+closed (80.6%) and inside the HBM wall at 24 of 32 pseudo-channels.
+Seven is past cft-fp256's 85% practical routing limit.
+
+**The invocation first written into docs/BITSTREAM.md was circular** -
+it passed this script's own predicted four-tile total back in as the
+measurement from which the per-unit cost is derived, so the table would
+have proved only that the arithmetic is self-consistent. `--per-cu`
+exists now so that cannot happen silently.
+
+### What it refuses, at three layers, each one measured
+
+The image publishes `CAPS[3:0] = 0x7`. `ias15_cft --probe` on it:
+`formats: fp32 fp64 fp128`, contract `0x00000800`, and every
+revision-4 sequencer capacity intact - 64 deposits, 16,384
+instructions, 512 constants, 256 scratch slots, `seq_features 0xf1f`,
+resident buffers.
+
+- **The tile, for itself.** `cft-resident -f fp256` issues `MODE`
+  precision 3 straight at the kernel with no capability check. The run
+  comes back **`status 0x8`** - `STATUS[3]`, the refusal bit - with the
+  hardware's flags clean and its bytes differing from software, because
+  the tile computed nothing.
+- **libcft.** `cft_run(FMA, fp256)` and `cft_reduce(SUM, fp256)` both
+  answer **status 2, "operation or format not available on this
+  device", with the output buffer untouched** - not zeroed, which would
+  be the worst available shape of a wrong answer. `cft_last_error()` is
+  **empty**, which is a real gap and is filed below.
+- **This repository.** The standalone program exits 3 and the drop-in
+  fails the simulation, both with the same sentence:
+
+      ias15_cft: .../cft_hw_f128_1x.xclbin carries fp32 fp64 fp128
+      (CAPS[3:0] = 0x7, 1 tile, contract 0x00000800) and this run asked
+      for fp256. The image publishes what it implements and libcft
+      refuses the rest before a byte is issued, so nothing was computed.
+
+  Before this session that refusal arrived at the *first operation* as
+  a bare status and printed `fma: operation or format not available on
+  this device ()`, naming neither the artifact, nor what it carries,
+  nor what was asked.
+
+**The control matters more than the refusal.** `hw/refusal_probe.c`
+run against the full-tile revision-4 image reports binary256 **running**
+there, output written, on the same card in the same session. Without
+that, "refused" is equally consistent with a broken probe.
+
+### What it computes
+
+| gate | result |
+|---|---|
+| `cft-selftest`, cft-fp256's published vectors | 111 sets, **892,548 cases, all matching**, 168 s; binary256 sets skipped by name |
+| `device-test`, three modes | 813, 2004, 687 checks, **0 failed** |
+| `gate_real --fp64` | **PASS**, 170 s |
+| `gate_real --fp128` | **PASS**, 253 s |
+| `check_dropin --light` | **every case passed**, all 14 drop-in refusal rows exercised, 3,062 s |
+| `check_program_engine fp128` | **PASS**; the FMA form against REBOUND's rounding sequence differs by at most 3.245e-34 |
+
+892,548 rather than the full tile's 1,071,635 because one format of
+four is gone. Nothing else in the census changed.
+
+### The rate: the clock reaches the arithmetic
+
+Both images run back to back on the same card in the same session with
+the same tool, rather than against a number quoted from cft-fp256's
+record. `cft-resident`, fma, n = 1,048,576, 20 reps, one compute unit:
+
+| format | full tile @135 | f128 @150 | ratio |
+|---|---|---|---|
+| fp32 | 808.92 M/s (101.11 Mbeat/s) | 897.27 M/s (112.16) | **1.109** |
+| fp64 | 417.23 M/s (104.31 Mbeat/s) | 462.03 M/s (115.51) | **1.107** |
+| fp128 | 211.96 M/s (105.98 Mbeat/s) | 234.95 M/s (117.47) | **1.108** |
+
+The clock ratio is 150/135 = **1.1111**. The measured gain is 99.7 to 99.8% of
+it at all three rungs, so the extra megahertz turn into arithmetic and
+removing the rung introduced no new wall. Every row: `status 0x0`,
+bytes identical to the software backend, identical across repeats and
+across units - **and the per-format digests are identical between the
+two images** (`0ab39ba8b1e1ef3a`, `b4dd984b36bc7e7c`,
+`ca3e223f7f0acad8`), which is the determinism claim holding across a
+change of silicon.
+
+Run-to-run spread is about 1.5%: the same f128 rows measured 883.93 /
+458.29 / 234.23 M/s an hour earlier in the card series. The back-to-back
+pair above is the controlled one and is what the ratio is taken from.
+
+**The staged path does not move and cannot.** `cft-bench` on the same
+image: fp32 169,914,652 elem/s at 2,718.6 MB/s, fp64 95,645,632 at
+3,060.7, fp128 46,201,374 at 2,956.9 - the same 2.7 to 3.1 GB/s band
+every image of this project has measured, because that path stages
+operands across PCIe on every call. **That is the path `cft_run`
+issues, and therefore the path IAS15 runs on.** Power at the tile was
+15.0 W, FPGA 37 C.
+
+### What IAS15 made of it: nothing
+
+Wall clock against the software backend on one core, program engine,
+FMA form, `--max-iter 60`. The corrector's mean pass count is beside
+every ratio, because bit-identity alone would not prove the problem
+posed was the one meant (CLAUDE.md's first way this suite has lied).
+
+| problem | steps | format | software | card | ratio | passes |
+|---|---|---|---|---|---|---|
+| Kepler, N=2 | 200 | fp64 | 2.61 s | 22.02 s | **0.12x** | 3.43 |
+| Kepler, N=2 | 200 | fp128 | 6.67 s | 40.25 s | **0.17x** | 8.56 |
+| outer, N=6 | 100 | fp128 | 8.67 s | 24.20 s | **0.36x** | 8.42 |
+| nbody, N=64 | 20 | fp64 | 24.19 s | 8.77 s | **2.76x** | 3.20 |
+| nbody, N=64 | 20 | fp128 | 69.63 s | 22.49 s | **3.10x** | 7.95 |
+
+Every record byte-identical to the software backend's in every value
+and every counter.
+
+That is the same crossover and the same plateau docs/HARDWARE.md
+measured on the full tile, within the noise. **Removing a rung did not
+move either, and could not have:** the crossover is set by per-call
+staging cost and by the scatter in gravity's accumulate half, neither
+of which is a function of how many rungs the silicon carries. A tile
+that is 1.108x faster at arithmetic it is not waiting on buys nothing.
+
+So the result of this entry is two numbers that must be read together.
+**1.108x** where the tile's own rate is the thing measured, and
+**1.00x** where IAS15's wall clock is. The image is a real improvement
+to the coprocessor and not yet an improvement to this integrator; what
+would change that is the library asks docs/HARDWARE.md already ranks -
+resident state and a device-side scatter - not more megahertz.
+
+### A comparison that could only ever fail
+
+The card series' first run printed **"records differ" on all five
+rows** of the table above while every data line was byte-identical. The
+comparison was `cmp` on whole files, and a record carries a header
+naming the backend and a trailer carrying elapsed seconds. Neither can
+match across two runs, so the check had never been capable of passing -
+and it was reporting a divergence in the one claim this whole port
+exists to make.
+
+Normalising exactly those two fields and nothing else: **0 lines differ**
+at fp64 and at fp128. Both scripts now compare the record rather than
+the file, keep the physics counters in the comparison, and report *how
+many* lines differ rather than only that they do. Same disease as the
+`--light` banner in entry 33: the check measured something adjacent to
+the claim, and passed.
+
+### Open at the time of writing
+
+- **The six-tile image is in placement, not a result.** Launched
+  2026-09-13 12:43 at 140 MHz - not 150, because the full tile lost
+  0.188 ns of path going from one unit to four at a fixed ask, and six
+  units at 80.9% occupancy should cost at least as much. If it closes,
+  six tiles at 140 MHz against four at 135 is 1.56x the aggregate
+  tile-clock product; whether IAS15 collects any of that is exactly the
+  question the table above answers "no" to for the clock, and
+  `hw/compare-images.sh` is written to answer it for the tiles. A
+  six-unit `place_design` on this box is also the step that has been
+  OOM-killed before, and an OOM kill reads like a design failure.
+- `make check` **fails its three binary256 legs on this image, by
+  refusal, and that is correct**: `make check` never skips, and an
+  image that cannot do binary256 does not pass a binary256 gate.
+  `hw/cardtest-f128.sh` runs the binary64 and binary128 gates and
+  demonstrates the refusal instead.
+- Reported to cft-fp256, not changed there: the packager strips
+  generics; the XRT backend opens compute units by the literal name
+  `cft_krnl:{cft_krnl_N}`, so the variant kernel names in its own
+  `hw/layouts/*.cfg` would open zero tiles; a format refusal sets no
+  `cft_last_error`; no bench simulates a trimmed **full-beat** tile
+  (`test_krnl_quarter` is `BEAT_BITS=64`), so this image's RTL
+  configuration had never been simulated before it was linked; and
+  fp32 has no generic, so the fp64/fp128-only tile this workload would
+  actually want cannot be expressed.
+
+## 35. Six tiles do not close at 140 MHz: the area model was right and the timing extrapolation was not
+
+**2026-09-13, amd-arc-box, same toolchain and pins as entry 34, which
+this entry closes the open item of.** Entry 34 left the six-tile image
+"in placement, not a result". It is a result now, and the result is a
+failure: **389 minutes, kernel WNS -0.558 ns, no image produced.**
+
+### What was asked and what happened
+
+Six compute units of the f128 tile at **140 MHz**, cft-fp256's card-day
+recipe (`RETIMING=1 PHYS_OPT=1`, default directives). Placement
+succeeded and was not memory-killed; routing ran to completion and
+missed.
+
+    kernel_wns_ns: -0.558
+    kernel_failing_endpoints: 3015 of 632233
+    violating_clocks: clk_out1_ulp_clk_wiz_0 -0.558 3015/632233;
+                      hbm_aclk -0.005 9/103249
+
+**3,015 failing endpoints of 632,233 is 0.48% - broad and shallow.**
+That is the signature of routing congestion rather than one pathological
+path: a single bad path fails by a lot at a handful of endpoints, and
+this failed by half a nanosecond across three thousand of them. The
+`hbm_aclk` violation at -0.005 ns on 9 endpoints is the shell's own and
+is the same one Vitis has auto-scaled away on past builds; it is not
+this design's problem.
+
+The implied path delay is 7.143 + 0.558 = **7.701 ns**, so six of these
+tiles top out at about **130 MHz**, not 140.
+
+### The area model was accurate
+
+Predicted from the linked single and cft-fp256's own revision-4 pair
+(entry 34's table), against what actually placed:
+
+| resource | predicted | placed | error |
+|---|---|---|---|
+| CLB LUTs | 704,620 (80.9%) | 698,188 (80.19%) | 0.9% pessimistic |
+| Block RAM | 643.8 | 642.5 (47.81%) | 0.2% |
+| URAM | 52 | 52 (8.13%) | exact |
+| DSPs | 988 | 988 (16.60%) | exact |
+
+Three of four exact and the fourth within one percent, which also
+confirms the tile really did replicate six times rather than something
+being shared or dropped. The super-logic-region split was **84.17% in
+SLR0 against 75.96% in SLR1**.
+
+### The timing extrapolation was not, and the reason is the interesting part
+
+The estimate that chose 140 MHz came from cft-fp256's full tile, where
+going from one compute unit to four cost **0.188 ns** of path at a
+fixed ask (+0.210 at one unit, +0.022 at four, both at 135 MHz). Six
+units being more crowded than four, that was scaled to an assumed
+0.2 to 0.3 ns and taken off the f128 single's 6.640 ns path, giving a
+predicted six-unit ceiling of 144 to 146 MHz and 140 as the safe ask.
+
+The actual penalty was about **1.06 ns**, three to five times the
+assumption.
+
+**Area is a sum and timing is not.** The full tile's four units sit at
+73.6% of the device; these six sit at 80.19%. Six and a half points of
+occupancy turned a 0.188 ns penalty into roughly a nanosecond, because
+the cost of congestion is not linear in how full the part is - it is
+flat until the router has room to spare and then it is not. Every LUT
+figure in entry 34 extrapolated correctly because adding a tile adds
+its LUTs; the timing did not, because adding a tile does not add a
+fixed quantity of delay, it changes how hard every other tile is to
+route.
+
+So the transferable rule, and the one this project had already written
+down in another form: **a per-unit penalty measured at one occupancy
+does not predict timing at a higher one.** cft-fp256's "read the path
+delay, not the slack" says the tool works exactly as hard as the ask;
+this adds that how hard it *can* work depends on how full the die is,
+and that relationship has to be sampled rather than extrapolated. Two
+points at different occupancies would have been worth the six and a half
+hours this cost, and one point plus an assumption was not.
+
+### What was done about it
+
+Relaunched at **125 MHz**, 19:16, same six tiles and the same recipe.
+125 asks for 8.000 ns against the 7.701 ns the router actually
+achieved while failing, so there is 0.3 ns of real margin rather than
+an extrapolation. 130 MHz was rejected deliberately: it asks for
+7.692 ns, nine picoseconds *under* a path the tools have already
+demonstrated, and a coin flip is not worth six and a half hours.
+
+If it closes, six tiles at 125 MHz against the shipped four at 135 is
+**1.39x** the aggregate tile-clock product rather than the 1.56x
+entry 34 projected at 140. Whether IAS15 collects any of it is the same
+open question, and entry 34's wall-clock table is the reason to expect
+very little: the clock bought 1.108x of arithmetic rate and 1.00x of
+IAS15 wall clock, because per-call staging and the scatter in gravity
+set that number and neither is a function of the silicon's rung count
+or its clock.
+
+The failed build's manifest is kept. It records the timing it reached
+and is the only evidence of this tile's six-unit ceiling.
+
+## 36. The six-tile image closes, and tile count turns out to be a cost: what the specialised bitstream is actually worth to IAS15
+
+**2026-09-14, amd-arc-box, Alveo U50C, same pins as entries 34 and 35.**
+The six-tile image closed at 125 MHz and was measured against the
+shipped four-tile full image and against the one-tile images of both
+kinds. The headline is not the one this work was started for.
+
+### The image
+
+Six compute units, `EN_FP256=0`, **125 MHz**, 322 minutes, **kernel WNS
++0.061 ns**, `hw/verify-image.sh` 8 of 8 PASS including *24 masters, all
+channels HBM, no channel shared*. sha256 `51f00fb6...`, staged at
+`~/cardday-f128x6b/cft_hw_f128_6x.xclbin`. Placed at 696,806 LUTs
+(80.03%), slightly under the 140 MHz attempt's 698,188, which is what a
+relaxed constraint should do. `ias15_cft --probe`: 6 tiles, `CAPS[3:0]
+= 0x7`, contract `0x800`; binary256 refused by name, `device-test`
+813 checks 0 failed.
+
+### The arithmetic scaled exactly as designed
+
+`cft-resident`, fma, n = 1,048,576, all units engaged:
+
+| format | quad @135, 4 units | f128 @125, 6 units | ratio |
+|---|---|---|---|
+| fp32 | 3,224.04 M/s (51.6 GB/s) | 4,476.41 M/s (71.6 GB/s) | 1.388 |
+| fp64 | 1,664.39 M/s (53.3 GB/s) | 2,308.92 M/s (73.9 GB/s) | 1.387 |
+| fp128 | 845.20 M/s (54.1 GB/s) | 1,177.71 M/s (75.4 GB/s) | 1.393 |
+
+Predicted 6x125 / 4x135 = **1.389**; measured 1.387 to 1.393. Per-unit
+rate is 93.3 to 98.1 Mbeat/s against the quad's 100.8 to 105.7, exactly
+the 125/135 clock ratio. Digests identical to the single-tile images and
+to software at every format, so determinism holds across one, four and
+six tiles and across two different bitstreams.
+
+**Everything about the hardware worked.** What follows is about the
+workload.
+
+### More tiles is slower. Monotonically, everywhere.
+
+`hw/compare-images.sh`, program engine, FMA form, `--max-iter 60`,
+ratios against the software backend on one core. Every record on every
+row **byte-identical** to software; the corrector's pass count matches
+what each format needs.
+
+| problem | steps | format | f128 x1 @150 | quad x4 @135 | f128 x6 @125 |
+|---|---|---|---|---|---|
+| Kepler N=2 | 100 | fp64 | 0.09x | 0.06x | 0.06x |
+| Kepler N=2 | 100 | fp128 | 0.13x | 0.09x | 0.09x |
+| outer N=6 | 100 | fp64 | 0.16x | 0.06x | 0.05x |
+| outer N=6 | 100 | fp128 | 0.25x | 0.09x | 0.08x |
+| nbody N=64 | 20 | fp64 | **1.47x** | 0.63x | 0.48x |
+| nbody N=64 | 20 | fp128 | **2.23x** | 1.00x | 0.79x |
+| nbody N=256 | 5 | fp64 | **2.99x** | 1.93x | 1.60x |
+| nbody N=256 | 5 | fp128 | **3.80x** | 2.61x | 2.22x |
+| nbody N=512 | 3 | fp64 | **2.94x** | 2.34x | 2.07x |
+| nbody N=512 | 3 | fp128 | **3.91x** | 3.16x | 2.86x |
+
+**One tile beats four beats six, in all ten rows, without a single
+exception.** The six-tile image carries 1.39x the aggregate arithmetic
+rate of the shipped quad and integrates about 10% *slower* than it.
+
+The mechanism is not mysterious. libcft partitions every `cft_run`
+across all the tiles a device presents, so one library call becomes one
+kernel launch and one staging round **per tile**. IAS15 issues thousands
+of small calls per step - 51,911 for twenty steps at N=64 and binary64 -
+and at these vector lengths the per-call cost multiplied by the tile
+count swamps whatever the extra arithmetic contributes. Tile count is
+not a throughput knob for this workload; it is a divisor on an already
+small n and a multiplier on the fixed cost.
+
+### The control: what the specialised image is actually worth
+
+The table above cannot separate "fewer tiles" from "higher clock and
+one rung fewer", because its winner differs from the quad in both. So
+both **one-compute-unit** images were run head to head, same card, same
+session, card runs only:
+
+| problem | steps | format | f128 @150 | full tile @135 | ratio | records |
+|---|---|---|---|---|---|---|
+| nbody N=64 | 20 | fp64 | 13.47 s | 13.62 s | **1.01** | identical |
+| nbody N=64 | 20 | fp128 | 29.21 s | 29.72 s | **1.02** | identical |
+| nbody N=256 | 5 | fp64 | 31.98 s | 32.15 s | **1.01** | identical |
+| nbody N=256 | 5 | fp128 | 63.61 s | 64.90 s | **1.02** | identical |
+| nbody N=512 | 3 | fp64 | 75.41 s | 77.67 s | **1.03** | identical |
+| nbody N=512 | 3 | fp128 | 148.09 s | 151.51 s | **1.02** | identical |
+
+**One to three percent.** That is the whole value of this bitstream to
+this integrator.
+
+So the 1.24x to 2.67x by which the f128 single beat the shipped quad was
+**tile count, essentially all of it, and not the specialised image**.
+Loading cft-fp256's existing one-tile full image - which still carries
+binary256 - recovers 97 to 99% of it. The correction matters because the
+three-image table invites exactly the wrong reading, and I published
+that reading before running this control.
+
+Why so little, when the arithmetic is 1.108x faster (entry 34)? Because
+the arithmetic is not what the wall clock is made of. An 11% faster
+engine moved the integration by 2%, which puts the arithmetic at
+roughly a fifth of it; the rest is per-call staging across PCIe and the
+scatter in gravity's accumulate half, and neither is a function of the
+clock or of how many rungs the silicon carries. Entry 34 measured this
+at one tile and called it "the crossover did not move". It is the same
+fact, now with the size of the effect on it.
+
+### What this says to do
+
+- **For IAS15 on this card, use a one-tile image.** Either one. The
+  six-tile image is the wrong artifact for this workload and the
+  four-tile shipped image is worse than one tile at every size tested.
+- **A multi-tile image is still right for a workload with long vectors
+  or independent work per tile** - the arithmetic scaling above is
+  perfect, 1.39x for 1.389x asked. IAS15 is simply not that workload at
+  any body count reachable here.
+- **The lever is the library, not the silicon.** docs/HARDWARE.md
+  already ranks the asks - state resident on the card across a step, and
+  a device-side scatter for gravity's accumulate half - and this entry
+  is the measurement that says nothing in the bitstream substitutes for
+  them. A tile that is 1.39x faster at arithmetic it spends four fifths
+  of its time not doing is worth 2%.
+- **The cheapest experiment would have predicted all of it.** Running
+  the existing one-tile and four-tile images against the workload costs
+  an hour and needs no build; it would have shown tile count to be a
+  cost before thirteen hours went into two multi-tile links. The signal
+  was on the record too: the ensemble measurement in this ledger already
+  found many small systems below one large one, which is the same effect
+  seen from the other side. **Measure the partitioning before buying
+  more of it.**
+
+### What the exercise did buy
+
+Not nothing, and worth separating from the disappointment: cft-fp256's
+trim generics now reach a bitstream at all, and its `docs/LAYOUTS.md`
+catalogue is no longer entirely placeholders - two of its rows are
+built, one of them at a clock the catalogue had guessed and never
+measured. The refusal path is real, exercised and controlled at three
+layers. The area model is calibrated against two linked multi-tile
+images. And the six-unit timing ceiling of this tile, roughly 130 MHz,
+is now a measured number rather than an extrapolation. The bitstreams
+are staged; what they are worth to IAS15 is 2%, and that is the number
+to quote.

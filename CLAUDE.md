@@ -62,6 +62,23 @@ software backend can never satisfy a run against a card.
   printed `400 steps` over a leg that ran 40; the only contrary evidence
   was the leg finishing in 159 s instead of 585.
 
+## On a card, tile count is a cost
+
+Point `CFT_REBOUND_ARTIFACT` at a **one-tile** image. libcft partitions
+every `cft_run` across every compute unit a device presents, so one
+library call becomes a kernel launch and a staging round *per tile*, and
+this integrator issues thousands of small calls per step. Measured
+2026-09-14: one tile beat four beat six in all ten card rows, every body
+count and both formats, and a six-tile image with **1.39x** the
+aggregate arithmetic integrated **10% slower** than the shipped quad.
+
+The same measurement priced the arithmetic at about **a fifth of card
+wall clock** - an 11% faster engine moved the integration 2%. So a
+faster or wider bitstream is not the lever; the engine's vectors being
+plain `calloc` rather than device-resident `cft_alloc` is. docs/
+HARDWARE.md ranks the rest, docs/BITSTREAM.md has the bitstream flow,
+and docs/VALIDATION.md entries 34-36 are the numbers.
+
 ## The trap in the port itself
 
 `dpcast()` ([src/ias15_cft.c](src/ias15_cft.c)) slices **one flat buffer**
