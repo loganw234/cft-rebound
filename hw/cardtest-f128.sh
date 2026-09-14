@@ -42,7 +42,7 @@ LOG=$L/cardtest.log
 log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 # A record with the two fields that cannot match removed: which backend
 # produced it, and how long it took. Nothing else is touched.
-norm_record() { sed -E 's#backend=[^ ]+#backend=X#; s/ seconds=[0-9.]+//; s/ steps_per_s=[0-9.]+//; s/ (wall_seconds|t_program|t_elem|t_divsqrt|t_gravity|system_steps_per_s)=[0-9.]+//g' "$1"; }
+norm_record() { sed -E 's#backend=[^ ]+#backend=X#; s/ seconds=[0-9.]+//; s/ steps_per_s=[0-9.]+//; s/ (wall_seconds|t_[a-z0-9_]+|system_steps_per_s)=[0-9.]+//g' "$1"; }
 therm() { xbutil examine -d 0000:02:00.1 -r thermal -r electrical 2>/dev/null | grep -E "FPGA|Int Vcc|^\s*Power  " | sed 's/^\s*//; s/\s\+/ /g' | tr '\n' ';'; }
 last() { tail -n "${2:-1}" "$1" 2>/dev/null | tr '\n' ' ' | cut -c1-"${3:-300}"; }
 {

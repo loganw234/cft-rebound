@@ -73,7 +73,7 @@ for i in ${PATHS+"${!PATHS[@]}"}; do
   FMTS+=("$(printf '%s' "$info" | sed -n 's/^formats: //p')")
   echo "image ${LABELS[$i]}: ${TILES[$i]} tile(s), formats ${FMTS[$i]}"
 done
-norm () { sed -E 's#backend=[^ ]+#backend=X#; s/ seconds=[0-9.]+//; s/ steps_per_s=[0-9.]+//; s/ (wall_seconds|t_program|t_elem|t_divsqrt|t_gravity|system_steps_per_s)=[0-9.]+//g' "$1"; }
+norm () { sed -E 's#backend=[^ ]+#backend=X#; s/ seconds=[0-9.]+//; s/ steps_per_s=[0-9.]+//; s/ (wall_seconds|t_[a-z0-9_]+|system_steps_per_s)=[0-9.]+//g' "$1"; }
 eff () { grep -oE 'pc_lane_efficiency=[0-9.]+' "$1" | tail -1 | cut -d= -f2; }
 pss () { grep -oE 'mean_pc_iterations=[0-9.]+' "$1" | tail -1 | cut -d= -f2; }
 run_one () {  # <out> <fmt> <problem> [--artifact X]

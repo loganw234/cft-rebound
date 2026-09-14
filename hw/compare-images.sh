@@ -88,7 +88,7 @@ done
 # Comparing the raw files instead reports "differ" on every row while
 # every value is byte-identical, which is a comparison that can only
 # ever fail (measured, 2026-09-13).
-norm_record() { sed -E 's#backend=[^ ]+#backend=X#; s/ seconds=[0-9.]+//; s/ steps_per_s=[0-9.]+//; s/ (wall_seconds|t_program|t_elem|t_divsqrt|t_gravity|system_steps_per_s)=[0-9.]+//g' "$1"; }
+norm_record() { sed -E 's#backend=[^ ]+#backend=X#; s/ seconds=[0-9.]+//; s/ steps_per_s=[0-9.]+//; s/ (wall_seconds|t_[a-z0-9_]+|system_steps_per_s)=[0-9.]+//g' "$1"; }
 
 run_one() {  # <out> <artifact|""> <fmt> <problem> <steps>
   local out=$1 art=$2 fmt=$3 prob=$4 nsteps=$5 t0 t1
