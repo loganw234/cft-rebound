@@ -458,3 +458,91 @@ image to make this faster.** It was tried. Measure the partitioning cost
 with the images that already exist before building another one; two
 existing images predict the whole outcome in an hour, and two multi-tile
 links cost thirteen.
+
+## Moving the state onto the card: what it would actually take
+
+The section above designs a resident integrator. This one prices the
+gap between that design and `--engine program` as it stands, because
+the 2% result makes this the work that matters. Written 2026-09-14
+after reading both sides of the seam.
+
+### What the library already does, verified rather than assumed
+
+The pinned libcft (`ca19fe3`, ABI 0.12) binds **every** operand of
+`cft_program_run_ex` through the device-resident buffer registry - the
+three streams, the deposit window, **and both scratch blocks**
+(`host/src/device.c`, `bind_role` for `CFT_ROLE_SI` and `CFT_ROLE_SO`).
+Its comment names this document's first ask as the reason. So the
+library-side item this file has carried since 2026-09-10 is **done**,
+and nothing below is blocked on cft-fp256.
+
+What is missing is on this side: `valloc` in src/ias15_cft.c is
+`calloc`, so not one buffer in this port is a `cft_alloc` buffer, and
+the registry has nothing to recognise. Every call stages.
+
+### What a substep-pass moves today, in elements of `N3`
+
+`run_program` rebuilds its scratch block on the host from `b[]`, `csx`,
+`a0`, `g[]` and `csb[]` before every run, and reads it back after:
+
+| per run | host memcpy | staged over PCIe |
+|---|---|---|
+| predictor | 8 x N3 in, N3 out | 12 x N3 |
+| corrector (each of 7) | 22 x N3 in, 22 x N3 out | 46 x N3 |
+
+A corrector pass is seven of each, so about **406 x N3 elements cross
+the bus per pass** and roughly the same is memcpy'd on the host first.
+At 512 bodies and binary128 that is 10 MB a pass and about 80 MB a step,
+each way - and the memcpy is pure waste, because the values it moves
+came from the device and are going straight back to it.
+
+### The three changes, cheapest first
+
+1. **Allocate through `cft_alloc` (hours).** `x0`, `v0`, `a0` are
+   written once a step and read fifty-odd times; `at` once a substep.
+   Making those and the four program buffers resident stops the streams
+   being re-staged. It is perhaps 7% of the traffic on its own - the
+   scratch block is the bulk - but it is the prerequisite for everything
+   else and it makes residency *measurable*, through
+   `cft_buffer_get_info`'s resident and staged bind counts.
+
+2. **Keep the scratch block on the device between passes (the real
+   one).** The corrector reads `g/b/csb` out of `scratch_out` and writes
+   the same values back into `scratch_in` for the next pass, through the
+   host, 44 x N3 elements at a time. If the program's output layout is
+   its own input layout, `scratch_out` **is** next pass's `scratch_in`
+   and the host never touches it: cft-fp256's `resume-fp64` program
+   demonstrates exactly that shape, two runs through one block with
+   identical hashes. The host would then read the block once at the end
+   of a step rather than fourteen times a pass, for the end-of-step
+   update, the step control, `dpcast` and the checkpoint. This removes
+   most of the 406 and all of the matching memcpy, and it is the change
+   docs/HARDWARE.md's resident design has always described.
+
+3. **The convergence test, which survives both of the above.**
+   `pc_error` reads `tmp` and `at` in full, element by element on the
+   host, every pass, so even a fully resident corrector pays one
+   `from_device` of 2 x N3 per pass. Two ways out, and they are
+   different in kind: the **recorded corrector schedule** replays a
+   known pass count and removes the test exactly, bit for bit (13-19%
+   of calls, and it has been costed here before); or a device-side
+   maximum, for which **ABI 0.12 added `CFT_MAXALL`** - though
+   `pc_error` maximises over *normal* values only and per system, which
+   that reduction does not express, so this route needs thought rather
+   than a substitution.
+
+Gravity's gather and scatter (steps 2 and 3 of the resident design) are
+untouched by any of this and still need a device-side mechanism that
+does not exist. They are the next wall, not this one.
+
+### The measurement that should come first
+
+None of the above says which of per-call latency, staged bytes and the
+host's own gather actually dominates - the byte counts here are
+analytic, and the wall clock is measured, and nothing in this repository
+connects them. `ias15_cft` already counts library calls; adding staged
+bytes beside that count, and timing a step with the gravity stubbed out,
+would turn this ranking from an argument into a number. Do that before
+writing any of the three, because a day spent on residency when the wall
+is the gather would be the same mistake the six-tile image already made
+once.
