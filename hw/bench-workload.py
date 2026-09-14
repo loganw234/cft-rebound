@@ -142,13 +142,23 @@ def main() -> int:
     # fall as N rises because gravity is N^2/2 pairs at eight nodes of
     # every corrector pass; the count is reported per row so no row can
     # quietly mean a different amount of work.
-    probs = [("kepler", REPO / "data/problems/kepler.txt", 2000),
-             ("outer", REPO / "data/problems/outer.txt", 1000),
-             ("pythagorean", REPO / "data/problems/pythagorean.txt", 1000)]
+    #
+    # THE COUNTS ARE SIZED FROM THE SLOWEST ROW, not the fastest. Every
+    # row of a problem runs the same number of steps, and the slowest is
+    # the card at binary128 - so a count chosen against REBOUND-in-double,
+    # which is three orders faster, produces a run nobody waits for. These
+    # are calibrated from the per-step costs measured on 2026-09-14
+    # (docs/VALIDATION.md entry 36) to put the slowest row of each problem
+    # in the tens of seconds. The first draft of this file asked for 2000
+    # Kepler steps, which was five and a half hours of card time for one
+    # table, and was killed seventeen minutes in.
+    probs = [("kepler", REPO / "data/problems/kepler.txt", 200),
+             ("outer", REPO / "data/problems/outer.txt", 100),
+             ("pythagorean", REPO / "data/problems/pythagorean.txt", 100)]
     if not a.quick:
         gen = pathlib.Path(a.csv).parent
         gen.mkdir(parents=True, exist_ok=True)
-        for n, steps in ((64, 100), (256, 20), (512, 8)):
+        for n, steps in ((64, 20), (256, 5), (512, 3)):
             p = gen / f"nbody{n}.txt"
             if not p.exists():
                 subprocess.run([sys.executable, str(REPO / "tools/make_nbody.py"),
