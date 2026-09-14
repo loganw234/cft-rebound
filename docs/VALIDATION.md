@@ -5,12 +5,16 @@ failures alike, numbers verbatim from the runs. One entry per
 campaign, newest last; a correction is a new entry naming the old one.
 The style is cft-fp256's docs/VALIDATION.md, on purpose.
 
-Host for every entry: DESKTOP-class Windows 11 box, MSYS2 mingw64 gcc
-16.1.0, `-std=c99 -O2`, Miniconda Python 3.12.9 with mpmath 1.3.0
-(on gmpy2), libcft from cft-fp256 at 40ce35e3 (ABI 0.11, software
-backend only), REBOUND at bdfda4bd (5.1.1 + 6). No card, no XRT, no
-`cft://` server: both were in use, and everything here is the software
-backend, which is the contract's definition of the bits.
+Host for the entries that do not say otherwise (every entry from 28 on
+names its own host, and from 34 on its own cft-fp256 pin): DESKTOP-class
+Windows 11 box, MSYS2 mingw64 gcc 16.1.0, `-std=c99 -O2`, Miniconda
+Python 3.12.9 with mpmath 1.3.0 (on gmpy2), libcft from cft-fp256 at
+40ce35e3 (ABI 0.11, software backend only), REBOUND at bdfda4bd
+(5.1.1 + 6). No card, no XRT, no `cft://` server for those entries:
+both were in use, and everything in them is the software backend, which
+is the contract's definition of the bits. The pin moved to ca19fe3
+(ABI 0.12) on 2026-09-13 (entry 34); third_party/MANIFEST is the
+authority and `make check-pins` holds the tree to it.
 
 ---
 

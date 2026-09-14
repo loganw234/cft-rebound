@@ -177,7 +177,7 @@ Nothing is vendored by hand.
 | upstream | commit | licence |
 |---|---|---|
 | REBOUND (hannorein/rebound) | bdfda4bd (5.1.1 + 6) | GPL-3.0-or-later |
-| cft-fp256 (loganw234/cft-fp256) | 40ce35e3 (libcft ABI 0.11) | Apache-2.0 |
+| cft-fp256 (loganw234/cft-fp256) | ca19fe3 (libcft ABI 0.12), the commit third_party/MANIFEST pins; `make check-pins` refuses if this row and MANIFEST disagree | Apache-2.0 |
 
 ## Layout
 

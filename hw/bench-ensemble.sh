@@ -34,6 +34,15 @@ PY=${PYTHON:-python3}
 OUT="$REPO/bench-modes"; STEPS=20; DT=0.05
 FORMATS="fp64 fp128"
 MEMBERS="1 8 64 512 4096"
+# How the members differ. The default is one binary64 ulp of the planet's
+# x per member - every member a real Kepler system a hair from its
+# neighbour, so they leave the corrector together and lane efficiency is
+# high. `--perturb "--vscale planet 0.0005"` makes member k's planet
+# faster by k/2000, so the members span eccentricities and converge at
+# DIFFERENT pass counts: that is the run that prices idle lanes
+# (docs/HARDWARE.md, "What to do first", item 4). Never --geometric with
+# a doubling delta: docs/VALIDATION.md records what that did.
+PERTURB="--offset planet x 0x1p-52"
 LABELS=(); PATHS=()
 die () { echo "FATAL: $*" >&2; exit 2; }
 while [ $# -gt 0 ]; do
@@ -42,6 +51,7 @@ while [ $# -gt 0 ]; do
     --formats) FORMATS=${2:?}; shift 2;;
     --members) MEMBERS=${2:?}; shift 2;;
     --steps)   STEPS=${2:?}; shift 2;;
+    --perturb) PERTURB=${2:?}; shift 2;;
     --out)     OUT=${2:?}; shift 2;;
     -h|--help) sed -n '2,30p' "$0"; exit 0;;
     *) die "unknown option $1";;
@@ -77,11 +87,13 @@ run_one () {  # <out> <fmt> <problem> [--artifact X]
   awk -v a="$t0" -v b="$t1" -v r="$rc" 'BEGIN { printf "%.2f %d", b - a, r }'
 }
 
+echo "perturbation: $PERTURB; dt $DT, $STEPS steps, FMA form on the program engine"
 printf '\n%-7s %-6s %-10s %5s %9s %11s %7s %-10s %6s %s\n' E format mode tiles seconds sys-steps/s vs-sw record lane-eff passes
 for E in $MEMBERS; do
   prob="$T/ens$E.txt"
+  # shellcheck disable=SC2086
   $PY tools/make_ensemble.py data/problems/kepler.txt --members "$E" --out "$prob" \
-      --offset planet x 0x1p-52 > /dev/null 2>&1 || { echo "E=$E: make_ensemble failed"; continue; }
+      $PERTURB > /dev/null 2>&1 || { echo "E=$E: make_ensemble failed"; continue; }
   for fmt in $FORMATS; do
     read -r sw_s sw_rc <<< "$(run_one "$T/sw.txt" "$fmt" "$prob")"
     if [ "$sw_rc" -ne 0 ]; then

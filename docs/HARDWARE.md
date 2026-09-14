@@ -355,7 +355,12 @@ card, and what needs the card to confirm:
   E = 1,000 and binary256, on the host; on the card only the operands
   of each call cross, so the constant width is bus traffic, not
   device memory, until `cft_run` gains a scalar-broadcast operand -
-  a fourth ask, small, and worth 300 staged vectors a step.
+  a fourth ask, small, and worth 300 staged vectors a step. *cft-fp256
+  shipped exactly this in ABI 0.12 (`cft_run_ex` with `scalar_mask`,
+  behind `CAPS2[7]`), and as of 2026-09-14 nothing in this port uses
+  it: the ask is delivered and unadopted. Adopting it is on the work
+  list, ranked by what "Measured, later the same day" found - it
+  removes bytes, and bytes are not the wall.*
 
 ## What to do first, if a card is available
 

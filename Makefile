@@ -553,7 +553,16 @@ IN_ARCHIVE  := --input $(B)/gate_restart$(EXE) --input $(B)/gate_write$(EXE) \
 IN_REAL     := --input $(B)/gate_real$(EXE)
 IN_SUBPROC  := --input $(B)/gate_subprocess$(EXE) --input $(B)/ias15_cft$(EXE)
 
-check: all programs $(ARCHIVE_GATES)
+# The pins, checked at build time and not only at fetch time: a clone
+# under third_party/ that is not at its MANIFEST commit fails every tier
+# before a single gate runs, and so does a README that names a different
+# cft-fp256 commit from the one MANIFEST pins. Not through the gate cache
+# - it is instant, and a cached pass would be exactly the wrong thing.
+.PHONY: check-pins
+check-pins:
+	@bash tools/check_pins.sh
+
+check: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg constants --mode full --input tools/gen_constants.py -- $(PYTHON) tools/gen_constants.py --no-write
 	$(GATE_CACHE) --leg check_dropin --mode full $(IN_DROPIN) -- $(B)/check_dropin$(EXE)
 	$(GATE_CACHE) --leg check_dropin_wide --mode full $(IN_DROPIN) -- $(B)/check_dropin$(EXE) --wide
@@ -577,7 +586,7 @@ check: all programs $(ARCHIVE_GATES)
 gate-cache-report:
 	@$(PYTHON) tools/gate_cache.py --report --cache-dir $(B)/.gate-cache
 
-check-quick: all programs $(ARCHIVE_GATES)
+check-quick: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg constants --mode quick --input tools/gen_constants.py -- $(PYTHON) tools/gen_constants.py --no-write
 	$(GATE_CACHE) --leg check_dropin --mode quick $(IN_DROPIN) -- $(B)/check_dropin$(EXE)
 	$(GATE_CACHE) --leg check_dropin_wide --mode quick $(IN_DROPIN) -- $(B)/check_dropin$(EXE) --wide
@@ -604,7 +613,7 @@ check-quick: all programs $(ARCHIVE_GATES)
 # but sharing a stamp file would make each overwrite the other's and
 # neither would ever skip.
 .PHONY: check-light
-check-light: all programs $(ARCHIVE_GATES)
+check-light: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg constants --mode quick --input tools/gen_constants.py -- $(PYTHON) tools/gen_constants.py --no-write
 	$(GATE_CACHE) --leg check_dropin_light --mode quick $(IN_DROPIN) -- $(B)/check_dropin$(EXE) --light
 	$(GATE_CACHE) --leg check_dropin_wide_light --mode quick $(IN_DROPIN) -- $(B)/check_dropin$(EXE) --wide --light
