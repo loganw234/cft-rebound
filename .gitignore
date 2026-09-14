@@ -46,3 +46,7 @@ gate1_two.bin
 # Bitstream build trees (hw/build-variant.sh --tag NAME): the .xo, the
 # v++ temp dir and the image; gigabytes, never history.
 build-hw-*/
+
+# Benchmark working directory on a build host (hw/bench-*.sh, hw/bench-workload.py):
+# the datasets that are kept are copied to docs/bench/ and committed there.
+bench-modes/

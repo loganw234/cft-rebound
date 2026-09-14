@@ -3630,3 +3630,165 @@ images. And the six-unit timing ceiling of this tile, roughly 130 MHz,
 is now a measured number rather than an extrapolation. The bitstreams
 are staged; what they are worth to IAS15 is 2%, and that is the number
 to quote.
+
+## 37. Five benchmarks on a real integration: where the hardware pays, and where a step's time actually goes
+
+**2026-09-14, amd-arc-box, same pins as entries 34-36; the port at
+`fbd1532`.** Everything below is an actual IAS15 integration of an
+actual problem - not an elementwise microbenchmark - and the baseline
+row of every table is REBOUND's own IAS15 in hardware double, the thing
+a person runs today. Five datasets, one page drawn from them by
+`hw/report.py`, and every card row held byte-identical to its software
+counterpart. The tools: `hw/bench-workload.py`, `hw/bench-ensemble.sh`,
+the trailer instrumentation in `src/ias15_cft.c`, and `hw/bench-modes.sh`
+for the mechanism behind them.
+
+### The workload table: 60 rows, 0 failures
+
+Kepler (2 bodies, 200 steps), the outer solar system (6, 100), Burrau's
+Pythagorean problem (3, 100), and n-body at 64, 256 and 512 (20, 5, 3
+steps); REBOUND in double, the port in REBOUND's own rounding order at
+binary64, the port in the FMA form on the program engine at binary64
+and binary128 on software and on the one-tile f128, four-tile full and
+six-tile f128 images.
+
+**The port is REBOUND bit for bit, on every problem** - the six
+`sw-rebound-form` rows are identical to `ias15_ref` on every value the
+equivalence gate compares - **and that costs about 2,000x at
+binary64**: 248.7 s against 0.11 s at 512 bodies, 4.9 s against 4 ms
+on Kepler. That number is the honest price of the contract in
+software, and it is why the case for the card lives at binary128.
+
+| bodies | binary128, software | one f128 tile | four full | six f128 | one tile vs software |
+|---|---|---|---|---|---|
+| 2 | 7.01 s | 49.97 s | 70.20 s | 75 s | 0.14x |
+| 64 | 65.22 s | 29.18 s | 62.65 s | 81.96 s | **2.24x** |
+| 256 | 238.28 s | 64.53 s | 90.61 s | 108.09 s | **3.69x** |
+| 512 | 577.97 s | 147.64 s | 181.78 s | 201.55 s | **3.91x** |
+
+One tile beats four beats six in every row again, and at binary64 the
+one-tile image is the first hardware row in this repository to beat
+the software backend on a single system: 13.75 s against 19.94 s at 64
+bodies.
+
+### Accuracy for cost
+
+The energy-drift column, once it was computed exactly (the first run
+computed it in doubles and printed 0 for every binary128 row - the
+accuracy column measured with the instrument whose limitation it
+exists to show):
+
+| problem | binary64 (REBOUND and port) | binary128 | binary256 |
+|---|---|---|---|
+| Kepler, 200 steps | 1.30e-15 | 9.41e-21 | 9.41e-21 |
+| outer, 100 | 4.11e-16 | 3.45e-25 | 3.45e-25 |
+| Pythagorean, 100 | 1.38e-13 | 1.70e-20 | 1.70e-20 |
+| n-body 64, 20 | 1.04e-14 | 2.57e-28 | - |
+| n-body 256, 5 | 4.03e-14 | 1.58e-28 | - |
+| n-body 512, 3 | 6.78e-14 | 8.40e-29 | - |
+
+Binary128 and binary256 agree to every printed digit on the three
+small problems, which is docs/HORIZON.md's result seen again from the
+energy: at these step sizes the method's truncation error is what
+remains, and binary128 is already below it. So the accuracy the card is
+bought for is binary128's, and on the frontier the cheapest binary128
+point at every body count from 64 up is the single f128 tile.
+
+### The ensemble: the workload with long vectors
+
+E independent Kepler systems, members one ulp apart on a dyadic offset,
+fixed dt 0.05, 20 steps, the ledger's own integration. System-steps a
+second:
+
+| E | format | software | one f128 tile | four full | six f128 |
+|---|---|---|---|---|---|
+| 1 | binary128 | 29.9 | 2.5 | 1.5 | 1.3 |
+| 8 | binary128 | 85.1 | 18.8 | 7.3 | 6.7 |
+| 64 | binary128 | 108.5 | **117.1** | 53.2 | 40.3 |
+| 512 | binary128 | 109.3 | **418.5** | 263.0 | 215.4 |
+| 4,096 | binary128 | 103.3 | **562.3** | 493.2 | 454.6 |
+| 4,096 | binary64 | 243.2 | **1,405.6** | 1,176.5 | 1,063.5 |
+
+The card crosses the software backend at about **64 members** on one
+tile and reaches **5.4x at binary128 and 5.8x at binary64** at 4,096.
+And the multi-tile images lose here too - at 24,576 lanes, the widest
+vector this integrator can present - by 12% (four) and 19% (six) at
+4,096 members. The margin narrows as E grows and never inverts: the
+ensemble's call count is independent of E by construction (entry 20),
+so each extra tile adds its launch and staging round to every one of
+those calls and the extra lanes never pay it back. Lane efficiency
+0.77 to 0.97 throughout, so this is not a ratio on idle silicon.
+
+*Verdict column: the first run of this sweep reported every card row
+as differing from software in two lines. A diff of one pair showed the
+only differing line was the trailer carrying the new wall-clock keys,
+and the data-only diff was zero lines; the normalisers were fixed and
+the sweep re-run: 30 of 30 card rows identical in every value and every counter, and the three binary256 quad rows likewise. The timings in the tables above are from the re-run.*
+
+### Where a step goes: the measurement that reorders the residency work
+
+The instrumented trailer, one f128 tile, share of wall clock:
+
+| problem | format | program runs | elementwise | div and sqrt | gravity, inclusive |
+|---|---|---|---|---|---|
+| Kepler | binary64 | 8.1% | 77.3% | 13.0% | 59.8% |
+| Kepler | binary128 | 10.5% | 75.9% | 12.2% | 71.7% |
+| n-body 64 | binary64 | 3.7% | 63.6% | 30.6% | 82.7% |
+| n-body 64 | binary128 | 4.3% | 54.8% | 39.0% | 89.9% |
+| n-body 256 | binary64 | 0.9% | 48.5% | 48.0% | 73.5% |
+| n-body 256 | binary128 | 1.1% | 37.4% | 59.2% | 85.8% |
+
+**The program runs - where every byte the residency plan would keep on
+the card actually moves - are 1 to 10% of the step.** docs/HARDWARE.md's
+morning ranking (allocate through `cft_alloc`, keep the scratch block
+resident, then the convergence test) was costed correctly and ordered
+wrongly, and its own last paragraph, which said to measure before
+building any of it, was the part that was right. Two things are the
+wall instead:
+
+- **Per-call cost at small sizes.** 172,000 six-element calls in a
+  200-step Kepler run at **108 microseconds each** on the card against
+  0.73 in software: 77% of the step. A resident six-element buffer still
+  pays the launch. This is a call-count problem, and the fix is more of
+  the substep as a program.
+- **The correctly rounded divide and square root at large ones.** At
+  256 bodies and binary128, 674 `cft_div`/`cft_sqrt` calls take 35.1 of
+  59.3 seconds: 52 ms a call over 32,640 pairs, **1.6 microseconds an
+  element against 4.3 nanoseconds for an FMA on the same tile**; in
+  software 7.6 microseconds an element and 71% of the step. That is the
+  composed correctly-rounded route (a program core with host prep and
+  finish on every operand), not the tile - cft-fp256's own peers tool
+  prices its software binary128 square root at ~10,900 ns against
+  MPFR's 49 - and it is filed to cft-fp256 as the first ask now.
+
+Bytes are not the wall: 2.4 GB a step at 256 bodies and binary128 is
+about 0.8 s of an 11.9 s step at the measured bus rate. **Cut the call
+count, then fix the divide, then residency.**
+
+### Two more of my comparisons that could only fail
+
+Recorded because the pattern is now four for four this week and worth
+naming as one thing. (1) The workload table's binary64 software row
+was held to bit-identity with REBOUND while running the FMA form, which
+is documented to differ at round-off; there are two software rows now,
+and only the REBOUND-form one is held to REBOUND. (2) Even that one then
+"differed" on two trailing fields: the exact-time pair, a double-double
+split of the same instant the two programs divide differently between
+words, which `tools/check_equivalence.py` has always truncated at the
+`|`. The benchmark now uses the gate's definition of agreement rather
+than one invented beside it. In every case the disease was the same as
+entry 33's banner: **the check measured something adjacent to the
+claim, and the adjacent thing could not pass.** A comparison that has
+never been seen to pass on known-identical input has not been tested.
+
+### What the page shows
+
+`hw/report.py` draws the five figures - seconds a step against bodies,
+accuracy for cost, the ensemble, where a step goes, and the same-bits
+matrix - from the CSVs under `bench-modes/`, with a table twin under
+each; the series keep one hue per image across every figure and the
+software backend is the de-emphasis gray. The digests are identical
+across one, four and six tiles, two bitstreams and the software
+backend, which is the property that lets a pooled node's answer be
+trusted without recomputation, and the matrix is that claim drawn from
+the rows rather than asserted.

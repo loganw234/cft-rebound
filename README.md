@@ -249,7 +249,9 @@ Nothing is vendored by hand.
     docs/HARDWARE.md         the resident design, its break-even, what is unverified
     docs/BITSTREAM.md        the f128 image: fp32/fp64/fp128 tiles with binary256
                              left out, how it refuses, how it is built, what it measured
-    hw/                      that image's build flow and card series
+    docs/bench/              the bench sheet: five figures from real integrations across
+                             every operating mode (report.html) and the CSVs behind them
+    hw/                      that image's build flow, card series and benchmarks
     docs/INTEGRATORS.md      which other REBOUND integrators port well, ranked
     docs/PYTHON.md           reaching the integrator from rebound.Simulation, and
                              the four sharp edges that come with it

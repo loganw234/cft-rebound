@@ -1,0 +1,19 @@
+problem,steps,mode,format,seconds,steps_per_s,vs_ref,energy_drift,record,passes
+kepler,200,ref,fp64,0.0043,46520.0451,1.0000,1.301043e-15,reference,-
+kepler,200,sw-rebound-form,fp64,4.8686,41.0799,0.0009,1.301043e-15,identical,3.425
+kepler,200,sw,fp128,6.8051,29.3895,0.0006,9.408992e-21,fma reference,8.555
+outer,100,ref,fp64,0.0028,35811.3343,1.0000,4.113090e-16,reference,-
+outer,100,sw-rebound-form,fp64,5.2497,19.0486,0.0005,4.113090e-16,identical,3.050
+outer,100,sw,fp128,7.6205,13.1225,0.0004,3.445525e-25,fma reference,8.420
+pythagorean,100,ref,fp64,0.0022,44825.7026,1.0000,1.377658e-13,reference,-
+pythagorean,100,sw-rebound-form,fp64,2.9577,33.8102,0.0008,1.377658e-13,identical,3.070
+pythagorean,100,sw,fp128,3.5623,28.0717,0.0006,1.701188e-20,fma reference,7.360
+nbody64,20,ref,fp64,0.0117,1711.8269,1.0000,1.040831e-14,reference,-
+nbody64,20,sw-rebound-form,fp64,26.4074,0.7574,0.0004,1.040831e-14,identical,3.300
+nbody64,20,sw,fp128,65.1522,0.3070,0.0002,2.565192e-28,fma reference,7.950
+nbody256,5,ref,fp64,0.0401,124.8038,1.0000,4.027782e-14,reference,-
+nbody256,5,sw-rebound-form,fp64,95.3575,0.0524,0.0004,4.027782e-14,identical,3.800
+nbody256,5,sw,fp128,237.1552,0.0211,0.0002,1.583988e-28,fma reference,7.600
+nbody512,3,ref,fp64,0.1158,25.9153,1.0000,6.783141e-14,reference,-
+nbody512,3,sw-rebound-form,fp64,249.4682,0.0120,0.0005,6.783141e-14,identical,4.333
+nbody512,3,sw,fp128,573.0526,0.0052,0.0002,8.395148e-29,fma reference,7.667

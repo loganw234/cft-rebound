@@ -1,0 +1,13 @@
+problem,steps,mode,format,seconds,steps_per_s,vs_ref,energy_drift,record,passes
+kepler,200,ref,fp64,0.0037,54198.6767,1.0000,1.301043e-15,reference,-
+kepler,200,sw-rebound-form,fp64,4.8784,40.9968,0.0008,1.301043e-15,identical,3.425
+kepler,200,sw,fp256,15.8672,12.6046,0.0002,9.408992e-21,fma reference,19.675
+kepler,200,4t-full,fp256,119.9620,1.6672,0.0000,9.408992e-21,identical,19.675
+outer,100,ref,fp64,0.0052,19385.3075,1.0000,4.113090e-16,reference,-
+outer,100,sw-rebound-form,fp64,5.3096,18.8336,0.0010,4.113090e-16,identical,3.050
+outer,100,sw,fp256,21.8221,4.5825,0.0002,3.445525e-25,fma reference,19.880
+outer,100,4t-full,fp256,177.3162,0.5640,0.0000,3.445525e-25,identical,19.880
+pythagorean,100,ref,fp64,0.0034,29152.6065,1.0000,1.377658e-13,reference,-
+pythagorean,100,sw-rebound-form,fp64,2.8792,34.7320,0.0012,1.377658e-13,identical,3.070
+pythagorean,100,sw,fp256,8.7604,11.4150,0.0004,1.701188e-20,fma reference,17.030
+pythagorean,100,4t-full,fp256,102.6692,0.9740,0.0000,1.701188e-20,identical,17.030
