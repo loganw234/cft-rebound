@@ -44,6 +44,7 @@ agree, never that the problem posed was the one meant.
 import argparse
 import os
 import pathlib
+from fractions import Fraction
 import re
 import shutil
 import subprocess
@@ -111,17 +112,41 @@ def energy_drift(record: str):
     somebody typed."""
     vals = []
     for line in record.splitlines():
-        if line.startswith("#") or not line.strip():
+        if not line.startswith("sample "):
             continue
         f = line.split()
         if len(f) > 6:
             try:
-                vals.append(float.fromhex(f[6]))
+                vals.append(hex_fraction(f[6]))
             except ValueError:
                 pass
-    if len(vals) < 2 or vals[0] == 0.0:
+    if len(vals) < 2 or vals[0] == 0:
         return None
-    return abs(vals[-1] - vals[0]) / abs(vals[0])
+    # EXACT rational arithmetic, converted to float only for printing.
+    # float.fromhex rounds a binary128 energy to a double, and two values
+    # that differ at the 1e-30 level then round to the SAME double, so
+    # the drift reads exactly zero - which the first run of this table
+    # printed for every binary128 row. The accuracy column is half the
+    # point of the table; it cannot be measured with the instrument
+    # whose limitation it exists to show.
+    return float(abs(vals[-1] - vals[0]) / abs(vals[0]))
+
+
+def hex_fraction(tok: str):
+    """A hex float of any width as an exact Fraction, the way
+    tools/check_equivalence.py reads them."""
+    s = tok.strip()
+    neg = s.startswith("-")
+    if neg:
+        s = s[1:]
+    if not s.lower().startswith("0x"):
+        raise ValueError(tok)
+    body = s[2:]
+    mant, _, exp = body.lower().partition("p")
+    ip, _, fp = mant.partition(".")
+    digits = (ip + fp) or "0"
+    val = Fraction(int(digits, 16), 16 ** len(fp)) * (Fraction(2) ** int(exp or "0"))
+    return -val if neg else val
 
 
 def passes(record: str):
