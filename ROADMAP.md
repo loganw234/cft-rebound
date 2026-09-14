@@ -574,3 +574,104 @@ survive exactly, so a resumed run continues on the right trajectory and
 only its clock differs, in the last bit, on some splits. Closing it
 means archiving the wide `t` as a blob, which is one more field and one
 more line in the descriptor list.
+
+
+## What entry 37 leaves to build, scoped
+
+**2026-09-14.** The measurement in docs/VALIDATION.md entry 37 ordered
+the card-side work: cut the call count, then fix the divide, then
+residency. Each item, sized from the tree as it stands rather than
+from the design document, so the next round can pick one up without
+re-deriving it.
+
+### 1. Cut the call count (the biggest lever, rebound-side)
+
+172,000 elementwise calls of six elements in a 200-step Kepler run, at
+108 us each on the card: 77% of the step. The predictor and the seven
+correctors are already programs (two `cft_program_run_ex` per substep
+pass); what remains as hundreds of separate calls is **gravity** (about
+twenty vectorised calls per force evaluation, `gravity_body()` in
+src/ias15_cft.c) and the **end-of-step update and step control** (a
+few dozen scalar-width calls a step, `pc_error()` and `dtnew_*()`).
+
+- Gravity as one program needs its inputs gathered per pair - `x[i_l]`
+  and `x[j_l]` from the predictor's deposits - and its outputs scattered
+  per particle. **Nothing on the device does that today** (docs/
+  HARDWARE.md, "The resident design", steps 2 and 3): the host does it
+  with the byte-copy loops entry 37's split will price. So this item
+  splits in two: the pair arithmetic as a program (possible now - a
+  program over P lanes whose inputs are the six gathered coordinate
+  vectors; removes ~15 of gravity's ~20 calls per evaluation, and the
+  gather stays on the host as it is), and the gather/scatter on the
+  device (a cft-fp256 sequencer ask: an indexed operand read, or an
+  in-program cross-lane reduction, both already on cft-fp256's asks
+  list from the workload round).
+- The step control as a program: `predict_next_step`'s sixteen
+  compensated additions per coordinate are named in the design as "one
+  more program over the scratch block" and are still elementwise calls.
+  Mechanical; the same shape as `correct_n`.
+
+### 2. Adopt `cft_run_ex` with `scalar_mask` (delivered, unadopted)
+
+cft-fp256 shipped the scalar-broadcast operand in ABI 0.12 because this
+project asked for it (docs/HARDWARE.md's fourth ask), behind
+`CAPS2[7]`; both f128 images and the revision-4 pair publish it, and the
+software backend always carries it. `grep` finds **24 call sites** in
+src/ias15_cft.c that pass a broadcast constant vector as an operand
+(`vmul`/`vfma`/`vadd`/`vsub` with a `K*` vector: `KRINV`, `KHF`, `KC`,
+`KY4`, `KY5`, `KNUM`, `KVNUM`, `KPOSR`, `K5040`, ...), each staging N3
+copies of one value. Adopting it: a `vmulk(d, a, k)` family that calls
+`cft_run_ex` with the constant as a one-element operand and
+`scalar_mask` set, used at those 24 sites; the bits are the contract's
+same bits (a scalar operand applies element 0 to the whole run), so the
+gates hold it. Worth the ~300 staged vectors a step the design counted,
+which entry 37 prices at a few percent - bytes are not the wall. Do it
+for the memory and the honesty of having asked, not for speed.
+
+### 3. The recorded corrector schedule (prototype exists)
+
+`~/patch_fixed_schedule.py` on amd-arc-box (2026-09-10, against a tree
+123 commits behind) adds `--record-iters FILE` and `--replay-iters
+FILE`: the first writes one corrector pass count per step attempt, the
+second runs exactly those counts and skips `pc_error()` at both of its
+call sites (loop and program engines) and the corrector's own exit
+test. The replay must produce a byte-identical record, and that
+identity is the proof the optimisation is exact - it is a claim only a
+bit-reproducible integrator can make. Entry 37's measurement says what
+it is worth: `pc_error` is inside the elementwise bucket at small N and
+is 13-19% of calls; on the card that is 4-9% of a step. Port the
+prototype's four hunks to the current tree (its anchors are the
+`if (n == 7) pc_error(...)` lines, the corrector loop and the argument
+parser; all four still exist), gate it on the identity, and record it.
+
+### 4. The measurement before the next round (running as this is written)
+
+Entry 37's split cannot say how much of gravity's 86% is the host's
+byte-copies against the accumulate adds against the divide against the
+launches. `src/ias15_cft.c` now times the three pair gathers and the
+scatter loop as `t_g_copy`, the accumulate half as `t_g_accum`, and
+every library call inside gravity as `t_g_lib` with `t_g_divsqrt`
+separately; the decomposition pass re-runs with them and entry 38 will
+carry the table. Whether item 1 starts with the pair program or with
+the device gather depends on it.
+
+### 5. Residency, demoted to last, still real
+
+`cft_alloc` for `x0`, `v0`, `a0`, `at` and the four program buffers,
+then the scratch block resident between corrector passes. docs/
+HARDWARE.md's "Moving the state onto the card" has the byte accounting
+and the library side is verified done; entry 37 prices the whole item
+at 1-10% of a step. Worth doing after 1 and 3, not before.
+
+### Still owed from before this round, unchanged
+
+- The `provenance` member (this file, "Corrections to the state struct
+  above"; PARCELS.md's parcel-C note).
+- The wide clock `t` across a checkpoint: 1 ulp on 2 of 40 splits
+  ("What round 2 leaves open: the wide clock").
+- The full software suite on Linux, entry 29's open item: `make check`
+  on amd-arc-box, 2026-09-14, result in entry 38.
+- docs/HARDWARE.md "What to do first" items 1 and 4: the ensemble gate
+  with an artifact, and the mixed-pass-count ensemble that prices idle
+  lanes - both in the chain running as this is written, results in
+  entry 38.
