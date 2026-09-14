@@ -3488,3 +3488,145 @@ or its clock.
 
 The failed build's manifest is kept. It records the timing it reached
 and is the only evidence of this tile's six-unit ceiling.
+
+## 36. The six-tile image closes, and tile count turns out to be a cost: what the specialised bitstream is actually worth to IAS15
+
+**2026-09-14, amd-arc-box, Alveo U50C, same pins as entries 34 and 35.**
+The six-tile image closed at 125 MHz and was measured against the
+shipped four-tile full image and against the one-tile images of both
+kinds. The headline is not the one this work was started for.
+
+### The image
+
+Six compute units, `EN_FP256=0`, **125 MHz**, 322 minutes, **kernel WNS
++0.061 ns**, `hw/verify-image.sh` 8 of 8 PASS including *24 masters, all
+channels HBM, no channel shared*. sha256 `51f00fb6...`, staged at
+`~/cardday-f128x6b/cft_hw_f128_6x.xclbin`. Placed at 696,806 LUTs
+(80.03%), slightly under the 140 MHz attempt's 698,188, which is what a
+relaxed constraint should do. `ias15_cft --probe`: 6 tiles, `CAPS[3:0]
+= 0x7`, contract `0x800`; binary256 refused by name, `device-test`
+813 checks 0 failed.
+
+### The arithmetic scaled exactly as designed
+
+`cft-resident`, fma, n = 1,048,576, all units engaged:
+
+| format | quad @135, 4 units | f128 @125, 6 units | ratio |
+|---|---|---|---|
+| fp32 | 3,224.04 M/s (51.6 GB/s) | 4,476.41 M/s (71.6 GB/s) | 1.388 |
+| fp64 | 1,664.39 M/s (53.3 GB/s) | 2,308.92 M/s (73.9 GB/s) | 1.387 |
+| fp128 | 845.20 M/s (54.1 GB/s) | 1,177.71 M/s (75.4 GB/s) | 1.393 |
+
+Predicted 6x125 / 4x135 = **1.389**; measured 1.387 to 1.393. Per-unit
+rate is 93.3 to 98.1 Mbeat/s against the quad's 100.8 to 105.7, exactly
+the 125/135 clock ratio. Digests identical to the single-tile images and
+to software at every format, so determinism holds across one, four and
+six tiles and across two different bitstreams.
+
+**Everything about the hardware worked.** What follows is about the
+workload.
+
+### More tiles is slower. Monotonically, everywhere.
+
+`hw/compare-images.sh`, program engine, FMA form, `--max-iter 60`,
+ratios against the software backend on one core. Every record on every
+row **byte-identical** to software; the corrector's pass count matches
+what each format needs.
+
+| problem | steps | format | f128 x1 @150 | quad x4 @135 | f128 x6 @125 |
+|---|---|---|---|---|---|
+| Kepler N=2 | 100 | fp64 | 0.09x | 0.06x | 0.06x |
+| Kepler N=2 | 100 | fp128 | 0.13x | 0.09x | 0.09x |
+| outer N=6 | 100 | fp64 | 0.16x | 0.06x | 0.05x |
+| outer N=6 | 100 | fp128 | 0.25x | 0.09x | 0.08x |
+| nbody N=64 | 20 | fp64 | **1.47x** | 0.63x | 0.48x |
+| nbody N=64 | 20 | fp128 | **2.23x** | 1.00x | 0.79x |
+| nbody N=256 | 5 | fp64 | **2.99x** | 1.93x | 1.60x |
+| nbody N=256 | 5 | fp128 | **3.80x** | 2.61x | 2.22x |
+| nbody N=512 | 3 | fp64 | **2.94x** | 2.34x | 2.07x |
+| nbody N=512 | 3 | fp128 | **3.91x** | 3.16x | 2.86x |
+
+**One tile beats four beats six, in all ten rows, without a single
+exception.** The six-tile image carries 1.39x the aggregate arithmetic
+rate of the shipped quad and integrates about 10% *slower* than it.
+
+The mechanism is not mysterious. libcft partitions every `cft_run`
+across all the tiles a device presents, so one library call becomes one
+kernel launch and one staging round **per tile**. IAS15 issues thousands
+of small calls per step - 51,911 for twenty steps at N=64 and binary64 -
+and at these vector lengths the per-call cost multiplied by the tile
+count swamps whatever the extra arithmetic contributes. Tile count is
+not a throughput knob for this workload; it is a divisor on an already
+small n and a multiplier on the fixed cost.
+
+### The control: what the specialised image is actually worth
+
+The table above cannot separate "fewer tiles" from "higher clock and
+one rung fewer", because its winner differs from the quad in both. So
+both **one-compute-unit** images were run head to head, same card, same
+session, card runs only:
+
+| problem | steps | format | f128 @150 | full tile @135 | ratio | records |
+|---|---|---|---|---|---|---|
+| nbody N=64 | 20 | fp64 | 13.47 s | 13.62 s | **1.01** | identical |
+| nbody N=64 | 20 | fp128 | 29.21 s | 29.72 s | **1.02** | identical |
+| nbody N=256 | 5 | fp64 | 31.98 s | 32.15 s | **1.01** | identical |
+| nbody N=256 | 5 | fp128 | 63.61 s | 64.90 s | **1.02** | identical |
+| nbody N=512 | 3 | fp64 | 75.41 s | 77.67 s | **1.03** | identical |
+| nbody N=512 | 3 | fp128 | 148.09 s | 151.51 s | **1.02** | identical |
+
+**One to three percent.** That is the whole value of this bitstream to
+this integrator.
+
+So the 1.24x to 2.67x by which the f128 single beat the shipped quad was
+**tile count, essentially all of it, and not the specialised image**.
+Loading cft-fp256's existing one-tile full image - which still carries
+binary256 - recovers 97 to 99% of it. The correction matters because the
+three-image table invites exactly the wrong reading, and I published
+that reading before running this control.
+
+Why so little, when the arithmetic is 1.108x faster (entry 34)? Because
+the arithmetic is not what the wall clock is made of. An 11% faster
+engine moved the integration by 2%, which puts the arithmetic at
+roughly a fifth of it; the rest is per-call staging across PCIe and the
+scatter in gravity's accumulate half, and neither is a function of the
+clock or of how many rungs the silicon carries. Entry 34 measured this
+at one tile and called it "the crossover did not move". It is the same
+fact, now with the size of the effect on it.
+
+### What this says to do
+
+- **For IAS15 on this card, use a one-tile image.** Either one. The
+  six-tile image is the wrong artifact for this workload and the
+  four-tile shipped image is worse than one tile at every size tested.
+- **A multi-tile image is still right for a workload with long vectors
+  or independent work per tile** - the arithmetic scaling above is
+  perfect, 1.39x for 1.389x asked. IAS15 is simply not that workload at
+  any body count reachable here.
+- **The lever is the library, not the silicon.** docs/HARDWARE.md
+  already ranks the asks - state resident on the card across a step, and
+  a device-side scatter for gravity's accumulate half - and this entry
+  is the measurement that says nothing in the bitstream substitutes for
+  them. A tile that is 1.39x faster at arithmetic it spends four fifths
+  of its time not doing is worth 2%.
+- **The cheapest experiment would have predicted all of it.** Running
+  the existing one-tile and four-tile images against the workload costs
+  an hour and needs no build; it would have shown tile count to be a
+  cost before thirteen hours went into two multi-tile links. The signal
+  was on the record too: the ensemble measurement in this ledger already
+  found many small systems below one large one, which is the same effect
+  seen from the other side. **Measure the partitioning before buying
+  more of it.**
+
+### What the exercise did buy
+
+Not nothing, and worth separating from the disappointment: cft-fp256's
+trim generics now reach a bitstream at all, and its `docs/LAYOUTS.md`
+catalogue is no longer entirely placeholders - two of its rows are
+built, one of them at a clock the catalogue had guessed and never
+measured. The refusal path is real, exercised and controlled at three
+layers. The area model is calibrated against two linked multi-tile
+images. And the six-unit timing ceiling of this tile, roughly 130 MHz,
+is now a measured number rather than an extrapolation. The bitstreams
+are staged; what they are worth to IAS15 is 2%, and that is the number
+to quote.

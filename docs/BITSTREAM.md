@@ -337,10 +337,66 @@ about **130 MHz**.
 
 Relaunched at **125 MHz** (8.000 ns, so 0.3 ns of real margin over a
 path the tools have demonstrated) rather than 130 (7.692 ns, nine
-picoseconds under it). Six tiles at 125 against the shipped four at 135
-would be **1.39x** the aggregate tile-clock product.
+picoseconds under it).
 
-TBD - the 125 MHz link started 2026-09-13 19:16.
+**It closed:** kernel WNS **+0.061 ns**, 322 minutes, `verify-image`
+8 of 8 including *24 masters, all channels HBM, no channel shared*,
+sha256 `51f00fb6...`, staged at
+`~/cardday-f128x6b/cft_hw_f128_6x.xclbin`. Placed at 696,806 LUTs
+(80.03%).
+
+**The arithmetic scaled exactly as asked:** 4,476 / 2,309 / 1,178 M
+elem/s at fp32/fp64/fp128 with all six units engaged, 71.6 to 75.4
+GB/s, against the shipped quad's 3,224 / 1,664 / 845. That is 1.387 to
+1.393 against 6x125 / 4x135 = 1.389 predicted. Per-unit rate tracks the
+clock ratio exactly, and the digests match the single-tile images and
+software at every format.
+
+## What it is worth to IAS15, which is 2%
+
+The part that matters, and it is not what this image was built for.
+Full tables in docs/VALIDATION.md entry 36.
+
+**More tiles is slower, monotonically, in all ten card rows measured** -
+one tile beats four beats six, at every body count and both formats,
+with every record byte-identical to software. The six-tile image carries
+1.39x the aggregate arithmetic of the shipped quad and integrates about
+10% slower than it. The library partitions every `cft_run` across all
+tiles a device presents, so one call becomes a launch and a staging
+round per tile, and IAS15 issues thousands of small calls per step.
+Tile count is a divisor on an already short vector and a multiplier on
+a fixed cost.
+
+**And the specialised image itself is worth 1 to 3%.** Both
+one-compute-unit images head to head on the same card, which is the only
+comparison that separates the clock from the partitioning:
+
+| problem | steps | format | f128 @150 | full tile @135 | ratio |
+|---|---|---|---|---|---|
+| nbody N=64 | 20 | fp128 | 29.21 s | 29.72 s | 1.02 |
+| nbody N=256 | 5 | fp128 | 63.61 s | 64.90 s | 1.02 |
+| nbody N=512 | 3 | fp128 | 148.09 s | 151.51 s | 1.02 |
+
+So the 1.24x to 2.67x by which this image's single tile beats the
+shipped quad is **tile count, not the specialised bitstream**. Loading
+cft-fp256's existing one-tile full image recovers 97 to 99% of it and
+keeps binary256.
+
+An 11% faster engine moving the integration by 2% puts the arithmetic at
+about a fifth of the wall clock. The rest is per-call staging across
+PCIe and the scatter in gravity's accumulate half, and no bitstream
+addresses either. **The lever is the library** - state resident on the
+card across a step, and a device-side scatter - which docs/HARDWARE.md
+already ranks.
+
+### What to load
+
+- **IAS15 on this card: a one-tile image**, either kind. Prefer the
+  full tile if binary256 is ever wanted, this one for 2% and a loud
+  refusal instead.
+- **A multi-tile image for long vectors or independent per-tile work**,
+  where the 1.39x scaling above is real and perfect. IAS15 is not that
+  workload at any body count reachable here.
 
 ## What it asked of cft-fp256
 
