@@ -60,9 +60,24 @@ def run_timed(cmd, env=None):
     return time.monotonic() - t0, p.returncode, p.stdout + p.stderr
 
 
+def data_only(record: str) -> str:
+    """Just the numbers, for comparing across PROGRAMS.
+
+    ias15_ref and ias15_cft write different header lines - one is
+    REBOUND's own settings, the other carries cs, arith, engine and the
+    tolerance shift - so a whole-record compare between them can never
+    match and would report a divergence that is not there. What the
+    equivalence claim is about is the values, and those are the
+    non-comment lines."""
+    return "\n".join(l for l in record.splitlines()
+                     if l.strip() and not l.startswith("#"))
+
+
 def normalise(record: str) -> str:
     """A record with the two fields that cannot match across runs removed:
-    which program and backend produced it, and how long it took."""
+    which program and backend produced it, and how long it took. For
+    comparing two runs of the SAME program, where the counters are
+    comparable and worth keeping in the comparison."""
     out = []
     for line in record.splitlines():
         line = re.sub(r"backend=\S+", "backend=X", line)
@@ -194,9 +209,37 @@ def main() -> int:
               f"{steps/secs:>9.1f} {1.0:>8.2f} {fmt_drift(ref_drift):>13} "
               f"{'reference':<10} -")
 
+        # The port at binary64 in REBOUND'S OWN rounding sequence, which
+        # is where this repository's equivalence claim lives: gate 1 says
+        # these values are REBOUND's bit for bit. It is a separate row
+        # from the one below on purpose - `--arith fma --engine program`
+        # is a DIFFERENT sequence of roundings, documented to differ from
+        # REBOUND at round-off (3e-15 at binary64), and holding it to
+        # bit-identity with REBOUND reports a failure that is not one.
+        # The first run of this table did exactly that.
+        secs, rc, out = run_timed([str(cft), "--format", "fp64"] + base)
+        if rc == 0:
+            same = data_only(out) == data_only(ref_rec)
+            rec = "identical" if same else "DIFFERS from REBOUND"
+            if not same:
+                failures += 1
+            d = energy_drift(out)
+            rows.append((pname, steps, "sw-rebound-form", "fp64", secs,
+                         ref_secs / secs, d, rec, passes(out)))
+            print(f"{pname:<12} {steps:>6} {'sw REBOUND fm':<14} {'fp64':<6} {secs:>9.2f} "
+                  f"{steps/secs:>9.1f} {ref_secs/secs:>8.2f} {fmt_drift(d):>13} "
+                  f"{rec:<10} {passes(out)}")
+        else:
+            print(f"{pname} sw-rebound-form: rc={rc}: {out[-160:]}")
+            failures += 1
+
         sw_rec = {}
         for f in formats:
-            # The port in software.
+            # The port in the FMA form, which is the form the card runs:
+            # a correctly rounded divide is not a sequencer program, so
+            # --engine program requires --arith fma. This row is the
+            # reference the card rows are held to, and it is not held to
+            # REBOUND - the row above is.
             secs, rc, out = run_timed([str(cft), "--format", f, "--engine", "program",
                                        "--arith", "fma", "--max-iter", "60"] + base)
             if rc != 0:
@@ -205,15 +248,11 @@ def main() -> int:
                 continue
             sw_rec[f] = out
             d = energy_drift(out)
-            # At fp64 the software port must be REBOUND bit for bit.
-            rec = "identical" if f != "fp64" or normalise(out) == normalise(ref_rec) \
-                  else "DIFFERS from REBOUND"
-            if rec.startswith("DIFFERS"):
-                failures += 1
-            rows.append((pname, steps, "sw", f, secs, ref_secs / secs, d, rec, passes(out)))
-            print(f"{pname:<12} {steps:>6} {'software':<14} {f:<6} {secs:>9.2f} "
+            rows.append((pname, steps, "sw", f, secs, ref_secs / secs, d,
+                         "fma reference", passes(out)))
+            print(f"{pname:<12} {steps:>6} {'sw FMA form':<14} {f:<6} {secs:>9.2f} "
                   f"{steps/secs:>9.1f} {ref_secs/secs:>8.2f} {fmt_drift(d):>13} "
-                  f"{rec:<10} {passes(out)}")
+                  f"{'fma ref':<10} {passes(out)}")
 
             for label, path, tiles, have in images:
                 if f not in have:
