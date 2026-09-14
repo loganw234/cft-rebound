@@ -20,8 +20,7 @@ Written 2026-09-10, after the port ran on the FP256 tile.
 > 2026-09-14, is not: `reb_integrator_cft.c` sets it from
 > `cft_ias15_default_max_iter(format)` when the caller leaves it at 0
 > (see "A footgun found by building on it" for why it once was not).
-> The provenance member (see "Corrections to the
-> state struct above"). The last section, "What integration found",
+> The last section, "What integration found",
 > is the newest text in this file and is the one to read first if you
 > only read one. docs/VALIDATION.md entries 25 through 28 are the
 > measurements.
