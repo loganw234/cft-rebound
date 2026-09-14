@@ -388,3 +388,73 @@ card, and what needs the card to confirm:
 4. A mixed ensemble (members needing 10 and 23 passes in the same
    step) to price idle lanes on the tile in wall time, which is what
    decides whether the lane-mask ask is worth its library change.
+
+## The specialised bitstream: tried, measured, and worth 2%
+
+**2026-09-13/14.** Everything above treats the tile as given. It is not:
+cft-fp256's kernel carries trim generics, so an image can be built with
+the binary256 rung left out - smaller, faster, and refusing binary256 by
+name. That was built, on the reasoning that this integrator's own
+precision study (docs/HORIZON.md) says binary128 is the rung worth
+having. Three images now exist and have been measured against each other
+on the card. **docs/BITSTREAM.md is the full account; docs/VALIDATION.md
+entries 34 to 36 are the measurements.** The conclusion belongs here,
+because it changes what this document's to-do list is for.
+
+What the hardware did, all of it as designed:
+
+- one tile, no binary256, closes **150 MHz** where the full tile ships at
+  135, with a quarter of the tile gone (32,398 LUTs and 143 DSPs);
+- its engine runs **1.108x** the full tile's rate, measured back to back,
+  which is 99.7% of the clock ratio;
+- six such tiles fit and close at 125 MHz and deliver **1.39x** the
+  shipped quad's aggregate arithmetic, against 1.389 predicted;
+- every record byte-identical to software across one, four and six tiles
+  and two different bitstreams.
+
+What it did for IAS15:
+
+- **more tiles is slower, monotonically** - one tile beat four beat six
+  in all ten card rows, at every body count and both formats. The
+  library partitions every `cft_run` across every tile a device
+  presents, so one call becomes a kernel launch and a staging round per
+  tile, and this integrator issues thousands of small calls per step.
+  Tile count is a divisor on an already short vector and a multiplier on
+  a fixed cost;
+- **the specialised image itself is worth 1 to 3%**, isolated by running
+  both one-compute-unit images head to head.
+
+**So the arithmetic is about a fifth of the wall clock.** An 11% faster
+engine moving the integration by 2% puts it there directly, and that is
+the single most useful number this document now contains: **four fifths
+of a card-side IAS15 step is not arithmetic**, and no bitstream
+addresses any of it. The items in "What to do first" below are therefore
+not a list of nice-to-haves beside a hardware lever. They are the whole
+lever.
+
+Read the ranked asks in that light:
+
+1. **State resident on the card across a step.** The engine's vectors are
+   plain `calloc` today (`valloc` in src/ias15_cft.c), so every operand
+   of every call is staged across PCIe and staged back. libcft has
+   carried device-resident `cft_alloc` buffers since ABI 0.11, and
+   cft-fp256 measured 3.0 to 3.3x on the raw path from exactly this
+   change. Nothing in this repository uses it yet. **This is the
+   cheapest large item and it needs no hardware.**
+2. **Fewer, larger calls.** The program engine already removed 60% of
+   them; the remainder is gravity, the end-of-step update and the step
+   control. Every call removed is a launch and a staging round removed
+   per tile.
+3. **A device-side scatter for gravity's accumulate half**, which is
+   36-42% of card wall clock as N-1 narrow vector adds, and projects
+   1.99x to 3.1x. This is the one that needs a sequencer feature rather
+   than a library change.
+4. **The convergence test, removed exactly** via a recorded corrector
+   schedule - 13-19% of calls, worth 4-9% on the card and nothing in
+   software.
+
+And one negative result worth carrying: **do not reach for a wider
+image to make this faster.** It was tried. Measure the partitioning cost
+with the images that already exist before building another one; two
+existing images predict the whole outcome in an hour, and two multi-tile
+links cost thirteen.
