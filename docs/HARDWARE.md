@@ -546,3 +546,71 @@ would turn this ranking from an argument into a number. Do that before
 writing any of the three, because a day spent on residency when the wall
 is the gather would be the same mistake the six-tile image already made
 once.
+
+### Measured, later the same day: the ranking above was wrong
+
+The section above asked for one measurement before anything was
+built, and the measurement came back the same afternoon
+(`hw/bench-workload.py`'s trailer instrumentation, docs/VALIDATION.md
+entry 37): every library call timed on a wall clock and bucketed,
+gravity timed inclusively, bytes presented per call summed. One f128
+tile, the FMA form on the program engine, 2026-09-14.
+
+Share of the card's wall clock, per bucket:
+
+| problem | format | wall | program runs | elementwise | div and sqrt | gravity, inclusive |
+|---|---|---|---|---|---|---|
+| Kepler, 2 bodies | binary64 | 24.1 s | 8.1% | 77.3% | 13.0% | 59.8% |
+| Kepler, 2 bodies | binary128 | 46.8 s | 10.5% | 75.9% | 12.2% | 71.7% |
+| n-body, 64 | binary64 | 9.4 s | 3.7% | 63.6% | 30.6% | 82.7% |
+| n-body, 64 | binary128 | 25.3 s | 4.3% | 54.8% | 39.0% | 89.9% |
+| n-body, 256 | binary64 | 27.3 s | 0.9% | 48.5% | 48.0% | 73.5% |
+| n-body, 256 | binary128 | 59.3 s | 1.1% | 37.4% | 59.2% | 85.8% |
+
+Gravity overlaps the other three - it is timed around its own calls -
+which is why it is a column and not a segment.
+
+**The program runs are at most a tenth of the step, and one percent at
+256 bodies.** Every byte the residency items above would keep on the
+card moves inside those runs. Items 1 and 2 of the ranking above are
+therefore worth 1 to 10%, and the argument that put them first - that
+406 x N3 elements cross the bus per pass - was true and beside the
+point: at 256 bodies and binary128 the run presents 2.4 GB a step, and
+at the bus rate this project has measured that is about 0.8 s of an
+11.9 s step. Bytes are not the wall. Two other things are.
+
+1. **Per-call cost, at every size.** A Kepler step issues 172,000
+   elementwise calls of six elements each over 200 steps, and on the
+   card they cost **108 microseconds apiece** against 0.73 in software -
+   a launch, a staging round and a read-back, for six numbers. That is
+   77% of the step at two bodies. It is not a residency problem; a
+   resident six-element buffer still costs the launch. It is a
+   call-count problem, and the fix is the one the design section has
+   always named: more of the substep as a program, so that gravity and
+   the step control stop being hundreds of separate calls.
+2. **The correctly rounded divide and square root, once the vectors are
+   long.** At 256 bodies and binary128 the 674 `cft_div` and `cft_sqrt`
+   calls of a five-step run - `1/r^3` for every pair, once per force
+   evaluation - take **35.1 of 59.3 seconds**, 52 ms a call over 32,640
+   pairs, **1.6 microseconds an element**, against 4.3 nanoseconds for
+   an FMA on the same tile. In software the same route is 7.6
+   microseconds an element and 71% of the step. cft-fp256's own peers
+   tool prices the software square root at binary128 at about 10,900 ns
+   against MPFR's 49, so this is a property of the composed
+   correctly-rounded route - a program core with host prep and finish
+   on every operand - and not of the tile. The seed-and-Newton route
+   (`CFT_RSQRT_SEED` plus fixed FMA passes) is one program and different
+   bits; a device-side correctly rounded divide is the ask that keeps
+   the bits.
+
+So the order for the card, measured rather than argued, is: **cut the
+call count, then fix the divide, then residency.** The residency work
+was the right thing to cost and the wrong thing to start with, and the
+paragraph above that said "do that before writing any of the three"
+is the one part of the section that was right.
+
+Gravity's own gather and scatter, which the design section treats as
+the next wall, are inside the inclusive column; at 256 bodies the host
+byte-copies and the accumulate adds are the part of that 86% which is
+neither the divide nor the launches, and this instrumentation does not
+split them out. That is the next measurement.

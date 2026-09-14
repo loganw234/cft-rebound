@@ -98,6 +98,9 @@ def normalise(record: str) -> str:
         line = re.sub(r"impl=\S+", "impl=X", line)
         line = re.sub(r" seconds=[0-9.]+", "", line)
         line = re.sub(r" steps_per_s=[0-9.]+", "", line)
+        # The instrumented trailer's own timings (2026-09-14) and the
+        # ensemble's rate: all wall-clock, none of them a value.
+        line = re.sub(r" (wall_seconds|t_program|t_elem|t_divsqrt|t_gravity|system_steps_per_s)=[0-9.]+", "", line)
         out.append(line)
     return "\n".join(out)
 

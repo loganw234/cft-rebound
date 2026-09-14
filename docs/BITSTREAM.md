@@ -431,6 +431,21 @@ flight while this was built):
 5. **fp32 has no generic.** It is the baseline; an fp64/fp128-only tile
    (this project's actual demand) would save its bank - 26.6k LUT by
    `docs/LAYOUTS.md` - per tile.
+6. **The correctly rounded divide and square root are the wall once
+   vectors are long** - measured 2026-09-14 (docs/HARDWARE.md, "Measured,
+   later the same day"). At 256 bodies and binary128, `cft_div` and
+   `cft_sqrt` are 59% of a card step at **1.6 microseconds an element**
+   against 4.3 nanoseconds for an FMA on the same tile, and 71% of a
+   software step at 7.6 microseconds an element; cft-fp256's own
+   `cft-bench-peers` prices its software binary128 square root at about
+   10,900 ns against MPFR's 49. The composed route - a program core with
+   host prep and finish on every operand - is the cost, not the tile. A
+   device-side correctly rounded divide is the ask that keeps the bits;
+   the seed-and-Newton route is one program and different bits.
+7. **`hw/bench-sweep.sh` takes exactly one `--single` and one `--quad`**,
+   so an image with any other compute-unit count cannot be swept by it.
+   `hw/bench-modes.sh` here takes any number of labelled images and
+   reads each one's own tile count.
 
 Not a defect, but noted: cft-fp256's own gate for `make sim` and the
 K325T open-core numbers are unaffected; nothing in cft-fp256 was
