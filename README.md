@@ -470,7 +470,14 @@ convention for a fixed step.
   - `auto`, the default, lets the device decide; `off` always takes
     today's route; `on` demands the new one.
   - `on` against a device that does not publish the bit is refused by
-    name, and so is a misspelled variable.
+    name, and so is a misspelled variable, with two exceptions.
+    - A typo inside the `CFT_REBOUND_ROUTE_` or `CFT_REBOUND_HIDE`
+      prefix makes an unrelated variable, which nothing reads.
+    - On Windows the library half in a Python process sees only the
+      environment as it was when the process started, and that is
+      true of `$CFT_REBOUND_ARTIFACT` as well. So set these variables
+      before Python starts; one set through `os.environ` is not seen
+      (docs/PYTHON.md, "The Windows rule").
   - `$CFT_REBOUND_HIDE_FEATURES` hides a published bit, so the gate can
     exercise the fallback.
 

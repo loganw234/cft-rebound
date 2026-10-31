@@ -245,8 +245,9 @@ static int engine_routes(const char *artifact){
             for (r = 0; q == 0 && r < N_ROUTES; r++)
                 if (strlen(route_def[r].env) == l && !strncmp(*e, route_def[r].env, l)) known = 1;
             if (!known){
-                snprintf(eng_err, sizeof eng_err, "%.*s is not one of the door's variables: they are %s, "
-                         "and CFT_REBOUND_HIDE_FEATURES", (int)l, *e, route_list(1));
+                snprintf(eng_err, sizeof eng_err, "%.*s is not one of the door's variables, which are %s, "
+                         "plus CFT_REBOUND_HIDE_FEATURES; a name must match exactly, case included",
+                         (int)l, *e, route_list(1));
                 return -1;
             }
         }
@@ -556,7 +557,18 @@ static DOOR_UNUSED void vrun_k(cft_op op, V d, const V a, const V b, const V c, 
  *
  * An index at or past its source is refused by the library on the new
  * route, and by die() here on today's route. Neither route reads past a
- * source. */
+ * source.
+ *
+ * Two more of cft.h's shape rules for tables are enforced the same way,
+ * on both routes: a table on a NULL operand, and a table beside a
+ * source of zero elements, are refused by name.
+ *
+ * One rule is not enforced here: a table on an operand the opcode does
+ * not read. libcft exports no opcode's arity, and a table of arities
+ * typed here would drift from libcft's. On the new route, libcft refuses
+ * such a call by name. Today's route ignores the operand, so its result
+ * is the one the opcode computes anyway. A stated limit (V0's re-check,
+ * 2026-10-31). */
 static DOOR_UNUSED void vrun_ix(cft_op op, V d, const V a, const uint32_t *ia, size_t asrc,
                                 const V b, const uint32_t *ib, size_t bsrc,
                                 const V c, const uint32_t *ic, size_t csrc, size_t n, const char *what){
@@ -567,6 +579,14 @@ static DOOR_UNUSED void vrun_ix(cft_op op, V d, const V a, const uint32_t *ia, s
     uint32_t fl = 0;
     cft_status st;
     double _t0 = now_s();
+    for (int k = 0; k < 3; k++){
+        if (ix[k] && !in[k])
+            die("%s: operand %c has an index table and no source, which cft_run_ex refuses (cft.h, cft_elem_args)",
+                what, "abc"[k]);
+        if (ix[k] && !src[k])
+            die("%s: operand %c's index table is beside a source of zero elements, which cft_run_ex refuses "
+                "(cft.h, cft_elem_args)", what, "abc"[k]);
+    }
     int tables = (a && ia) || (b && ib) || (c && ic);
     for (int k = 0; k < 3 && tables; k++){
         size_t span = ix[k] ? src[k] : n;
@@ -2338,6 +2358,13 @@ static size_t door_low_bytes(void){
     while ((k >> m) > 1) m++;
     return (k - 4 * m + 13 - 53) / 8;
 }
+/* The data's own check, which tools/check_door.py asserts. At binary128
+ * and binary256 every nonzero value must carry bits below binary64's
+ * reach, and at binary64 none can. It is measured by a round trip
+ * through binary64 in libcft, not by the byte arithmetic above, so a
+ * door_low_bytes() that went wrong cannot vouch for itself. V0's F4,
+ * door_low_bytes() returning 0, passed the gate before this check. */
+static unsigned long long door_values, door_values_beyond;
 static void door_fill(V dst, size_t n){
     uint64_t *bits = malloc((n ? n : 1) * sizeof *bits);
     size_t low = door_low_bytes();
@@ -2355,6 +2382,23 @@ static void door_fill(V dst, size_t n){
         for (size_t i = 0; i < n; i++)
             if (bits[i] << 1)                                        /* not a zero */
                 for (size_t j = 0; j < low; j++) dst[i * ESZ + j] = (unsigned char)(door_next() >> 56);
+    }
+    {   /* narrowed to binary64 and widened back: a value that comes back
+         * different had bits binary64 cannot hold */
+        unsigned char *back = malloc((n ? n : 1) * ESZ);
+        uint32_t fl = 0;
+        if (!back) die("out of memory");
+        if (F == CFT_FP64) memcpy(back, dst, n * ESZ);     /* binary64 holds itself */
+        else if (cft_convert(dev, F, CFT_FP64, CFT_RNE, dst, bits, n, &fl) != CFT_OK ||
+                 cft_convert(dev, CFT_FP64, F, CFT_RNE, bits, back, n, &fl) != CFT_OK) die("door: the round trip failed");
+        for (size_t i = 0; i < n; i++){
+            int zero = 1;
+            for (size_t j = 0; j + 1 < ESZ && zero; j++) zero = dst[i * ESZ + j] == 0;
+            if (zero && (dst[i * ESZ + ESZ - 1] & 0x7f) == 0) continue;     /* +0 or -0 */
+            door_values++;
+            door_values_beyond += memcmp(back + i * ESZ, dst + i * ESZ, ESZ) != 0;
+        }
+        free(back);
     }
     free(bits);
 }
@@ -2424,9 +2468,9 @@ static uint32_t door_ix(int on, cft_op op, V d, const V in[3], uint32_t *const t
     door_after(ROUTE_INDEXED, on, label);
     return flags_union;
 }
-static uint32_t door_rs(int on, cft_op op, V d, const V a, size_t n, size_t seg, const char *label){
+static uint32_t door_rs(int on, cft_op op, V d, const V a, const V b, size_t n, size_t seg, const char *label){
     route_on[ROUTE_REDUCE_SEG] = on; flags_union = 0; door_before(ROUTE_REDUCE_SEG);
-    vreduce_seg(op, d, a, NULL, n, seg, "door reduce_seg");
+    vreduce_seg(op, d, a, b, n, seg, "door reduce_seg");
     door_after(ROUTE_REDUCE_SEG, on, label);
     return flags_union;
 }
@@ -2561,30 +2605,39 @@ static int door_selftest(const char *artifact){
             }
     }
 
-    /* The segmented reduction: the per-system maximum's shape and a sum.
-     * Segments of one; six-lane systems (Kepler) past V0's widest
-     * ensemble; V0's 1,057 systems of 32 bodies, and one more; and
-     * systems at the body cap. */
+    /* The segmented reduction: the per-system maximum's shape, a sum, and
+     * a dot product. The dot product is a two-operand reduction, so each
+     * segment of b is read too; V0's F11, the fallback ignoring b's
+     * segment, passed the gate before it. The shapes:
+     *   - segments of one;
+     *   - six-lane systems (Kepler), past V0's widest ensemble;
+     *   - V0's 1,057 systems of 32 bodies, and one more;
+     *   - systems at the body cap. */
     {
-        static const struct { cft_op op; const char *name; } rops[] = { { CFT_MAXALL, "maxall" }, { CFT_SUM, "sum" } };
+        static const struct { cft_op op; const char *name; int two; } rops[] = {
+            { CFT_MAXALL, "maxall", 0 }, { CFT_SUM, "sum", 0 }, { CFT_DOT, "dot", 1 },
+        };
         static const struct { size_t seg, nseg; } shapes[] = {
             { 1, 7 }, { 6, 1 }, { 6, 8193 }, { 96, 1058 }, { 3 * (size_t)CFT_MAX_BODIES, 1 }, { 3 * (size_t)CFT_MAX_BODIES, 17 },
         };
         for (size_t o = 0; o < sizeof rops / sizeof rops[0]; o++)
             for (size_t s = 0; s < sizeof shapes / sizeof shapes[0]; s++){
                 size_t n = shapes[s].seg * shapes[s].nseg;
+                const V B = rops[o].two ? b : NULL;
                 snprintf(label, sizeof label, "reduce_seg %s seg=%zu n=%zu", rops[o].name, shapes[s].seg, n);
                 if (!route_have[ROUTE_REDUCE_SEG]){ door_skipped++; printf("skip %s: the route is %s\n", label, route_by[ROUTE_REDUCE_SEG]); continue; }
                 door_fill(a, n);
+                if (B) door_fill(b, n);
                 fr = 0;
                 for (size_t q = 0; q < shapes[s].nseg; q++){   /* the reference: one cft_reduce a segment */
                     uint32_t fq = 0;
-                    if (cft_reduce(dev, rops[o].op, F, CFT_RNE, E(a, q * shapes[s].seg), NULL, E(ref, q), shapes[s].seg, &fq, NULL) != CFT_OK)
+                    if (cft_reduce(dev, rops[o].op, F, CFT_RNE, E(a, q * shapes[s].seg), B ? E(b, q * shapes[s].seg) : NULL,
+                                   E(ref, q), shapes[s].seg, &fq, NULL) != CFT_OK)
                         die("door: the reference reduction failed: %s", cft_last_error());
                     fr |= fq;
                 }
-                f1 = door_rs(1, rops[o].op, d1, a, n, shapes[s].seg, label);
-                f0 = door_rs(0, rops[o].op, d0, a, n, shapes[s].seg, label);
+                f1 = door_rs(1, rops[o].op, d1, a, B, n, shapes[s].seg, label);
+                f0 = door_rs(0, rops[o].op, d0, a, B, n, shapes[s].seg, label);
                 door_case(label, ref, fr, d1, f1, d0, f0, shapes[s].nseg);
                 if (o == 0 && s == 2){
                     /* The control: the first system's first element raised
@@ -2592,7 +2645,7 @@ static int door_selftest(const char *artifact){
                     uint64_t big = (1023ull + 30) << 52;
                     if (F == CFT_FP64) memcpy(a, &big, ESZ);
                     else{ uint32_t fl = 0; cft_convert(dev, CFT_FP64, F, CFT_RNE, &big, a, 1, &fl); }
-                    door_rs(1, rops[o].op, d0, a, n, shapes[s].seg, "reduce_seg control");
+                    door_rs(1, rops[o].op, d0, a, NULL, n, shapes[s].seg, "reduce_seg control");
                     door_control("reduce_seg maxall, one element raised past every other", d0, d1, shapes[s].nseg);
                 }
             }
@@ -2600,6 +2653,7 @@ static int door_selftest(const char *artifact){
 
     for (int r = 0; r < N_ROUTES; r++)
         printf("door route %s calls=%llu fallbacks=%llu\n", route_def[r].name, route_calls[r], route_fallbacks[r]);
+    printf("door data: %llu of %llu nonzero values carry bits below binary64's reach\n", door_values_beyond, door_values);
     printf("door: %d identical, %d differ, %d not compared, %d accounting errors; controls %d of %d\n",
            door_same, door_differ, door_skipped, door_counts_bad, door_controls_ok, door_controls);
     free(a); free(b); free(c); free(d0); free(d1); free(ref); free(rb[0]); free(rb[1]); free(rb[2]);
@@ -2619,9 +2673,14 @@ static int door_refuse(const char *name){
         vrun_ix(CFT_MUL, b, a, t, src, b, NULL, 0, NULL, NULL, 0, n, "door refuse");
     else if (!strcmp(name, "ix-alias-source"))     /* d overlaps a's indexed source */
         vrun_ix(CFT_SUB, a, a, t, src, NULL, NULL, 0, b, NULL, 0, n, "door refuse");
+    else if (!strcmp(name, "ix-table-on-null"))    /* a table on b, which is NULL */
+        vrun_ix(CFT_MUL, d, a, NULL, 0, NULL, t, src, NULL, NULL, 0, n, "door refuse");
+    else if (!strcmp(name, "ix-zero-source"))      /* a table beside a source of zero elements */
+        vrun_ix(CFT_MUL, d, a, t, 0, b, NULL, 0, NULL, NULL, 0, n, "door refuse");
     else if (!strcmp(name, "reduce-partial"))      /* not whole segments */
         vreduce_seg(CFT_SUM, d, a, NULL, n + 1, 8, "door refuse");
-    else die("--door-refuse %s: the cases are ix-alias-dense, ix-alias-source and reduce-partial", name);
+    else die("--door-refuse %s: the cases are ix-alias-dense, ix-alias-source, ix-table-on-null, "
+             "ix-zero-source and reduce-partial", name);
     printf("door refuse %s: NOT refused\n", name);
     free(a); free(b); free(d); free(t);
     return 1;

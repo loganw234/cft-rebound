@@ -3,12 +3,14 @@
 
 # Round 3: up to date with the library that was built for this port
 
-**Status, 2026-10-31: P0 is built and verified once, and nothing is
+**Status, 2026-10-31: P0 is built and verified twice, and nothing is
 dispatched.**
 - The re-pin, P0(a), is merged and pushed (`ebaeaa1`).
-- P0's first build is on branch `round3-p0`. V0 sent it back. The fixes
-  are on `round3-p0-v1`, and V0's scoped re-check is the last step
-  before P0 can land.
+- P0's first build is on branch `round3-p0`. V0 sent it back, and the
+  fixes are on `round3-p0-v1`.
+- V0's scoped re-check confirmed those fixes, and found four gaps and
+  one more route divergence. They are fixed on the same branch.
+- P0 lands when its full suite is green and the owner says so.
 - The rest of this plan is the owner's to approve, change or cut.
 
 Round 2 ([PARCELS.md](PARCELS.md), which stays as that round's record
@@ -125,7 +127,7 @@ not trust it". Three of them are load-bearing:
 | 2 | lead | `make check` on Linux, in the cft2204 WSL distro. It closes entry 38's Linux gap and gives entry 29's open item its first Linux result. amd-arc-box stays untouched while cft-fp256 has it. | **done**: see below |
 | 3 | owner | `make check-python` needs a `rebound` wheel in the Miniconda env. | **done**: see below |
 | 4 | lead | Build P0(b)-(e) below. The suite must be green before and after, and entry 38's 27-integration A/B must show the records unchanged. | **done**, twice: see below |
-| 5 | verifier V0 | Verify P0 before any parcel that reads it is dispatched. This is CASE-STUDY-4's proposal, which the owner made the precondition of that study's first round. | sent P0 back; the scoped re-check of `round3-p0-v1` is next |
+| 5 | verifier V0 | Verify P0 before any parcel that reads it is dispatched. This is CASE-STUDY-4's proposal, which the owner made the precondition of that study's first round. | **done**: sent P0 back, then re-checked the fixes; see below |
 | 6 | lead | Archive round 2's `.ledger/` and stand up round 3's, `urgent/` included. | **done**: see below |
 | 7 | lead | Copy `~/patch_fixed_schedule.py` from amd-arc-box into the ledger for P2. Read only; no card. | before P2 is dispatched |
 | 8 | owner | Prune the ten stale agent worktrees under `.claude/worktrees/`. | **nothing to prune**: see below |
@@ -159,6 +161,20 @@ Rows 2, 4, 5, 3, 6 and 8 in more detail:
 
   The fixes are listed in P0(c) and (d) below. V0's entry is
   `.ledger/verifier-P0.md`.
+
+  Its scoped re-check of `90e6f3f` re-ran the records (51 of 51), the
+  gate, `check-light` (15 legs, 0 FAIL) and the Python legs. It
+  confirmed each fix against its finding, and found reading a scalar
+  once correct across five aliasing shapes. Four of its ten new
+  sabotages passed the gate:
+  - F4: the data's low bytes never checked;
+  - F6: the hide-variable typo never tested;
+  - F11: no two-operand reduction;
+  - F4 combined with N8.
+
+  It also found `vrun_ix` still splitting by route on a table on a
+  NULL operand, and two limits stated below. All are dealt with at this
+  branch's tip. Its entry is `.ledger/verifier-P0-recheck.md`.
 - **Row 3, Python.** The owner allowed the download, and the lead
   installed rebound 5.1.1, the `cp312-win_amd64` wheel at githash
   `33549d1d`.
@@ -207,8 +223,8 @@ plan, the correction is marked. Every line number below is at
 *Correction.* The plan put the probe in `probe_device()`. That is
 `--probe`'s reporter, and it runs only in the program. The function both
 paths already call at open is `engine_check_format()` (:114). So
-`engine_routes()` runs right after it, in `main()` (:2630) and in
-`ias15_engine_open()` (:2919) alike.
+`engine_routes()` runs right after it, in `main()` (:2689) and in
+`ias15_engine_open()` (:2978) alike.
 
 It reads `cft_caps.seq_features` once for three bits (`cft.h` here means
 the pinned `third_party/cft-fp256/host/include/cft.h`):
@@ -247,11 +263,11 @@ tables. Its shape is P1's design: which streams and blocks are indexed,
 the lane count, the deposits. Building it ahead would have fixed an API
 before its only consumer existed. **It moves to P1.** P0 built the three
 wrappers whose behaviour the contract alone fixes:
-- `vrun_k()` (:505): a scalar-broadcast elementwise call over
+- `vrun_k()` (:506): a scalar-broadcast elementwise call over
   `cft_run_ex`, or a broadcast vector on today's route;
-- `vrun_ix()` (:560): an indexed elementwise call through `idx_*`, or
+- `vrun_ix()` (:572): an indexed elementwise call through `idx_*`, or
   the host's gather on today's route, with `CFT_IDX_NONE` reading +0;
-- `vreduce_seg()` (:621): `cft_reduce_seg`, or one `cft_reduce` per
+- `vreduce_seg()` (:641): `cft_reduce_seg`, or one `cft_reduce` per
   segment, which is its definition.
 
 Each is timed into its neighbours' buckets: `t_elem`, the new `t_reduce`,
@@ -273,11 +289,19 @@ They are marked `DOOR_UNUSED` until a parcel's call lands: P5 uses
 - **Once any operand has an index table, the result may overlap no
   operand**, dense or indexed, on both routes. That is `cft.h`'s rule.
   Before the fix, today's route computed what the new route refused.
+  - The same goes for a table on a NULL operand and a table beside a
+    zero-element source, which V0's re-check found split by route.
+  - One of `cft.h`'s rules is a **stated limit**: a table on an operand
+    the opcode does not read. libcft exports no arity, and one typed
+    here would drift from it. The new route refuses such a call by
+    name. Today's route ignores the operand, so its result is the one
+    the opcode computes anyway.
 
-**They are held by `--door-selftest` (:2434) and its gate,
+**They are held by `--door-selftest` (:2478) and its gate,
 `tools/check_door.py`, in all three suite tiers.** The self-test runs
-125 cases at each format: 98 scalar (two of them with the result
-aliasing the scalar), 15 indexed and 12 segmented.
+131 cases at each format: 98 scalar (two of them with the result
+aliasing the scalar), 15 indexed, and 18 segmented, six of those a
+two-operand dot product.
 - **Both routes are compared against a reference computed outside the
   wrappers**, straight from libcft. A defect both routes share is then
   caught too. *V0's N1, the mask ignored on both routes, passed a
@@ -290,6 +314,11 @@ aliasing the scalar), 15 indexed and 12 segmented.
   layout, little-endian with the sign in the last byte's top bit, was
   measured on 2026-10-31. Every scalar case also runs with a scalar of
   +0 and of -0. *V0's N7 and N8, dropped low words, passed before.*
+  - **The data checks itself.** Each nonzero value goes through
+    binary64 and back in libcft, and the gate requires all of them to
+    come back different at binary128 and binary256, and none at
+    binary64. Measured: 9,422,984 of 9,422,984 and 9,425,290 of
+    9,425,290. *V0's F4 had turned the randomising off unseen.*
 - *Correction:* **there is no "largest shape the integrator presents".**
   `CFT_MAX_BODIES` bounds the bodies of one system, not the number of
   systems. The shapes go past every width run so far: entry 37's 24,576
@@ -300,23 +329,34 @@ aliasing the scalar), 15 indexed and 12 segmented.
   *V0's N4, a probe that reads no bit, passed every check before.*
 - Each family has a control that must see a difference. Hidden bits
   count as "not compared", never as passes.
-- `--door-refuse` (:2613) makes three calls that both routes must
+- `--door-refuse` (:2667) makes five calls that both routes must
   refuse, and the gate runs each on both routes.
 
-The checks also cover every refusal by name, including the misspelled
-variable. A forced-off run gives the same record as the default, with
-every counter required on both sides. That comparison is vacuous until
-a parcel routes a call, and the gate says so.
+The checks also cover every refusal by name, including a misspelled
+route variable and a misspelled hide variable. A forced-off run gives
+the same record as the default, with every counter required on both
+sides. That comparison is vacuous until a parcel routes a call, and the
+gate says so.
 
-Measured on 2026-10-31 at `round3-p0-v1`: 125 of 125 cases identical to
+Two limits on the variables are stated, not closed:
+- **A typo inside the prefix** makes an unrelated variable, which
+  nothing reads, for example `CFT_REBOUND_ROTUE_INDEXED`.
+- **On Windows, the library half inside Python** sees only the
+  environment as the process started. A variable set through
+  `os.environ` is not seen, and `CFT_REBOUND_ARTIFACT` was already like
+  that. docs/PYTHON.md, "The Windows rule", has V0's measurement.
+
+Measured on 2026-10-31 at `round3-p0-v1`: 131 of 131 cases identical to
 the reference on both routes, at binary64, binary128 and binary256, with
-0 accounting errors and 3 of 3 controls. Eleven sabotaged copies of the
-engine all made the gate fail:
+0 accounting errors and 3 of 3 controls. Seventeen sabotaged copies of
+the engine all made the gate fail:
 - the five the first gate caught: broadcasting element 1, `CFT_IDX_NONE`
   reading element 0, a segment dropping an element, the hide hook
   ignored, and a forced route not refused;
 - the five V0 found it passing, with N7 run at both binary128 and
-  binary256: N1, N2, N3, N4 and N7/N8.
+  binary256: N1, N2, N3, N4 and N7/N8;
+- the four V0's re-check found it passing: F4, F4 with N8, F6 and F11;
+- the two rules the re-check added, each removed: F12 and F13.
 
 On the software backend these test the wrappers. There, each new route
 is the same primitive today's route uses. On a card publishing a bit,
@@ -328,9 +368,9 @@ new comment lines are not changed record lines.
 
 **(d) The trailer's keys, and the decomposition pass, derived.**
 - The instrumentation keys print from one table, `trailer_keys[]`
-  (:2271), in their old order and formats, plus `t_reduce`.
+  (:2291), in their old order and formats, plus `t_reduce`.
 - *Correction.* Identity is not in the trailer. It is a `# identity`
-  header line (:2793) holding `cft_build_id()` and, where the device
+  header line (:2852) holding `cft_build_id()` and, where the device
   answers, the image's SHA-256. It is a line of its own because
   `tools/check_records.py` reads `# program=` back as the run's
   arguments.
@@ -395,19 +435,19 @@ commit, and the scratch directory.
 ### P1 - Gravity as indexed program runs *(the long pole; dispatch first)*
 
 **Owns:**
-- `gravity_body()` ([src/ias15_cft.c:1130](src/ias15_cft.c:1130)) and
-  `build_scatter()` (:1033);
-- the pair-table part of `alloc_state()` (:1063), plus the rebuild in
-  `ias15_engine_set_active()` (:3156) if the tables change shape;
+- `gravity_body()` ([src/ias15_cft.c:1150](src/ias15_cft.c:1150)) and
+  `build_scatter()` (:1053);
+- the pair-table part of `alloc_state()` (:1083), plus the rebuild in
+  `ias15_engine_set_active()` (:3215) if the tables change shape;
 - **the indexed program-run wrapper**, a new function beside
-  `run_program()` (:1373), which moved here from P0's plan. It takes its
+  `run_program()` (:1393), which moved here from P0's plan. It takes its
   route from P0's `route_on[ROUTE_INDEXED]`, and its fallback is the
   host's gather and a dense run. It counts into `route_calls[]` and
-  `route_fallbacks[]` like `vrun_ix()` (:560), and is held by its own
-  cases in `--door-selftest` (:2434) beside P0's;
+  `route_fallbacks[]` like `vrun_ix()` (:572), and is held by its own
+  cases in `--door-selftest` (:2478) beside P0's;
 - a new gravity section in `tools/gen_programs.py`, with one entry in
   its `main()`;
-- one `load_one()` line in `load_programs()` (:1365);
+- one `load_one()` line in `load_programs()` (:1385);
 - a new `tools/cases_gravity.c`.
 
 **Forbidden:**
@@ -437,9 +477,9 @@ commit, and the scratch directory.
   only.*
 - **The device gather is not free.** It costs 310-340 ns a gathered
   element on their card at every format. For the pair inputs, the host
-  loops at :1133-1137 (`t_g_copy`) may well be cheaper.
-- **The pair gather exists twice.** `energy_all()` (:2188) has its own
-  copy at :2202-2206, for the record's energy column. It is not gravity
+  loops at :1153-1157 (`t_g_copy`) may well be cheaper.
+- **The pair gather exists twice.** `energy_all()` (:2208) has its own
+  copy at :2222-2226, for the record's energy column. It is not gravity
   and is not on the hot path, so it stays as it is, and the energy
   column is part of every gate's record. The card day
   decides.
@@ -506,11 +546,11 @@ summation.
 ### P2 - The corrector's exit test
 
 **Owns:**
-- `pc_error()` ([src/ias15_cft.c:1291](src/ias15_cft.c:1291)) and its
-  two call sites, `if (n == 7) pc_error(...)` at :1277 and :1437;
-- the corrector's exit test inside `step_attempt()` (:1987), and only
+- `pc_error()` ([src/ias15_cft.c:1311](src/ias15_cft.c:1311)) and its
+  two call sites, `if (n == 7) pc_error(...)` at :1297 and :1457;
+- the corrector's exit test inside `step_attempt()` (:2007), and only
   that;
-- the two new flags in `main()`'s parser (:2630);
+- the two new flags in `main()`'s parser (:2689);
 - one Makefile rule that assembles `normalabs-<fmt>` **from the pinned
   tree** (`third_party/cft-fp256/programs/`), so the pin governs it and
   no copy drifts;
@@ -533,7 +573,7 @@ measured nothing at all (its ask 3; ROADMAP item 3).
   optimisation is exact, a claim only a bit-reproducible integrator can
   make.
 - **(b) The test on the device.** `cft_reduce_seg` (`cft.h:1321`), through
-  P0's `vreduce_seg()` (:621), with `seg` = 3N, over the output of
+  P0's `vreduce_seg()` (:641), with `seg` = 3N, over the output of
   `normalabs-<fmt>`. cft-fp256 states
   that this pair is `pc_error` exactly in both modes, the +0 identity
   included (its ROADMAP, ask 7). *A finding to confirm* by reading
@@ -644,7 +684,7 @@ elementwise calls. The work is mechanical, in the shape of `correct_n`.
 
 **Owns:**
 - `predict_next_step_vec()`
-  ([src/ias15_cft.c:1447](src/ias15_cft.c:1447));
+  ([src/ias15_cft.c:1467](src/ias15_cft.c:1467));
 - a new section in `tools/gen_programs.py`, with one entry in its
   `main()`;
 - one `load_one()` line;
@@ -669,7 +709,7 @@ This is ROADMAP item 2. As of 2026-09-14 there were 24 call sites that
 pass a broadcast constant vector (`KRINV`, `KHF`, `KC`, `KY4`, `KY5`,
 `KNUM`, `KVNUM`, `KPOSR`, `K5040`, ...), each staging N3 copies of one
 value. Recount them, and use P0's `vrun_k()`
-([src/ias15_cft.c:505](src/ias15_cft.c:505)), taking its `DOOR_UNUSED`
+([src/ias15_cft.c:506](src/ias15_cft.c:506)), taking its `DOOR_UNUSED`
 off when the first call lands.
 
 The sites run through functions P1, P2 and P4 own, so **P5 is

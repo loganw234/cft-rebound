@@ -351,6 +351,21 @@ MSYS2's **UCRT64** toolchain instead, and both sides are `ucrtbase`.
 That toolchain is not installed on the machine this was measured on, so
 the claim is reasoned, not run.
 
+**The two runtimes keep two environments, too.** The library's
+`getenv()` and `_environ` belong to `msvcrt.dll`. That runtime's copy of
+the environment is taken when the process starts, and Python's
+`os.environ` writes to the process environment, which msvcrt's copy
+never sees again. V0 measured this on 2026-10-31.
+- A `CFT_REBOUND_ROUTE_*` or `CFT_REBOUND_HIDE_FEATURES` variable set by
+  the parent before Python started is read, and checked by name.
+- The same variable set through `os.environ`, before or after
+  `cft_rebound.load()`, is not seen at all.
+- That was already true of `$CFT_REBOUND_ARTIFACT`.
+
+So on Windows, set them before Python starts. UCRT64 would give both
+sides one environment as well as one heap. That is reasoned, like the
+heap, and not run.
+
 **And one trap that is not ours.** MSYS2 `make` hands recipes a
 stripped environment - the same reason `TMP` and `TEMP` are make
 variables in this project's Makefile. If your `rebound` is reachable

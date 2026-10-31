@@ -62,7 +62,10 @@ COUNTERS = ("steps_done", "iterations_max_exceeded", "steps_rejected", "mean_pc_
 # unknown one.
 REFUSALS = {"ix-alias-dense": ("indexed", "once any operand has an index table"),
             "ix-alias-source": ("indexed", "indexed source"),
+            "ix-table-on-null": ("indexed", "has an index table and no source"),
+            "ix-zero-source": ("indexed", "beside a source of zero elements"),
             "reduce-partial": ("reduce_seg", "are not whole segments")}
+DATA = re.compile(r"^door data: (\d+) of (\d+) nonzero values carry bits below binary64's reach$", re.M)
 
 
 def run(cmd, extra_env=None):
@@ -150,6 +153,15 @@ def main():
         verdict(rc == 0 and differ == 0 and same > 0,
                 "%d of %d cases identical to the reference on both routes, %d differ (rc %d)" % (same, cases, differ, rc))
         verdict(bad == 0, "every wrapper call accounted: one operation in calls=, and the one route counter meant (%d errors)" % bad)
+        # The data's own check. Below binary64 there is nothing to carry;
+        # above it, a value without low bits cannot catch a route that
+        # drops them (V0's F4).
+        dm = DATA.search(out)
+        beyond, values = (int(dm.group(1)), int(dm.group(2))) if dm else (-1, 0)
+        wide = fmt != "fp64"
+        verdict(values > 0 and beyond == (values if wide else 0),
+                "the data: %d of %d nonzero values carry bits below binary64's reach (wanted %s)"
+                % (beyond, values, "all of them" if wide else "none, at binary64"))
         verdict(cok == cn and cn >= len(present),
                 "controls: %d of %d saw their difference, one or more for each of %d published families" % (cok, cn, len(present)))
         if software:
@@ -197,6 +209,10 @@ def main():
     rc, out, err = run([cft, "--door-selftest", "--format", f0], {typo: "on"})
     verdict(rc != 0 and typo in err and "is not one of the door's variables" in err,
             "a misspelled %s=on is refused by name, not ignored (rc %d)" % (typo, rc))
+    hide_typo = "CFT_REBOUND_HIDE_FEATURES"[:-1]      # one letter short, as above
+    rc, out, err = run([cft, "--door-selftest", "--format", f0], {hide_typo: names[0]})
+    verdict(rc != 0 and hide_typo in err and "is not one of the door's variables" in err,
+            "a misspelled %s is refused by name, not ignored (rc %d)" % (hide_typo, rc))
     rc, out, err = run([cft, "--door-refuse", "no_such_case", "--format", f0])
     listed = set(re.findall(r"[a-z]+(?:-[a-z]+)+", err.split("the cases are", 1)[-1])) if "the cases are" in err else set()
     verdict(rc != 0 and listed == set(REFUSALS),
