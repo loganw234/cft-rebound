@@ -129,6 +129,13 @@ and on Windows 11 with MSYS2 mingw64 gcc 16.1.0 and CPython 3.12.9,
 IDENTICAL: 13 values, bit for bit.
 ```
 
+Measured again on Windows on 2026-10-31, with CPython 3.12.15, the
+same wheel, and cft-fp256 at `922c2ad`, the result was the same line.
+The binary128 control, `make check-python-control`, differs in 9 of 13
+values. That result came only after the fix that "The Windows rule"
+now records. From 2026-09-14 until then, the library could not be
+loaded at all.
+
 The 13 are the same 13. `build/ias15_ref --problem
 data/problems/kepler.txt --dt 0.05 --epsilon 0 --steps 252 --sample
 252` on the same host prints the same hex floats, and that program is
@@ -278,8 +285,27 @@ DLL Name: librebound.cp312-win_amd64.pyd
 DLL Name: msvcrt.dll
 ```
 
-and that middle name carries the Python ABI tag, so **a DLL built for
-CPython 3.12 cannot be used by 3.13**. `make python-lib PYTHON=...`
+**On 2026-10-31 that table had had a fourth line for seven weeks.**
+From `24900ee` (2026-09-14), the trailer's wall clock is
+`clock_gettime()`. mingw-w64 takes it from winpthreads, by default as
+`libwinpthread-1.dll`. So every Windows build of this library after
+that commit imported a file that a Python process cannot find, and
+`ctypes.CDLL` refused it with the first of the two messages below. No
+one ran the Python leg on Windows in between, and the link rule printed
+the import table without checking it.
+
+Two changes fix it:
+- the library links winpthreads statically (`SHSTATIC` in the
+  Makefile);
+- the rule now refuses, and removes, any build that imports a
+  `lib*.dll`.
+
+The control was run on 2026-10-31. With the static link switched off
+(`make python-lib SHSTATIC=`), the build is refused, naming
+`libwinpthread-1.dll`, and no library is left behind.
+
+The middle name in the table carries the Python ABI tag, so **a DLL
+built for CPython 3.12 cannot be used by 3.13**. `make python-lib PYTHON=...`
 with the interpreter that will load it is the whole remedy, but the
 failure it prevents is nasty enough to be worth naming, because
 Windows reports it in two different unhelpful ways and neither of them

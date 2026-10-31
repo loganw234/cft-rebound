@@ -147,6 +147,13 @@ ifeq ($(OS),Windows_NT)
   SHRPATH    :=
   # Nothing extra beside the DLL: the archive is inside it.
   CFT_SHLIB_EXTRA :=
+  # Nor a runtime DLL. The trailer's wall clock is clock_gettime()
+  # (24900ee, 2026-09-14), which mingw-w64 takes from winpthreads - by
+  # default as libwinpthread-1.dll, in MSYS2's bin/ and on no search
+  # path a Python process uses, so ctypes refused the library "or one
+  # of its dependencies" from that commit until 2026-10-31. Linked
+  # static it is code inside the one file.
+  SHSTATIC   := -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic
 else ifeq ($(shell uname -s 2>/dev/null),Darwin)
   SHLIB      := libcft_ias15.dylib
   SHFLAGS    := -dynamiclib -Wl,-install_name,@rpath/libcft_ias15.dylib
@@ -366,6 +373,12 @@ ifeq ($(OS),Windows_NT)
 #
 # Nothing has to be on the link line for libcft: unlike the .so, the
 # DLL swallows the archive whole (CFT_SHLINK above says why).
+#
+# The import table is asserted, not printed. Printed, it named
+# libwinpthread-1.dll on every build for seven weeks and nothing read
+# it. MSYS2's runtime DLLs are the lib*.dll family and a Python process
+# finds none of them, so such a library is refused and removed here,
+# not at ctypes.CDLL with a message that names the wrong file.
 $(B)/$(SHLIB): $(PIC_OBJ) $(CFT_SHLIB) | check-rebound-match
 	@pyd=`$(PYTHON) -c 'import rebound;print(rebound.__libpath__)' 2>/dev/null`; \
 	if [ -z "$$pyd" ]; then \
@@ -375,10 +388,16 @@ $(B)/$(SHLIB): $(PIC_OBJ) $(CFT_SHLIB) | check-rebound-match
 	    echo "      $(PYTHON) -m pip install rebound" >&2; \
 	    exit 1; \
 	fi; \
-	echo "$(CC) $(SHFLAGS) -o $@ \$$(PIC_OBJ) $(CFT_SHLINK) $$pyd $(LIBS)"; \
-	$(CC) $(SHFLAGS) -o $@ $(PIC_OBJ) $(CFT_SHLINK) "$$pyd" $(LIBS)
-	@command -v objdump >/dev/null 2>&1 && \
-	    echo "$@ imports: `objdump -p $@ | sed -n 's/.*DLL Name: //p' | sort -u | tr '\n' ' '`" || true
+	echo "$(CC) $(SHFLAGS) -o $@ \$$(PIC_OBJ) $(CFT_SHLINK) $$pyd $(LIBS) $(SHSTATIC)"; \
+	$(CC) $(SHFLAGS) -o $@ $(PIC_OBJ) $(CFT_SHLINK) "$$pyd" $(LIBS) $(SHSTATIC)
+	@command -v objdump >/dev/null 2>&1 || { echo "$@: no objdump, so its import table is NOT checked"; exit 0; }; \
+	imp=`objdump -p $@ | sed -n 's/.*DLL Name: //p' | sort -u | tr '\n' ' '`; \
+	echo "$@ imports: $$imp"; \
+	bad=`echo "$$imp" | tr ' ' '\n' | grep -i -E '^lib.*\.dll$$' | tr '\n' ' '`; \
+	if [ -n "$$bad" ]; then \
+	    echo "$@: REFUSING - it imports $$bad- no Python process can find that (docs/PYTHON.md, \"The Windows rule\")" >&2; \
+	    rm -f $@; exit 1; \
+	fi
 else
 $(B)/$(SHLIB): $(PIC_OBJ) $(CFT_SHLIB) | check-rebound-match
 	$(CC) $(SHFLAGS) -o $@ $(PIC_OBJ) $(CFT_SHLINK) $(SHRPATH) $(LIBS)
