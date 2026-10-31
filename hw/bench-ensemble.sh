@@ -73,7 +73,12 @@ for i in ${PATHS+"${!PATHS[@]}"}; do
   FMTS+=("$(printf '%s' "$info" | sed -n 's/^formats: //p')")
   echo "image ${LABELS[$i]}: ${TILES[$i]} tile(s), formats ${FMTS[$i]}"
 done
-norm () { sed -E '/^# (route|identity) /d; s#backend=[^ ]+#backend=X#; s/ seconds=[0-9.]+//; s/ steps_per_s=[0-9.]+//; s/ (wall_seconds|t_[a-z0-9_]+|system_steps_per_s)=[0-9.]+//g' "$1"; }
+norm () { sed -E '/^# (route|identity) /d; s/ staged_bytes=[0-9]+//; s#backend=[^ ]+#backend=X#; s/ seconds=[0-9.]+//; s/ steps_per_s=[0-9.]+//; s/ (wall_seconds|t_[a-z0-9_]+|system_steps_per_s)=[0-9.]+//g' "$1"; }
+# The card run's routes (ROUND3.md, P0). The normaliser drops the
+# `# route` lines, because they differ by design between a card and the
+# software backend. So they are printed here instead, where a fallback
+# cannot pass unseen.
+routes () { grep '^# route ' "$1" | sed -E 's/^# route ([a-z_]+)=([a-z]+) by=([a-z]+) calls=([0-9]+) fallbacks=([0-9]+)$/\1=\2 by \3 (\4 calls, \5 fallbacks)/' | paste -sd ';' -; }
 eff () { grep -oE 'pc_lane_efficiency=[0-9.]+' "$1" | tail -1 | cut -d= -f2; }
 pss () { grep -oE 'mean_pc_iterations=[0-9.]+' "$1" | tail -1 | cut -d= -f2; }
 run_one () {  # <out> <fmt> <problem> [--artifact X]
@@ -117,6 +122,7 @@ for E in $MEMBERS; do
       csps=$(awk -v e="$E" -v s="$STEPS" -v t="$c_s" 'BEGIN { printf "%.1f", (t > 0) ? e * s / t : 0 }')
       ratio=$(awk -v a="$sw_s" -v b="$c_s" 'BEGIN { printf "%.2f", (b > 0) ? a / b : 0 }')
       printf '%-7s %-6s %-10s %5s %9s %11s %7s %-10s %6s %s\n' "$E" "$fmt" "${LABELS[$i]}" "${TILES[$i]}" "$c_s" "$csps" "$ratio" "$rec" "$(eff "$T/card.txt")" "$(pss "$T/card.txt")"
+      echo "        routes: $(routes "$T/card.txt")"
       echo "$E,$fmt,${LABELS[$i]},${TILES[$i]},$c_s,$csps,$ratio,$rec,$(eff "$T/card.txt"),$(pss "$T/card.txt")" >> "$CSV"
     done
   done

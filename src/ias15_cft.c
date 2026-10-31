@@ -151,9 +151,13 @@ static int engine_check_format(const char *artifact){
  *   - operands read through an index table (idx_*);
  *   - a reduction that restarts every seg elements (cft_reduce_seg).
  *
- * Each sits behind a capability bit. Each also has a route this port
- * already takes, which the contract makes give the same bits: the
- * broadcast vector, the host's gather, and one cft_reduce a segment.
+ * Each sits behind a capability bit. Each also has an older route that
+ * the contract makes give the same bits. For the first two, that route
+ * is what the port does today: the broadcast vector and the host's
+ * gather. For the third it is one cft_reduce per segment, which is
+ * cft_reduce_seg's definition. The port has never reduced on the device
+ * at all; today's pc_error() loops on the host.
+ *
  * So each family is decided here, once, at open, for the program and
  * the library half alike:
  *   - by the device's bit, in cft_caps.seq_features;
@@ -185,6 +189,28 @@ static int route_have[N_ROUTES];         /* the device publishes it, unhidden */
 static const char *route_by[N_ROUTES];   /* device, absent, hidden or forced */
 static unsigned long long route_calls[N_ROUTES], route_fallbacks[N_ROUTES];
 
+/* The routes' names, or their variables, joined for a sentence. Built
+ * from route_def[], never typed into a message. */
+static const char *route_list(int env){
+    static char buf[2][256];
+    char *b = buf[env != 0];
+    b[0] = 0;
+    for (int r = 0; r < N_ROUTES; r++){
+        size_t l = strlen(b);
+        snprintf(b + l, sizeof buf[0] - l, "%s%s", r == 0 ? "" : r == N_ROUTES - 1 ? " and " : ", ",
+                 env ? route_def[r].env : route_def[r].name);
+    }
+    return b;
+}
+
+/* The environment, to find a variable that only looks like a route's. */
+#if defined(_WIN32)
+#define DOOR_ENVIRON _environ
+#else
+extern char **environ;
+#define DOOR_ENVIRON environ
+#endif
+
 static int engine_routes(const char *artifact){
     const char *dname = artifact ? artifact : "the software backend";
     const char *hide = getenv("CFT_REBOUND_HIDE_FEATURES");
@@ -196,6 +222,35 @@ static int engine_routes(const char *artifact){
         snprintf(eng_err, sizeof eng_err, "cft_get_caps(%s) failed: %s", dname, cft_last_error());
         return -1;
     }
+    /* A variable that looks like one of the door's but is not is refused
+     * by name. A typo would otherwise leave its route on auto with no
+     * sign of it. On a device without the bit, "indexed against dense"
+     * would then compare dense against dense (V0, 2026-10-31).
+     *
+     * The prefix is matched without case, because Windows' getenv()
+     * ignores case, and the whole name must then match exactly. */
+    for (char **e = DOOR_ENVIRON; e && *e; e++){
+        static const char *const pre[] = { "CFT_REBOUND_ROUTE_", "CFT_REBOUND_HIDE" };
+        size_t l = strcspn(*e, "=");
+        for (int q = 0; q < 2; q++){
+            size_t k, pl = strlen(pre[q]);
+            int r, known = 0;
+            for (k = 0; k < pl && k < l; k++){
+                char ch = (*e)[k];
+                if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 'a' + 'A');
+                if (ch != pre[q][k]) break;
+            }
+            if (k < pl) continue;
+            if (q == 1) known = l == strlen("CFT_REBOUND_HIDE_FEATURES") && !strncmp(*e, "CFT_REBOUND_HIDE_FEATURES", l);
+            for (r = 0; q == 0 && r < N_ROUTES; r++)
+                if (strlen(route_def[r].env) == l && !strncmp(*e, route_def[r].env, l)) known = 1;
+            if (!known){
+                snprintf(eng_err, sizeof eng_err, "%.*s is not one of the door's variables: they are %s, "
+                         "and CFT_REBOUND_HIDE_FEATURES", (int)l, *e, route_list(1));
+                return -1;
+            }
+        }
+    }
     for (const char *p = hide ? hide : ""; *p; ){
         size_t l = strcspn(p, ",");
         int r;
@@ -203,7 +258,7 @@ static int engine_routes(const char *artifact){
             if (strlen(route_def[r].name) == l && !strncmp(p, route_def[r].name, l)) break;
         if (l && r == N_ROUTES){
             snprintf(eng_err, sizeof eng_err, "CFT_REBOUND_HIDE_FEATURES names \"%.*s\", which is not a "
-                     "route: the routes are scalar, indexed and reduce_seg", (int)l, p);
+                     "route: the routes are %s", (int)l, p, route_list(0));
             return -1;
         }
         if (l) hidden |= route_def[r].bit;
@@ -439,20 +494,31 @@ static V door_scratch(int k, size_t n){
  * device publishes CFT_SEQ_FEAT_SCALAR. Otherwise each such operand is
  * broadcast into scratch and the run is today's cft_run: the same bits,
  * because the contract defines a scalar operand as element 0 applied to
- * the whole run. Timed and counted as the elementwise call it is. */
+ * the whole run. Timed and counted as the elementwise call it is.
+ *
+ * A scalar is read ONCE, before any element is written: it is copied
+ * first, on both routes. If d overlapped it, the two routes would
+ * otherwise disagree. libcft's software backend reads element 0 again
+ * after writing it (cft-fp256 host/src/device.c, 2068-2086), while
+ * today's route broadcasts first. V0 measured 3,838 to 4,095 of 4,096
+ * lanes differing on 2026-10-31, and nothing refused the call. */
 static DOOR_UNUSED void vrun_k(cft_op op, V d, const V a, const V b, const V c, size_t n,
                                uint32_t smask, const char *what){
-    const V in[3] = { a, b, c };
+    V in[3] = { a, b, c };
+    uint64_t once[3][4];               /* each scalar, copied: 32 bytes, the widest element */
     unsigned nops = 0, nscal = 0;
     uint32_t fl = 0;
     cft_status st;
     double _t0 = now_s();
-    for (int k = 0; k < 3; k++){ nops += in[k] != NULL; nscal += in[k] && (smask >> k & 1u); }
+    for (int k = 0; k < 3; k++){
+        nops += in[k] != NULL;
+        if (in[k] && (smask >> k & 1u)){ nscal++; memcpy(once[k], in[k], ESZ); in[k] = (V)once[k]; }
+    }
     if (route_on[ROUTE_SCALAR]){
         cft_elem_args ea;
         memset(&ea, 0, sizeof ea);
         ea.struct_size = sizeof ea;
-        ea.a = a; ea.b = b; ea.c = c; ea.d = d; ea.n = n;
+        ea.a = in[0]; ea.b = in[1]; ea.c = in[2]; ea.d = d; ea.n = n;
         ea.scalar_mask = smask; ea.flags_out = &fl;
         nbytes_staged += (unsigned long long)ESZ * ((unsigned long long)n * (nops - nscal + 1) + nscal);
         st = cft_run_ex(dev, op, F, CFT_RNE, &ea);
@@ -482,10 +548,15 @@ static DOOR_UNUSED void vrun_k(cft_op op, V d, const V a, const V b, const V c, 
  * run is today's cft_run, which is the software backend's own
  * definition of the indexed call (cft.h, cft_elem_args).
  *
- * d may not overlap an indexed operand's source: cft.h refuses that by
- * name, and so does this, on either route. An index at or past its
- * source is refused by the library on the new route and by die() here
- * on today's route. Neither route reads past a source. */
+ * Once any operand has a table, d may overlap NONE of the operands,
+ * dense or indexed. cft.h's rule (P2's): a table makes the run a
+ * program, whose deposit window is its own buffer role. The rule is
+ * enforced here, by name, on both routes. Otherwise today's route would
+ * compute a call the new route refuses (V0, 2026-10-31).
+ *
+ * An index at or past its source is refused by the library on the new
+ * route, and by die() here on today's route. Neither route reads past a
+ * source. */
 static DOOR_UNUSED void vrun_ix(cft_op op, V d, const V a, const uint32_t *ia, size_t asrc,
                                 const V b, const uint32_t *ib, size_t bsrc,
                                 const V c, const uint32_t *ic, size_t csrc, size_t n, const char *what){
@@ -496,10 +567,14 @@ static DOOR_UNUSED void vrun_ix(cft_op op, V d, const V a, const uint32_t *ia, s
     uint32_t fl = 0;
     cft_status st;
     double _t0 = now_s();
-    for (int k = 0; k < 3; k++){
-        if (!in[k] || !ix[k]) continue;
-        if (d + n * ESZ > in[k] && in[k] + src[k] * ESZ > d)
-            die("%s: the result overlaps operand %c's indexed source, which cft_run_ex refuses", what, "abc"[k]);
+    int tables = (a && ia) || (b && ib) || (c && ic);
+    for (int k = 0; k < 3 && tables; k++){
+        size_t span = ix[k] ? src[k] : n;
+        if (!in[k]) continue;
+        if (d + n * ESZ > in[k] && in[k] + span * ESZ > d)
+            die("%s: the result overlaps operand %c%s, and once any operand has an index table cft_run_ex "
+                "refuses a result that overlaps any of them (cft.h, cft_elem_args)", what, "abc"[k],
+                ix[k] ? "'s indexed source" : "");
     }
     if (route_on[ROUTE_INDEXED]){
         cft_elem_args ea;
@@ -2208,59 +2283,113 @@ static const struct { const char *key; const double *dbl; const unsigned long lo
     { "t_reduce",      &t_reduce,    NULL },
 };
 
-/* --door-selftest: each of the door's new routes against today's route
- * on the same data, plus one control per family showing the comparison
- * can see a difference at all.
+/* --door-selftest: each of the door's new routes, and today's route,
+ * held against a REFERENCE computed here, outside the wrappers and
+ * straight from libcft. A defect the two routes share is then as
+ * visible as one between them: a wrapper ignoring its mask, its n or
+ * its table passed a route-against-route comparison (V0, 2026-10-31).
+ * On the software backend each new route is the same primitive today's
+ * route uses, so there this tests the wrappers; on a card publishing a
+ * bit it tests the tile's route as well.
+ *
+ * Every wrapper call is also held to its accounting. It must add one
+ * operation to calls=, whichever route carries it. Exactly one of the
+ * route's two counters must move, the one meant, so the trailer's
+ * `# route` line cannot lie.
  *
  * The data:
  *   - both zeros, one value in sixteen, and exponents from 2^-20 to
  *     2^20;
- *   - built from binary64 bit patterns and widened exactly, so no C
- *     arithmetic touches a floating-point value here either.
+ *   - built from binary64 bit patterns and widened exactly. At
+ *     binary128 and binary256, every mantissa bit binary64 cannot reach
+ *     is then made random (zeros stay zeros), so a route that drops a
+ *     wide operand's low words fails here;
+ *   - a scalar of +0 and one of -0, for every scalar case at a shape of
+ *     7.
+ * No C arithmetic touches a floating-point value.
  *
- * The shapes, at the edges and the largest the integrator presents, and
- * one past the largest:
- *   - 1 and 7, the edges of a beat;
- *   - 3 * CFT_MAX_BODIES, one system at the body cap;
- *   - 24,576 lanes, the widest ensemble vector the port has run
- *     (docs/VALIDATION.md entry 37), and one past it;
- *   - the pair count at the cap, and one past it, for the gather.
+ * The shapes. An ensemble has no width cap: CFT_MAX_BODIES bounds the
+ * bodies of one system, not the number of systems. So no shape here is
+ * "the largest the integrator presents". These are past every width
+ * the port has been run at:
+ *   - entry 37's 24,576 lanes;
+ *   - V0's 49,152 lanes, 524,272 pairs and 101,472-element gather
+ *     source (2026-10-31);
+ *   - plus the edges of a beat, 1 and 7.
  *
- * Output is one line per case. tools/check_door.py reads the lines and
- * the exit status. A route the device does not publish is reported as
- * not compared, never as a pass. */
+ * Output is one line per case, read by tools/check_door.py with the
+ * exit status. A route the device does not publish is reported as not
+ * compared, never as a pass. --door-refuse NAME makes one call that
+ * both routes must refuse, and dies when it is refused. */
 static uint64_t door_lcg = 0x9e3779b97f4a7c15ull;
+static uint64_t door_next(void){
+    door_lcg = door_lcg * 6364136223846793005ull + 1442695040888963407ull;
+    return door_lcg;
+}
+/* The bytes below binary64's reach in this format's mantissa.
+ *   - An interchange format of k bits has p = k - 4 log2(k) + 13
+ *     (754-2019, 3.6), and widening leaves its low p - 53 bits zero:
+ *     0 bytes at binary64, 7 at binary128, 23 at binary256.
+ *   - The layout is little-endian with the sign in the top bit of the
+ *     last byte. Measured on 2026-10-31 by widening 1.0 and -0.0 and
+ *     reading them byte by byte. */
+static size_t door_low_bytes(void){
+    size_t k = 8 * ESZ, m = 0;
+    while ((k >> m) > 1) m++;
+    return (k - 4 * m + 13 - 53) / 8;
+}
 static void door_fill(V dst, size_t n){
     uint64_t *bits = malloc((n ? n : 1) * sizeof *bits);
+    size_t low = door_low_bytes();
     if (!bits) die("out of memory");
     for (size_t i = 0; i < n; i++){
-        door_lcg = door_lcg * 6364136223846793005ull + 1442695040888963407ull;
-        bits[i] = door_lcg & (1ull << 63);                     /* the sign */
-        if ((door_lcg >> 56 & 15u) != 0)                       /* else a zero of that sign */
-            bits[i] |= (1003ull + (door_lcg >> 40) % 41) << 52 | (door_lcg & 0xfffffffffffffull);
+        uint64_t r = door_next();
+        bits[i] = r & (1ull << 63);                                 /* the sign */
+        if ((r >> 56 & 15u) != 0)                                    /* else a zero of that sign */
+            bits[i] |= (1003ull + (r >> 40) % 41) << 52 | (r & 0xfffffffffffffull);
     }
     if (F == CFT_FP64) memcpy(dst, bits, n * ESZ);
     else{
         uint32_t fl = 0;
         if (cft_convert(dev, CFT_FP64, F, CFT_RNE, bits, dst, n, &fl) != CFT_OK) die("door: widening failed");
+        for (size_t i = 0; i < n; i++)
+            if (bits[i] << 1)                                        /* not a zero */
+                for (size_t j = 0; j < low; j++) dst[i * ESZ + j] = (unsigned char)(door_next() >> 56);
     }
     free(bits);
+}
+static void door_zero(V dst, int negative){
+    memset(dst, 0, ESZ);
+    if (negative) dst[ESZ - 1] = 0x80;
 }
 static uint32_t *door_table(size_t n, size_t src){
     uint32_t *t = malloc((n ? n : 1) * sizeof *t);
     if (!t) die("out of memory");
     for (size_t i = 0; i < n; i++){
-        door_lcg = door_lcg * 6364136223846793005ull + 1442695040888963407ull;
-        t[i] = (door_lcg >> 60) == 0 ? CFT_IDX_NONE : (uint32_t)((door_lcg >> 20) % src);
+        uint64_t r = door_next();
+        t[i] = (r >> 60) == 0 ? CFT_IDX_NONE : (uint32_t)((r >> 20) % src);
     }
     return t;
 }
-static int door_same, door_differ, door_skipped, door_controls, door_controls_ok;
-static void door_compare(const char *label, const V x, uint32_t fx, const V y, uint32_t fy, size_t n){
-    size_t k = 0;
-    for (size_t i = 0; i < n; i++) k += memcmp(E(x, i), E(y, i), ESZ) != 0;
-    if (!k && fx == fy){ door_same++; printf("ok   %s: identical, flags 0x%02x\n", label, (unsigned)fx); }
-    else{ door_differ++; printf("DIFF %s: %zu of %zu differ, flags 0x%02x against 0x%02x\n", label, k, n, (unsigned)fx, (unsigned)fy); }
+
+static int door_same, door_differ, door_skipped, door_counts_bad, door_controls, door_controls_ok;
+/* One case: the new route's output and today's against the reference,
+ * bits and flags. */
+static void door_case(const char *label, const V ref, uint32_t fr, const V d1, uint32_t f1,
+                      const V d0, uint32_t f0, size_t n){
+    size_t k1 = 0, k0 = 0;
+    for (size_t i = 0; i < n; i++){
+        k1 += memcmp(E(d1, i), E(ref, i), ESZ) != 0;
+        k0 += memcmp(E(d0, i), E(ref, i), ESZ) != 0;
+    }
+    if (!k1 && !k0 && f1 == fr && f0 == fr){
+        door_same++;
+        printf("ok   %s: both routes equal the reference, flags 0x%02x\n", label, (unsigned)fr);
+    }else{
+        door_differ++;
+        printf("DIFF %s: the new route differs from the reference in %zu of %zu (flags 0x%02x against 0x%02x), "
+               "today's route in %zu (flags 0x%02x)\n", label, k1, n, (unsigned)f1, (unsigned)fr, k0, (unsigned)f0);
+    }
 }
 static void door_control(const char *label, const V x, const V y, size_t n){
     size_t k = 0;
@@ -2270,53 +2399,120 @@ static void door_control(const char *label, const V x, const V y, size_t n){
     else printf("CONTROL FAILED %s: identical, so this comparison cannot see a difference\n", label);
 }
 
+/* One wrapper call's accounting, around the call. */
+static unsigned long long door_c0, door_r0, door_f0;
+static void door_before(int r){ door_c0 = ncalls; door_r0 = route_calls[r]; door_f0 = route_fallbacks[r]; }
+static void door_after(int r, int on, const char *label){
+    unsigned long long dc = ncalls - door_c0, dr = route_calls[r] - door_r0, df = route_fallbacks[r] - door_f0;
+    if (dc != 1 || dr != (unsigned long long)(on != 0) || df != (unsigned long long)(on == 0)){
+        door_counts_bad++;
+        printf("COUNT %s by %s: calls= moved %llu, the route's calls %llu and its fallbacks %llu "
+               "(wanted 1, %d and %d)\n", label, on ? "the new route" : "today's route", dc, dr, df, on != 0, on == 0);
+    }
+}
+static uint32_t door_k(int on, cft_op op, V d, const V a, const V b, const V c, size_t n, uint32_t m,
+                       const char *label){
+    route_on[ROUTE_SCALAR] = on; flags_union = 0; door_before(ROUTE_SCALAR);
+    vrun_k(op, d, a, b, c, n, m, "door scalar");
+    door_after(ROUTE_SCALAR, on, label);
+    return flags_union;
+}
+static uint32_t door_ix(int on, cft_op op, V d, const V in[3], uint32_t *const t[3], const size_t src[3],
+                        size_t n, const char *label){
+    route_on[ROUTE_INDEXED] = on; flags_union = 0; door_before(ROUTE_INDEXED);
+    vrun_ix(op, d, in[0], t[0], src[0], in[1], t[1], src[1], in[2], t[2], src[2], n, "door indexed");
+    door_after(ROUTE_INDEXED, on, label);
+    return flags_union;
+}
+static uint32_t door_rs(int on, cft_op op, V d, const V a, size_t n, size_t seg, const char *label){
+    route_on[ROUTE_REDUCE_SEG] = on; flags_union = 0; door_before(ROUTE_REDUCE_SEG);
+    vreduce_seg(op, d, a, NULL, n, seg, "door reduce_seg");
+    door_after(ROUTE_REDUCE_SEG, on, label);
+    return flags_union;
+}
+
 static int door_selftest(const char *artifact){
-    const size_t P = (size_t)CFT_MAX_BODIES * (CFT_MAX_BODIES - 1) / 2;
-    const size_t nel[] = { 1, 7, 3 * (size_t)CFT_MAX_BODIES, 24576, 24577 };
-    const size_t npair[] = { 1, 7, P, P + 1 };
-    const size_t SRC = 3 * (size_t)CFT_MAX_BODIES;     /* the gather's source: one system's coordinates */
-    const size_t nmax = P + 1;
+    const size_t nel[] = { 1, 7, 3 * (size_t)CFT_MAX_BODIES, 24576, 24577, 49153 };
+    const size_t npair[] = { 1, 7, (size_t)CFT_MAX_BODIES * (CFT_MAX_BODIES - 1) / 2, 524272, 524273 };
+    const size_t SRC = 131072;     /* the gather's source, past V0's 101,472 */
+    const size_t nmax = 524273;    /* the largest shape below */
     static const struct { cft_op op; const char *name; uint32_t reads; } sops[] = {
         { CFT_MUL, "mul", 3 }, { CFT_ADD, "add", 5 }, { CFT_SUB, "sub", 5 }, { CFT_FMA, "fma", 7 },
     };
-    V a = valloc(nmax), b = valloc(nmax), c = valloc(nmax), d0 = valloc(nmax), d1 = valloc(nmax);
-    uint32_t f0, f1;
-    char label[160];
+    V a = valloc(nmax), b = valloc(nmax), c = valloc(nmax), d0 = valloc(nmax), d1 = valloc(nmax), ref = valloc(nmax);
+    V rb[3] = { valloc(nmax), valloc(nmax), valloc(nmax) };
+    uint32_t f0, f1, fr;
+    char label[200];
     printf("door: %s on %s\n", cft_format_name(F), artifact ? artifact : "the software backend");
     for (int r = 0; r < N_ROUTES; r++)
         printf("door route %s=%s by=%s env=%s bit=%.*s\n", route_def[r].name, route_on[r] ? "on" : "off",
                route_by[r], route_def[r].env, (int)strcspn(route_def[r].bit_name, " "), route_def[r].bit_name);
 
-    /* The scalar family: every way an operand of mul, add, sub or fma
+    /* The scalar family. Every way an operand of mul, add, sub or fma
      * can be the one-element one, with at least one operand left a
-     * vector, at every shape. */
+     * vector, at every shape. At 7, also with that scalar +0 and -0. */
     for (size_t o = 0; o < sizeof sops / sizeof sops[0]; o++)
         for (uint32_t m = 1; m < 8; m++){
             if ((m & ~sops[o].reads) || m == sops[o].reads) continue;
-            for (size_t s = 0; s < sizeof nel / sizeof nel[0]; s++){
-                size_t n = nel[s];
-                snprintf(label, sizeof label, "scalar %s mask=%u n=%zu", sops[o].name, (unsigned)m, n);
-                if (!route_have[ROUTE_SCALAR]){ door_skipped++; printf("skip %s: the route is %s\n", label, route_by[ROUTE_SCALAR]); continue; }
-                door_fill(a, n); door_fill(b, n); door_fill(c, n);
-                {
-                    const V A = (sops[o].reads & 1) ? a : NULL, B = (sops[o].reads & 2) ? b : NULL, C = (sops[o].reads & 4) ? c : NULL;
-                    route_on[ROUTE_SCALAR] = 0; flags_union = 0; vrun_k(sops[o].op, d0, A, B, C, n, m, "door scalar"); f0 = flags_union;
-                    route_on[ROUTE_SCALAR] = 1; flags_union = 0; vrun_k(sops[o].op, d1, A, B, C, n, m, "door scalar"); f1 = flags_union;
+            for (size_t s = 0; s < sizeof nel / sizeof nel[0]; s++)
+                for (int z = 0; z < (nel[s] == 7 ? 3 : 1); z++){
+                    size_t n = nel[s];
+                    V in[3] = { (sops[o].reads & 1) ? a : NULL, (sops[o].reads & 2) ? b : NULL, (sops[o].reads & 4) ? c : NULL };
+                    snprintf(label, sizeof label, "scalar %s mask=%u n=%zu%s", sops[o].name, (unsigned)m, n,
+                             z == 1 ? " scalar=+0" : z == 2 ? " scalar=-0" : "");
+                    if (!route_have[ROUTE_SCALAR]){ door_skipped++; printf("skip %s: the route is %s\n", label, route_by[ROUTE_SCALAR]); continue; }
+                    door_fill(a, n); door_fill(b, n); door_fill(c, n);
+                    for (int k = 0; k < 3; k++)
+                        if (z && in[k] && (m >> k & 1u)) door_zero(in[k], z == 2);
+                    {   /* the reference: each scalar broadcast here, then one cft_run */
+                        V use[3];
+                        for (int k = 0; k < 3; k++){
+                            use[k] = in[k];
+                            if (in[k] && (m >> k & 1u)){ use[k] = rb[k]; for (size_t i = 0; i < n; i++) memcpy(E(rb[k], i), in[k], ESZ); }
+                        }
+                        fr = 0;
+                        if (cft_run(dev, sops[o].op, F, CFT_RNE, use[0], use[1], use[2], ref, n, &fr, NULL) != CFT_OK)
+                            die("door: the reference run failed: %s", cft_last_error());
+                    }
+                    f1 = door_k(1, sops[o].op, d1, in[0], in[1], in[2], n, m, label);
+                    f0 = door_k(0, sops[o].op, d0, in[0], in[1], in[2], n, m, label);
+                    door_case(label, ref, fr, d1, f1, d0, f0, n);
                 }
-                door_compare(label, d1, f1, d0, f0, n);
-            }
         }
-    if (route_have[ROUTE_SCALAR]){
-        /* the control: the same run with its scalar taken from element 1 */
-        size_t n = nel[3];
-        door_fill(a, n); door_fill(b, n);
-        route_on[ROUTE_SCALAR] = 1;
-        vrun_k(CFT_MUL, d0, a, b, NULL, n, 2, "door scalar control");
-        vrun_k(CFT_MUL, d1, a, b + ESZ, NULL, n, 2, "door scalar control");
-        door_control("scalar mul, the scalar from element 1 rather than 0", d0, d1, n);
+    {
+        /* The result aliasing the scalar operand. A scalar is read once,
+         * before any element is written, on both routes. Like every case,
+         * each is reported as not compared where the route is absent,
+         * rather than left out of the count. */
+        size_t n = 4096;
+        static const struct { cft_op op; const char *name; uint32_t m; } al[] = { { CFT_MUL, "mul", 2 }, { CFT_FMA, "fma", 4 } };
+        for (size_t q = 0; q < sizeof al / sizeof al[0]; q++){
+            V in[3] = { a, b, al[q].op == CFT_FMA ? c : NULL };
+            int sk = al[q].m == 2 ? 1 : 2;      /* which operand is the scalar */
+            snprintf(label, sizeof label, "scalar %s mask=%u n=%zu, the result aliasing the scalar", al[q].name, (unsigned)al[q].m, n);
+            if (!route_have[ROUTE_SCALAR]){ door_skipped++; printf("skip %s: the route is %s\n", label, route_by[ROUTE_SCALAR]); continue; }
+            door_fill(a, n); door_fill(b, n); door_fill(c, n);
+            for (size_t i = 0; i < n; i++) memcpy(E(rb[sk], i), in[sk], ESZ);
+            fr = 0;
+            if (cft_run(dev, al[q].op, F, CFT_RNE, a, sk == 1 ? rb[1] : b, sk == 2 ? rb[2] : in[2], ref, n, &fr, NULL) != CFT_OK)
+                die("door: the reference run failed: %s", cft_last_error());
+            memcpy(d1, in[sk], n * ESZ);
+            f1 = door_k(1, al[q].op, d1, a, sk == 1 ? d1 : b, sk == 2 ? d1 : in[2], n, al[q].m, label);
+            memcpy(d0, in[sk], n * ESZ);
+            f0 = door_k(0, al[q].op, d0, a, sk == 1 ? d0 : b, sk == 2 ? d0 : in[2], n, al[q].m, label);
+            door_case(label, ref, fr, d1, f1, d0, f0, n);
+        }
+        /* The control: the same run with its scalar taken from element 1. */
+        if (route_have[ROUTE_SCALAR]){
+            n = nel[3];
+            door_fill(a, n); door_fill(b, n);
+            door_k(1, CFT_MUL, d0, a, b, NULL, n, 2, "scalar control");
+            door_k(1, CFT_MUL, d1, a, b + ESZ, NULL, n, 2, "scalar control");
+            door_control("scalar mul, the scalar from element 1 rather than 0", d0, d1, n);
+        }
     }
 
-    /* The gather: the pair shape dx = x[j] - x[i], a product with one
+    /* The gather. The pair shape dx = x[j] - x[i], a product with one
      * operand gathered, and an fma with all three, at every pair count. */
     {
         static const struct { cft_op op; const char *name; uint32_t gathered, reads; } gops[] = {
@@ -2326,43 +2522,53 @@ static int door_selftest(const char *artifact){
             for (size_t s = 0; s < sizeof npair / sizeof npair[0]; s++){
                 size_t n = npair[s];
                 uint32_t *t[3] = { NULL, NULL, NULL };
-                const V in[3] = { a, b, c };
-                V op3[3];
+                const V pool[3] = { a, b, c };
+                V in[3], use[3];
                 size_t src[3];
-                snprintf(label, sizeof label, "indexed %s gathered=%u n=%zu", gops[o].name, (unsigned)gops[o].gathered, n);
+                snprintf(label, sizeof label, "indexed %s gathered=%u n=%zu src=%zu", gops[o].name, (unsigned)gops[o].gathered, n, SRC);
                 if (!route_have[ROUTE_INDEXED]){ door_skipped++; printf("skip %s: the route is %s\n", label, route_by[ROUTE_INDEXED]); continue; }
                 for (int k = 0; k < 3; k++){
-                    op3[k] = (gops[o].reads >> k & 1u) ? in[k] : NULL;
-                    src[k] = (gops[o].gathered >> k & 1u) ? SRC : n;
-                    if (op3[k]) door_fill(op3[k], src[k]);
-                    if (gops[o].gathered >> k & 1u) t[k] = door_table(n, SRC);
+                    in[k] = (gops[o].reads >> k & 1u) ? pool[k] : NULL;
+                    src[k] = (gops[o].gathered >> k & 1u) ? SRC : 0;
+                    if (in[k]) door_fill(in[k], src[k] ? SRC : n);
+                    if (src[k]) t[k] = door_table(n, SRC);
+                    /* the reference: gathered here, CFT_IDX_NONE as +0 */
+                    use[k] = in[k];
+                    if (t[k]){
+                        use[k] = rb[k];
+                        for (size_t i = 0; i < n; i++){
+                            if (t[k][i] == CFT_IDX_NONE) memset(E(rb[k], i), 0, ESZ);
+                            else memcpy(E(rb[k], i), E(in[k], t[k][i]), ESZ);
+                        }
+                    }
                 }
-                route_on[ROUTE_INDEXED] = 0; flags_union = 0;
-                vrun_ix(gops[o].op, d0, op3[0], t[0], src[0], op3[1], t[1], src[1], op3[2], t[2], src[2], n, "door indexed"); f0 = flags_union;
-                route_on[ROUTE_INDEXED] = 1; flags_union = 0;
-                vrun_ix(gops[o].op, d1, op3[0], t[0], src[0], op3[1], t[1], src[1], op3[2], t[2], src[2], n, "door indexed"); f1 = flags_union;
-                door_compare(label, d1, f1, d0, f0, n);
+                fr = 0;
+                if (cft_run(dev, gops[o].op, F, CFT_RNE, use[0], use[1], use[2], ref, n, &fr, NULL) != CFT_OK)
+                    die("door: the reference run failed: %s", cft_last_error());
+                f1 = door_ix(1, gops[o].op, d1, in, t, src, n, label);
+                f0 = door_ix(0, gops[o].op, d0, in, t, src, n, label);
+                door_case(label, ref, fr, d1, f1, d0, f0, n);
                 if (o == 0 && s == 2){
                     /* The control: every index of a moved on by one partner.
                      * Moving one index could land a +0 on a -0, which a
-                     * subtraction need not see. Moving them all cannot be
-                     * inert. */
+                     * subtraction need not see. Moving them all cannot. */
                     for (size_t i = 0; i < n; i++)
                         if (t[0][i] != CFT_IDX_NONE) t[0][i] = (uint32_t)((t[0][i] + 1u) % SRC);
-                    vrun_ix(gops[o].op, d0, op3[0], t[0], src[0], op3[1], t[1], src[1], op3[2], t[2], src[2], n, "door indexed control");
+                    door_ix(1, gops[o].op, d0, in, t, src, n, "indexed control");
                     door_control("indexed sub, every index of a moved on by one partner", d0, d1, n);
                 }
                 for (int k = 0; k < 3; k++) free(t[k]);
             }
     }
 
-    /* The segmented reduction: the per-system maximum's shape and a sum,
-     * over six-lane systems (Kepler, the widest ensemble) and systems at
-     * the body cap. */
+    /* The segmented reduction: the per-system maximum's shape and a sum.
+     * Segments of one; six-lane systems (Kepler) past V0's widest
+     * ensemble; V0's 1,057 systems of 32 bodies, and one more; and
+     * systems at the body cap. */
     {
         static const struct { cft_op op; const char *name; } rops[] = { { CFT_MAXALL, "maxall" }, { CFT_SUM, "sum" } };
         static const struct { size_t seg, nseg; } shapes[] = {
-            { 6, 1 }, { 6, 4096 }, { 6, 4097 }, { 3 * (size_t)CFT_MAX_BODIES, 1 }, { 3 * (size_t)CFT_MAX_BODIES, 8 }, { 3 * (size_t)CFT_MAX_BODIES, 9 },
+            { 1, 7 }, { 6, 1 }, { 6, 8193 }, { 96, 1058 }, { 3 * (size_t)CFT_MAX_BODIES, 1 }, { 3 * (size_t)CFT_MAX_BODIES, 17 },
         };
         for (size_t o = 0; o < sizeof rops / sizeof rops[0]; o++)
             for (size_t s = 0; s < sizeof shapes / sizeof shapes[0]; s++){
@@ -2370,15 +2576,23 @@ static int door_selftest(const char *artifact){
                 snprintf(label, sizeof label, "reduce_seg %s seg=%zu n=%zu", rops[o].name, shapes[s].seg, n);
                 if (!route_have[ROUTE_REDUCE_SEG]){ door_skipped++; printf("skip %s: the route is %s\n", label, route_by[ROUTE_REDUCE_SEG]); continue; }
                 door_fill(a, n);
-                route_on[ROUTE_REDUCE_SEG] = 0; flags_union = 0; vreduce_seg(rops[o].op, d0, a, NULL, n, shapes[s].seg, "door reduce_seg"); f0 = flags_union;
-                route_on[ROUTE_REDUCE_SEG] = 1; flags_union = 0; vreduce_seg(rops[o].op, d1, a, NULL, n, shapes[s].seg, "door reduce_seg"); f1 = flags_union;
-                door_compare(label, d1, f1, d0, f0, shapes[s].nseg);
-                if (o == 0 && s == 1){
-                    /* the control: the first system's first element made the largest, 2^30 */
+                fr = 0;
+                for (size_t q = 0; q < shapes[s].nseg; q++){   /* the reference: one cft_reduce a segment */
+                    uint32_t fq = 0;
+                    if (cft_reduce(dev, rops[o].op, F, CFT_RNE, E(a, q * shapes[s].seg), NULL, E(ref, q), shapes[s].seg, &fq, NULL) != CFT_OK)
+                        die("door: the reference reduction failed: %s", cft_last_error());
+                    fr |= fq;
+                }
+                f1 = door_rs(1, rops[o].op, d1, a, n, shapes[s].seg, label);
+                f0 = door_rs(0, rops[o].op, d0, a, n, shapes[s].seg, label);
+                door_case(label, ref, fr, d1, f1, d0, f0, shapes[s].nseg);
+                if (o == 0 && s == 2){
+                    /* The control: the first system's first element raised
+                     * to 2^30, past every other. */
                     uint64_t big = (1023ull + 30) << 52;
                     if (F == CFT_FP64) memcpy(a, &big, ESZ);
                     else{ uint32_t fl = 0; cft_convert(dev, CFT_FP64, F, CFT_RNE, &big, a, 1, &fl); }
-                    vreduce_seg(rops[o].op, d0, a, NULL, n, shapes[s].seg, "door reduce_seg control");
+                    door_rs(1, rops[o].op, d0, a, n, shapes[s].seg, "reduce_seg control");
                     door_control("reduce_seg maxall, one element raised past every other", d0, d1, shapes[s].nseg);
                 }
             }
@@ -2386,14 +2600,36 @@ static int door_selftest(const char *artifact){
 
     for (int r = 0; r < N_ROUTES; r++)
         printf("door route %s calls=%llu fallbacks=%llu\n", route_def[r].name, route_calls[r], route_fallbacks[r]);
-    printf("door: %d identical, %d differ, %d not compared; controls %d of %d\n",
-           door_same, door_differ, door_skipped, door_controls_ok, door_controls);
-    free(a); free(b); free(c); free(d0); free(d1);
-    return door_differ || door_controls_ok != door_controls ? 1 : 0;
+    printf("door: %d identical, %d differ, %d not compared, %d accounting errors; controls %d of %d\n",
+           door_same, door_differ, door_skipped, door_counts_bad, door_controls_ok, door_controls);
+    free(a); free(b); free(c); free(d0); free(d1); free(ref); free(rb[0]); free(rb[1]); free(rb[2]);
+    return door_differ || door_counts_bad || door_controls_ok != door_controls ? 1 : 0;
+}
+
+/* --door-refuse NAME: one call that BOTH routes must refuse by name, so
+ * that it never reaches the library, or never computes on today's route,
+ * where the new route would refuse it. Reaching the end means it was
+ * not refused. */
+static int door_refuse(const char *name){
+    const size_t n = 64, src = 256;
+    V a = valloc(src), b = valloc(src), d = valloc(src);
+    uint32_t *t = door_table(n, src);
+    door_fill(a, src); door_fill(b, src);
+    if (!strcmp(name, "ix-alias-dense"))           /* d is b, dense, while a has a table */
+        vrun_ix(CFT_MUL, b, a, t, src, b, NULL, 0, NULL, NULL, 0, n, "door refuse");
+    else if (!strcmp(name, "ix-alias-source"))     /* d overlaps a's indexed source */
+        vrun_ix(CFT_SUB, a, a, t, src, NULL, NULL, 0, b, NULL, 0, n, "door refuse");
+    else if (!strcmp(name, "reduce-partial"))      /* not whole segments */
+        vreduce_seg(CFT_SUM, d, a, NULL, n + 1, 8, "door refuse");
+    else die("--door-refuse %s: the cases are ix-alias-dense, ix-alias-source and reduce-partial", name);
+    printf("door refuse %s: NOT refused\n", name);
+    free(a); free(b); free(d); free(t);
+    return 1;
 }
 
 int main(int argc, char **argv){
     const char *problem = NULL, *artifact = NULL, *fmtname = "fp64", *dt_file = NULL, *dt_out_path = NULL;
+    const char *door_refuse_case = NULL;   /* --door-refuse NAME */
     const char *mindt_txt = NULL;  /* --min-dt; NULL is +0, which disables
                                     * the floor exactly as REBOUND's
                                     * default does */
@@ -2443,6 +2679,7 @@ int main(int argc, char **argv){
         else if (!strcmp(argv[i], "--dump-constants")) do_dump = 1;
         else if (!strcmp(argv[i], "--probe")) do_probe = 1;
         else if (!strcmp(argv[i], "--door-selftest")) do_door = 1;
+        else if (!strcmp(argv[i], "--door-refuse") && i + 1 < argc) door_refuse_case = argv[++i];
         else if (!strcmp(argv[i], "--quiet")) quiet = 1;
         else die("unknown argument %s", argv[i]);
     }
@@ -2468,6 +2705,7 @@ int main(int argc, char **argv){
     if (engine_routes(artifact)) die("%s", eng_err);
     engine_identity();
     if (do_door){ int rc = door_selftest(artifact); cft_close(dev); return rc; }
+    if (door_refuse_case){ int rc = door_refuse(door_refuse_case); cft_close(dev); return rc; }
     if (!problem){
         if (do_dump){ NMAX = 8; make_constants(tol_shift, quiet); dump_constants(); return 0; }
         die("usage: ias15_cft --format F --problem FILE [--dt DT] [--epsilon EPS] [--steps N] [--sample K] [--cs kahan|augmented] [--member K] [--dt-file FILE]");
@@ -2729,6 +2967,18 @@ int ias15_engine_image_digest(unsigned char sha256[32], unsigned long long *imag
     memcpy(sha256, eng_image.sha256, 32);
     if (image_bytes) *image_bytes = (unsigned long long)eng_image.image_bytes;
     if (version) *version = eng_image.version;
+    return 0;
+}
+/* Which route each of the door's families took, and how often, so that
+ * the library half's gates can see a fallback as the program's trailer
+ * does (V0, 2026-10-31). Returns -1 past the last route. */
+int ias15_engine_route(int r, struct ias15_engine_route *out){
+    if (r < 0 || r >= N_ROUTES) return -1;
+    out->name = route_def[r].name;
+    out->on = route_on[r];
+    out->by = route_by[r] ? route_by[r] : "unopened";
+    out->calls = route_calls[r];
+    out->fallbacks = route_fallbacks[r];
     return 0;
 }
 unsigned long long ias15_engine_max_exceeded(void){ return eng_open && max_exceeded ? (unsigned long long)max_exceeded[0] : 0; }

@@ -44,6 +44,14 @@
  * This program needs the ias15_cft executable. It sets
  * CFT_REBOUND_IAS15 from --program, or --build, before running.
  */
+/* putenv() is XSI. Under -std=c99, glibc declares it only with
+ * _XOPEN_SOURCE, and mingw declares it regardless. That is the same
+ * trap as ias15_cft.c's clock_gettime (2026-09-14). The Linux leg of
+ * 2026-10-31 found it here as an implicit declaration, which gcc 14 and
+ * later reject. This must come before any header. */
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 600
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

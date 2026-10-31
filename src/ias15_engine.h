@@ -306,6 +306,16 @@ const char        *ias15_engine_build_id(void);
 int                ias15_engine_image_digest(unsigned char sha256[32],
                                              unsigned long long *image_bytes,
                                              uint32_t *version);
+/* Which route each of the door's families took (src/ias15_cft.c,
+ * engine_routes()): r from 0, -1 past the last. It is the library half's
+ * view of the program's `# route` trailer lines. */
+struct ias15_engine_route {
+    const char *name;          /* scalar, indexed, reduce_seg */
+    int on;                    /* this run takes the new route */
+    const char *by;            /* device, absent, hidden or forced */
+    unsigned long long calls, fallbacks;
+};
+int                ias15_engine_route(int r, struct ias15_engine_route *out);
 
 #ifdef __cplusplus
 }

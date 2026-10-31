@@ -35,6 +35,12 @@ WHAT IS IN THE KEY
     data files it reads);
   - the value of every --env (CFT_REBOUND_ARTIFACT above all: a pass
     from the software backend must NEVER satisfy a card run);
+  - the name and value of every variable whose name starts with an
+    --env-prefix. The Makefile passes CFT_REBOUND_, so a variable that
+    chooses a route - CFT_REBOUND_ROUTE_*, CFT_REBOUND_HIDE_FEATURES, or
+    whatever a later round adds - is in every key without being listed.
+    Keyed on CFT_REBOUND_ARTIFACT alone, a pass with every route hidden
+    satisfied the default run that followed it (V0, 2026-10-31);
   - the command line itself, so `--fp64` and `--fp256` are different
     legs of the same binary.
 
@@ -57,7 +63,8 @@ WHAT KEEPS IT HONEST
     build/ and build2/, or between machines.
 
   tools/gate_cache.py --leg NAME --cache-dir DIR --mode quick|full \\
-      --input FILE [--input FILE ...] [--env VAR ...] -- CMD [ARGS ...]
+      --input FILE [--input FILE ...] [--env VAR ...] [--env-prefix P ...] \\
+      -- CMD [ARGS ...]
   tools/gate_cache.py --report --cache-dir DIR
 """
 import argparse
@@ -67,6 +74,14 @@ import os
 import subprocess
 import sys
 import time
+
+
+def prefixed(prefixes):
+    """Every variable in the environment whose name starts with one of
+    the prefixes, matched without case because Windows' environment
+    ignores it."""
+    up = [p.upper() for p in prefixes]
+    return sorted(v for v in os.environ if any(v.upper().startswith(p) for p in up))
 
 
 def key_of(leg, inputs, envs, cmd):
@@ -130,6 +145,7 @@ def main():
     ap.add_argument("--mode", choices=("quick", "full"), default="full")
     ap.add_argument("--input", action="append", default=[])
     ap.add_argument("--env", action="append", default=[])
+    ap.add_argument("--env-prefix", action="append", default=[])
     ap.add_argument("--report", action="store_true")
     ap.add_argument("cmd", nargs=argparse.REMAINDER)
     a = ap.parse_args()
@@ -143,7 +159,8 @@ def main():
     if not cmd:
         sys.exit("gate_cache: no command given after --")
 
-    key = key_of(a.leg, a.input, a.env, cmd)
+    envs = sorted(set(a.env) | set(prefixed(a.env_prefix)))
+    key = key_of(a.leg, a.input, envs, cmd)
     sp = stamp_path(a.cache_dir, a.leg)
 
     # Only the quick run reads a stamp. The full run is the thing whose
@@ -168,7 +185,7 @@ def main():
             json.dump({"leg": a.leg, "key": key, "mode": a.mode,
                        "when": time.strftime("%Y-%m-%d %H:%M:%S"),
                        "cmd": cmd, "inputs": sorted(a.input),
-                       "env": sorted(a.env)}, f, indent=1)
+                       "env": envs}, f, indent=1)
         os.replace(tmp, sp)      # never a half-written stamp
     else:
         # A failure retires the stamp. Otherwise a leg that failed today

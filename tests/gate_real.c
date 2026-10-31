@@ -648,7 +648,7 @@ static int one_format_maxiter(int format, const char *fname, double dt){
     struct cft_ias15_state *bs = (struct cft_ias15_state*)b->integrator.state;
     if (!bs || bs->iterations_max_exceeded != counted){
         printf("  %-6s FAIL  the count did not survive the checkpoint: %llu, wanted %llu\n",
-               fname, bs ? bs->iterations_max_exceeded : 0, counted);
+               fname, (unsigned long long)(bs ? bs->iterations_max_exceeded : 0), (unsigned long long)counted);
         ok = 0;
     }
     reb_simulation_steps(b, 10);

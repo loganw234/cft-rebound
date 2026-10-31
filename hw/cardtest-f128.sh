@@ -42,7 +42,12 @@ LOG=$L/cardtest.log
 log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 # A record with the two fields that cannot match removed: which backend
 # produced it, and how long it took. Nothing else is touched.
-norm_record() { sed -E '/^# (route|identity) /d; s#backend=[^ ]+#backend=X#; s/ seconds=[0-9.]+//; s/ steps_per_s=[0-9.]+//; s/ (wall_seconds|t_[a-z0-9_]+|system_steps_per_s)=[0-9.]+//g' "$1"; }
+norm_record() { sed -E '/^# (route|identity) /d; s/ staged_bytes=[0-9]+//; s#backend=[^ ]+#backend=X#; s/ seconds=[0-9.]+//; s/ steps_per_s=[0-9.]+//; s/ (wall_seconds|t_[a-z0-9_]+|system_steps_per_s)=[0-9.]+//g' "$1"; }
+# The card run's routes (ROUND3.md, P0). The normaliser drops the
+# `# route` lines, because they differ by design between a card and the
+# software backend. So they are printed here instead, where a fallback
+# cannot pass unseen.
+routes () { grep '^# route ' "$1" | sed -E 's/^# route ([a-z_]+)=([a-z]+) by=([a-z]+) calls=([0-9]+) fallbacks=([0-9]+)$/\1=\2 by \3 (\4 calls, \5 fallbacks)/' | paste -sd ';' -; }
 therm() { xbutil examine -d 0000:02:00.1 -r thermal -r electrical 2>/dev/null | grep -E "FPGA|Int Vcc|^\s*Power  " | sed 's/^\s*//; s/\s\+/ /g' | tr '\n' ';'; }
 last() { tail -n "${2:-1}" "$1" 2>/dev/null | tr '\n' ' ' | cut -c1-"${3:-300}"; }
 {
@@ -136,7 +141,7 @@ last() { tail -n "${2:-1}" "$1" 2>/dev/null | tr '\n' ' ' | cut -c1-"${3:-300}";
     # The physics counter beside the timing: identical records prove
     # the backends agree, and the corrector's pass count proves the
     # problem posed was the one meant (bit-identity is not validity).
-    log "  $label: software ${sw}s, card ${card}s, ratio $(awk -v a="$sw" -v b="$card" 'BEGIN { printf "%.2f", (b > 0) ? a / b : 0 }'); $same; $(grep -oE 'mean_pc_iterations=[0-9.]+' "$T/time-card.txt" | head -n 1)"
+    log "  $label: software ${sw}s, card ${card}s, ratio $(awk -v a="$sw" -v b="$card" 'BEGIN { printf "%.2f", (b > 0) ? a / b : 0 }'); $same; $(grep -oE 'mean_pc_iterations=[0-9.]+' "$T/time-card.txt" | head -n 1); routes $(routes "$T/time-card.txt")"
   }
   log "wall clock, --engine program --arith fma (docs/HARDWARE.md's form), card vs software:"
   time_one "kepler N=2 fp64 200 steps"   --format fp64  --problem data/problems/kepler.txt --steps 200 --engine program --arith fma --max-iter 60

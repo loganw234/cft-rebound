@@ -4,9 +4,9 @@
 #
 # The gate of the door (ROUND3.md, P0). ABI 0.12 to 0.14 opened three
 # routes: a scalar operand, an indexed gather and a segmented reduction.
-# Each is held against the route this port already takes, which the
-# contract makes the same bits. Also held is the policy that chooses
-# between them, which every round-3 parcel shares.
+# Each route, and the route this port already takes, is held against a
+# reference computed outside the wrappers. Also held is the policy that
+# chooses between them, which every round-3 parcel shares.
 #
 #   python tools/check_door.py [--build build] [--exe ias15_cft]
 #                              [--formats fp64,fp128,fp256]
@@ -15,24 +15,31 @@
 # What it asserts, and what lets each assertion fail:
 #   1. --door-selftest at each format:
 #        - every case identical, and every control seeing its difference;
-#        - BOTH routes of every published family counted as having run.
-#          A self-test that took one route twice would be comparing that
-#          route against itself.
-#        - a family the device does not publish has every case reported
+#        - every wrapper call accounted exactly, both in calls= and in
+#          the route's own counters;
+#        - something compared at all. A device that publishes nothing
+#          passes nothing.
+#        - on the software backend, every bit published, because it
+#          publishes them all (cft.h). A probe that reads none is broken,
+#          and it passed every check here before 2026-10-31 (V0's N4).
+#        - a family that a card does not publish has every case reported
 #          as not compared, and never as a pass.
-#   2. With every bit hidden, no case is identical and every case is
-#      not compared. A hidden route must never count as a pass.
-#   3. A route forced on against a hidden bit is refused, and the
-#      refusal names the variable and the bit. So are a bad value and a
-#      bad route name.
+#   2. With every bit hidden, no case is identical and every case is not
+#      compared.
+#   3. Refusals, each by name:
+#        - a route forced on against a hidden bit;
+#        - a bad value, a bad route name, and a misspelled variable;
+#        - every --door-refuse call, on BOTH routes, so that today's route
+#          never computes what the new one refuses.
 #   4. A run with every route forced off gives the same record as the
-#      default run. That is the fallback's own gate. The route lines say
-#      how many calls each family carried, so a comparison that nothing
-#      exercised shows up as one. In P0 nothing calls the door yet.
+#      default run, with every counter present on both sides. That is
+#      the fallback's own gate. The route lines say how many calls each
+#      family carried, so a comparison that nothing exercised shows up as
+#      one. In P0 nothing calls the door yet.
 #   5. The record's `# identity` line names the library build.
 #
-# The route names, variables and bits are read from the program's own
-# output, never typed here.
+# The route names, variables, bits and refusal cases are read from the
+# program's own output and source, never typed here.
 
 import argparse
 import os
@@ -45,10 +52,17 @@ root = os.path.dirname(here)
 
 ROUTE_LINE = re.compile(r"^door route (\w+)=(on|off) by=(\w+) env=(\S+) bit=(\S+)$")
 COUNT_LINE = re.compile(r"^door route (\w+) calls=(\d+) fallbacks=(\d+)$")
-SUMMARY = re.compile(r"^door: (\d+) identical, (\d+) differ, (\d+) not compared; controls (\d+) of (\d+)$")
+SUMMARY = re.compile(r"^door: (\d+) identical, (\d+) differ, (\d+) not compared, (\d+) accounting errors; "
+                     r"controls (\d+) of (\d+)$")
 TRAILER_ROUTE = re.compile(r"^# route (\w+)=(on|off) by=(\w+) calls=(\d+) fallbacks=(\d+)$")
 COUNTERS = ("steps_done", "iterations_max_exceeded", "steps_rejected", "mean_pc_iterations",
             "max_pc_iterations", "flags_seen", "calls", "divsqrt_calls")
+# What each --door-refuse case must say, and which route it belongs to.
+# The cases themselves are read from the program's own refusal of an
+# unknown one.
+REFUSALS = {"ix-alias-dense": ("indexed", "once any operand has an index table"),
+            "ix-alias-source": ("indexed", "indexed source"),
+            "reduce-partial": ("reduce_seg", "are not whole segments")}
 
 
 def run(cmd, extra_env=None):
@@ -56,7 +70,7 @@ def run(cmd, extra_env=None):
     choose a route behind the gate's back. CFT_REBOUND_ARTIFACT stays: a
     card run is the same gate."""
     env = {k: v for k, v in os.environ.items()
-           if not k.startswith("CFT_REBOUND_ROUTE_") and k != "CFT_REBOUND_HIDE_FEATURES"}
+           if not k.upper().startswith("CFT_REBOUND_ROUTE_") and not k.upper().startswith("CFT_REBOUND_HIDE")}
     env.update(extra_env or {})
     p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
     return p.returncode, p.stdout, p.stderr
@@ -81,7 +95,7 @@ def selftest(cft, fmt, extra_env=None):
         if line.startswith("skip "):
             fam = line.split()[1]
             skips[fam] = skips.get(fam, 0) + 1
-        elif line.startswith("DIFF ") or line.startswith("CONTROL FAILED"):
+        elif line.startswith(("DIFF ", "COUNT ", "CONTROL FAILED")):
             print("       " + line)
     return rc, out, err, routes, counts, summary, skips
 
@@ -112,6 +126,7 @@ def main():
     exe = ".exe" if os.name == "nt" else ""
     cft = os.path.join(args.build, args.exe + exe)
     formats = args.formats.split(",")
+    software = not os.environ.get("CFT_REBOUND_ARTIFACT")
     allok = True
 
     def verdict(ok, text):
@@ -123,25 +138,32 @@ def main():
     routes = None
     cases = None
     for fmt in formats:
-        print("check_door at %s: each route against today's route" % fmt)
+        print("check_door at %s: each route and today's against a reference computed outside both" % fmt)
         rc, out, err, routes, counts, summary, skips = selftest(cft, fmt)
         if rc not in (0, 1) or summary is None or not routes:
             verdict(False, "--door-selftest did not run (rc %d): %s" % (rc, (err or out)[-400:].strip()))
+            routes = None
             continue
-        same, differ, skipped, cok, cn = summary
+        same, differ, skipped, bad, cok, cn = summary
         cases = same + differ + skipped
         present = [r for r, d in routes.items() if d["by"] != "absent"]
-        verdict(rc == 0 and differ == 0, "%d of %d cases identical, %d differ (rc %d)" % (same, cases, differ, rc))
+        verdict(rc == 0 and differ == 0 and same > 0,
+                "%d of %d cases identical to the reference on both routes, %d differ (rc %d)" % (same, cases, differ, rc))
+        verdict(bad == 0, "every wrapper call accounted: one operation in calls=, and the one route counter meant (%d errors)" % bad)
         verdict(cok == cn and cn >= len(present),
                 "controls: %d of %d saw their difference, one or more for each of %d published families" % (cok, cn, len(present)))
-        for r, d in routes.items():
+        if software:
+            verdict(all(d["by"] == "device" for d in routes.values()),
+                    "the software backend publishes every bit: %s"
+                    % ", ".join("%s by=%s" % (r, d["by"]) for r, d in sorted(routes.items())))
+        for r, d in sorted(routes.items()):
             calls, falls = counts.get(r, (0, 0))
             if d["by"] == "absent":
                 print("  note %s: %s is not published on this device, so its %d cases ran today's route only"
                       " and were not compared" % (r, d["bit"], skips.get(r, 0)))
                 continue
             verdict(skips.get(r, 0) == 0 and calls > 0 and falls > 0,
-                    "%s: both routes ran (%d calls through %s, %d through today's route), nothing skipped"
+                    "%s: both routes ran (%d calls through %s, %d through today's route), nothing left uncompared"
                     % (r, calls, d["bit"], falls))
 
     if routes is None or cases is None:
@@ -153,7 +175,7 @@ def main():
     # 2. Every bit hidden: nothing may count as a pass.
     print("check_door at %s: every bit hidden" % f0)
     rc, out, err, hroutes, _, hsum, _ = selftest(cft, f0, {"CFT_REBOUND_HIDE_FEATURES": ",".join(names)})
-    ok = (rc == 0 and hsum is not None and hsum[0] == 0 and hsum[2] == cases
+    ok = (rc == 0 and hsum is not None and hsum[0] == 0 and hsum[2] == cases and hsum[3] == 0
           and all(d["by"] == "hidden" and d["on"] == "off" for d in hroutes.values()))
     verdict(ok, "hidden: %s identical, %s not compared of %d, every route off by=hidden"
             % (hsum[0] if hsum else "?", hsum[2] if hsum else "?", cases))
@@ -171,6 +193,23 @@ def main():
     verdict(rc != 0 and "expected on, off or auto" in err, "%s=yes is refused by name (rc %d)" % (env0, rc))
     rc, out, err = run([cft, "--door-selftest", "--format", f0], {"CFT_REBOUND_HIDE_FEATURES": "no_such_route"})
     verdict(rc != 0 and "is not a route" in err, "CFT_REBOUND_HIDE_FEATURES=no_such_route is refused by name (rc %d)" % rc)
+    typo = env0[:-1]          # a near miss: the route's own variable, one letter short
+    rc, out, err = run([cft, "--door-selftest", "--format", f0], {typo: "on"})
+    verdict(rc != 0 and typo in err and "is not one of the door's variables" in err,
+            "a misspelled %s=on is refused by name, not ignored (rc %d)" % (typo, rc))
+    rc, out, err = run([cft, "--door-refuse", "no_such_case", "--format", f0])
+    listed = set(re.findall(r"[a-z]+(?:-[a-z]+)+", err.split("the cases are", 1)[-1])) if "the cases are" in err else set()
+    verdict(rc != 0 and listed == set(REFUSALS),
+            "--door-refuse names its cases, and they are the ones this gate holds: %s" % ", ".join(sorted(listed)))
+    for case, (route, phrase) in sorted(REFUSALS.items()):
+        if routes.get(route, {}).get("by") == "absent":
+            print("  note %s: %s is absent here, so only today's route was asked to refuse it" % (case, route))
+        for state in ("off", "on"):
+            if state == "on" and routes.get(route, {}).get("by") == "absent":
+                continue
+            rc, out, err = run([cft, "--door-refuse", case, "--format", f0], {routes[route]["env"]: state})
+            verdict(rc == 3 and phrase in err and "NOT refused" not in out,
+                    "%s is refused by name with %s=%s (rc %d)" % (case, routes[route]["env"], state, rc))
 
     # 4. Every route forced off against the default: the same record.
     kepler = os.path.join(root, "data", "problems", "kepler.txt")
@@ -186,12 +225,14 @@ def main():
             if rc0 or rc1:
                 verdict(False, "%s did not run (rc %d/%d): %s" % (name, rc0, rc1, (err0 or err1)[-300:].strip()))
                 continue
+            missing = [k for k in COUNTERS if k not in t0 or k not in t1]
             carried = sum(v[2] + v[3] for v in list(r0.values()) + list(r1.values()))
-            same = s0 == s1 and len(s0) > 0 and all(t0.get(k) == t1.get(k) for k in COUNTERS)
+            same = s0 == s1 and len(s0) > 0 and not missing and all(t0[k] == t1[k] for k in COUNTERS)
             forced = sorted(r1) == names and all(v[0] == "off" and v[1] == "forced" for v in r1.values())
             verdict(same and forced and sorted(r0) == names,
-                    "%s: %d sample lines and the counters identical; forced-off run reports every route off by=forced%s"
-                    % (name, len(s0), "" if carried else
+                    "%s: %d sample lines and all %d counters identical%s; forced-off run reports every route off by=forced%s"
+                    % (name, len(s0), len(COUNTERS), " (MISSING: %s)" % ", ".join(missing) if missing else "",
+                       "" if carried else
                        " (vacuous for now: no route carried a call in either run, which is P0's state)"))
             if fmt == f0 and name == runs[0][0]:
                 verdict(ident is not None and "libcft_build=" in ident and (" image=none" in ident or " image_sha256=" in ident),

@@ -494,9 +494,12 @@ static int bind_engine(struct reb_simulation *r, struct cft_ias15_state *st){
         const char *art = resolve_artifact();
         int orc = ias15_engine_open(st->format, art);
         if (orc == -4){
-            /* The device opened and lacks the format. The engine's
-             * sentence names the artifact, what it carries and what was
-             * asked; nothing was computed, and nothing will be. */
+            /* The device opened and lacks the format, or the environment
+             * asks for a route it does not publish or names a variable of
+             * the door's that does not exist (src/ias15_cft.c,
+             * engine_routes()). The engine's sentence says which: the
+             * artifact, what it carries and what was asked. Nothing was
+             * computed, and nothing will be. */
             refuse(r, "ias15_cft: %s", ias15_engine_error());
             return 0;
         }

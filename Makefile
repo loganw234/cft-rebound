@@ -554,9 +554,12 @@ programs: $(ASM)
 # has the reasoning.
 #
 # $(ART) is in every key: a pass on the software backend must never
-# satisfy a run against a card.
+# satisfy a run against a card. So is every other CFT_REBOUND_
+# variable, by prefix and not by list. The door's route variables
+# choose which route a leg exercises (src/ias15_cft.c, engine_routes()),
+# and a pass with every route hidden must not satisfy a default run.
 GATE_CACHE  := $(PYTHON) tools/gate_cache.py --cache-dir $(B)/.gate-cache \
-               --env CFT_REBOUND_ARTIFACT
+               --env CFT_REBOUND_ARTIFACT --env-prefix CFT_REBOUND_
 PROBLEMS    := $(wildcard data/problems/*)
 PROGRAMS    := $(wildcard programs/out/*.cftp)
 RECORDS     := $(wildcard results/raw/*.rec)

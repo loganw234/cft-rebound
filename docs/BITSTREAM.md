@@ -245,8 +245,15 @@ indistinguishable from it where IAS15's wall clock is.
 differ" on all five rows while every data line was byte-identical: the
 comparison was `cmp` on the whole file, and a record carries a header
 naming the backend and a trailer carrying elapsed seconds, neither of
-which can ever match. Both scripts now normalise exactly those two
-fields and compare everything else, counters included.
+which can ever match. Both scripts now normalise those two fields and
+compare everything else, counters included.
+
+*2026-10-31, round 3's P0.* The normalisers also drop four other kinds
+of field: every `t_` timing; `staged_bytes`, which depends on the route
+a call took; and the `# route` and `# identity` lines, which say where
+a run ran rather than what it computed. Each script prints the card
+run's routes next to its verdict, so a fallback cannot pass unseen
+there.
 
 ### What it refuses, on the card
 

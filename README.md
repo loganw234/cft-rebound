@@ -463,6 +463,21 @@ convention for a fixed step.
 - `--format fp64|fp128|fp256`; `--artifact PATH` opens a tile instead
   of the software backend, and `$CFT_REBOUND_ARTIFACT` is the same
   thing for a program that takes no flag of its own.
+- `$CFT_REBOUND_ROUTE_SCALAR`, `$CFT_REBOUND_ROUTE_INDEXED` and
+  `$CFT_REBOUND_ROUTE_REDUCE_SEG` each choose between a route libcft
+  added for this port and the route the port already takes. The
+  contract makes both give the same bits.
+  - `auto`, the default, lets the device decide; `off` always takes
+    today's route; `on` demands the new one.
+  - `on` against a device that does not publish the bit is refused by
+    name, and so is a misspelled variable.
+  - `$CFT_REBOUND_HIDE_FEATURES` hides a published bit, so the gate can
+    exercise the fallback.
+
+  A record has one `# route` line per family in its trailer, saying
+  which route ran and how often. It also has a `# identity` header line
+  naming the library build and, where the device answers, its image.
+  See src/ias15_cft.c, `engine_routes()`, and ROUND3.md, P0.
 - `--arith rebound|fma`: REBOUND's exact sequence of roundings
   (divisions and all), or the FMA form with reciprocal constants that a
   sequencer program can run. `--engine program` runs the predictor and
@@ -515,8 +530,11 @@ Four things keep it from becoming a gate that cannot fail:
   rename, so it cannot travel between `build/` and `build2/` or between
   machines, and a half-written stamp cannot be read as valid.
 
-`$CFT_REBOUND_ARTIFACT` is part of every key, so a pass on the software
-backend can never satisfy a run against a card.
+Every `CFT_REBOUND_` variable is part of every key, matched by prefix
+rather than by list. With `$CFT_REBOUND_ARTIFACT` among them, a pass on
+the software backend can never satisfy a run against a card. With the
+route variables among them, a pass on one route can never satisfy a run
+on another.
 
 `make check-light` is the third tier, for when you have changed
 something and want a fast signal from *everything* rather than a

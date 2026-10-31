@@ -106,6 +106,10 @@ def normalise(record: str) -> str:
         # The instrumented trailer's own timings (2026-09-14) and the
         # ensemble's rate: all wall-clock, none of them a value.
         line = re.sub(r" (wall_seconds|t_[a-z0-9_]+|system_steps_per_s)=[0-9.]+", "", line)
+        # What a run presented to the library: it depends on the route
+        # (a scalar operand stages one element on the new route and n on
+        # today's), so it is accounting, not a value (V0, 2026-10-31).
+        line = re.sub(r" staged_bytes=[0-9]+", "", line)
         out.append(line)
     return "\n".join(out)
 

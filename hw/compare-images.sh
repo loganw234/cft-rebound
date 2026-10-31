@@ -88,7 +88,12 @@ done
 # Comparing the raw files instead reports "differ" on every row while
 # every value is byte-identical, which is a comparison that can only
 # ever fail (measured, 2026-09-13).
-norm_record() { sed -E '/^# (route|identity) /d; s#backend=[^ ]+#backend=X#; s/ seconds=[0-9.]+//; s/ steps_per_s=[0-9.]+//; s/ (wall_seconds|t_[a-z0-9_]+|system_steps_per_s)=[0-9.]+//g' "$1"; }
+norm_record() { sed -E '/^# (route|identity) /d; s/ staged_bytes=[0-9]+//; s#backend=[^ ]+#backend=X#; s/ seconds=[0-9.]+//; s/ steps_per_s=[0-9.]+//; s/ (wall_seconds|t_[a-z0-9_]+|system_steps_per_s)=[0-9.]+//g' "$1"; }
+# The card run's routes (ROUND3.md, P0). The normaliser drops the
+# `# route` lines, because they differ by design between a card and the
+# software backend. So they are printed here instead, where a fallback
+# cannot pass unseen.
+routes () { grep '^# route ' "$1" | sed -E 's/^# route ([a-z_]+)=([a-z]+) by=([a-z]+) calls=([0-9]+) fallbacks=([0-9]+)$/\1=\2 by \3 (\4 calls, \5 fallbacks)/' | paste -sd ';' -; }
 
 run_one() {  # <out> <artifact|""> <fmt> <problem> <steps>
   local out=$1 art=$2 fmt=$3 prob=$4 nsteps=$5 t0 t1
@@ -131,6 +136,7 @@ for pi in "${!PROBS[@]}"; do
       printf '%-22s %-6s %-10s %9s %7s %-10s %s\n' "$pname" "$fmt" "${LABELS[$i]}" "$c_s" \
              "$(awk -v a="$sw_s" -v b="$c_s" 'BEGIN { printf "%.2f", (b > 0) ? a / b : 0 }')" \
              "$local_rec" "${cpasses:-?}"
+      echo "    routes: $(routes "$T/card-$i.txt")"
     done
   done
 done
