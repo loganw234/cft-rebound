@@ -46,6 +46,13 @@ struct ias15_engine_view {
     size_t n_elem;      /* 3 * n_bodies */
     size_t elem_size;   /* 8, 16 or 32 */
     size_t n_bodies;
+    /* The wide clock: one element each, read and written in place. t is
+     * the clock the step advances, and t_hi with t_lo is the exact-time
+     * pair the record prints. ias15_engine_put_t_f64() rebuilds all
+     * three from a binary64 t, so the bits it cannot carry are lost. They
+     * are why a checkpoint at binary128 can move t by an ulp (ROADMAP.md,
+     * "What round 2 leaves open: the wide clock"; ROUND3.md, P3). */
+    unsigned char *t, *t_hi, *t_lo;
 };
 
 /* fmt is a cft_format: CFT_FP64 = 1, CFT_FP128 = 2, CFT_FP256 = 3.
@@ -56,7 +63,12 @@ struct ias15_engine_view {
  * docs/BITSTREAM.md). The device says so itself in CAPS[3:0], libcft
  * refuses the format before a byte is issued, and this engine refuses
  * at open rather than at the first operation, by name: the sentence is
- * in ias15_engine_error() until the next open. */
+ * in ias15_engine_error() until the next open.
+ *
+ * -4 also covers the door's routes (src/ias15_cft.c, engine_routes()).
+ * It is returned when CFT_REBOUND_ROUTE_<NAME>=on asks for a route the
+ * device does not publish, or when the environment names a route or a
+ * value that does not exist. Each case has its own sentence. */
 int    ias15_engine_open(int fmt, const char *artifact);
 const char *ias15_engine_error(void);
 int    ias15_engine_is_open(void);
@@ -286,6 +298,14 @@ uint32_t           ias15_engine_flags(void);       /* the OR of every operation'
 unsigned long long ias15_engine_calls(void);
 unsigned long long ias15_engine_max_exceeded(void);
 uint64_t           ias15_engine_constants_digest(void);
+/* What the producer says it ran on, read once at open. The first is
+ * cft_build_id(), verbatim. The second fills the device image's SHA-256
+ * and returns 0, or returns -1 where the device refused to name it (the
+ * software backend and a remote handle always do). */
+const char        *ias15_engine_build_id(void);
+int                ias15_engine_image_digest(unsigned char sha256[32],
+                                             unsigned long long *image_bytes,
+                                             uint32_t *version);
 
 #ifdef __cplusplus
 }

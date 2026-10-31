@@ -314,10 +314,24 @@ def fig_decompose(dc):
     trows = [(PRETTY.get(r["problem"], r["problem"]), r["steps"], FMT_NAME.get(r["format"], r["format"]), r["backend"], r["wall_seconds"],
               r["t_program"], r["t_elem"], r["t_divsqrt"], r["t_gravity"], r["calls"], r["program_calls"], r["divsqrt_calls"],
               si(fnum(r["staged_bytes"])) + "B", r["passes"]) for r in dc]
+    # The columns the table above shows. Every other column the CSV
+    # carries - the gravity split, t_reduce, the routes, whatever a
+    # parcel adds - goes in a second table read from the CSV itself, so
+    # a new trailer key appears here with no edit (ROUND3.md, P0).
+    shown = {"problem", "steps", "format", "backend", "wall_seconds", "t_program", "t_elem", "t_divsqrt",
+             "t_gravity", "calls", "program_calls", "divsqrt_calls", "staged_bytes", "passes"}
+    extra = [k for k in dc[0] if k not in shown]
+    more = ""
+    if extra:
+        more = ('<p class="note">Every other key the trailers carried, read from the CSV rather than listed here.</p>' +
+                table(["problem", "format", "backend"] + extra,
+                      [(PRETTY.get(r["problem"], r["problem"]), FMT_NAME.get(r["format"], r["format"]), r["backend"]) +
+                       tuple(r.get(k, "") for k in extra) for r in dc]))
     return ("".join(parts) +
             legend([("program runs", "--s1"), ("elementwise calls", "--s2"), ("divide and sqrt", "--s3"), ("host, everything else", "--gray")]) +
             '<p class="note">The vertical tick on each bar is where gravity ends when its own time is measured inclusively - host gather, scatter and every library call inside it. It overlaps the segments rather than partitioning them, which is why it is a mark and not a fill.</p>' +
-            table(["problem", "steps", "format", "backend", "wall s", "program s", "elementwise s", "div/sqrt s", "gravity s (incl.)", "calls", "program calls", "div/sqrt calls", "bytes presented", "passes"], trows))
+            table(["problem", "steps", "format", "backend", "wall s", "program s", "elementwise s", "div/sqrt s", "gravity s (incl.)", "calls", "program calls", "div/sqrt calls", "bytes presented", "passes"], trows) +
+            more)
 
 
 def fig_determinism(wl, en):

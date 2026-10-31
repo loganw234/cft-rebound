@@ -93,6 +93,11 @@ def normalise(record: str) -> str:
     comparable and worth keeping in the comparison."""
     out = []
     for line in record.splitlines():
+        # These say where a run ran, not what it computed (ROUND3.md,
+        # P0). A card without a bit takes today's route and names its
+        # image, and both differ from a software run by design.
+        if line.startswith("# route ") or line.startswith("# identity "):
+            continue
         line = re.sub(r"backend=\S+", "backend=X", line)
         line = re.sub(r"program=\S+", "program=X", line)
         line = re.sub(r"impl=\S+", "impl=X", line)
@@ -157,19 +162,45 @@ def passes(record: str):
     return m.group(1) if m else "?"
 
 
+def trailer(record: str) -> dict:
+    """Every key=value on the record's trailer, plus each `# route` line as
+    route_<name>, route_<name>_calls and route_<name>_fallbacks. The keys
+    are read, never listed, so a key a parcel adds reaches decompose.csv
+    and the bench sheet's table without an edit here (ROUND3.md, P0)."""
+    keys = {}
+    for line in record.splitlines():
+        if line.startswith("# steps_done="):
+            for kv in line[2:].split():
+                k, _, v = kv.partition("=")
+                keys[k] = v
+        elif line.startswith("# route "):
+            f = line[2:].split()
+            name, _, state = f[1].partition("=")
+            keys["route_" + name] = state
+            for kv in f[2:]:
+                k, _, v = kv.partition("=")
+                if k in ("calls", "fallbacks"):
+                    keys[f"route_{name}_{k}"] = v
+    return keys
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--image", action="append", default=[],
                     metavar="LABEL=PATH", help="repeatable")
     ap.add_argument("--formats", default="fp64,fp128")
     ap.add_argument("--csv", default=str(REPO / "bench-modes" / "workload.csv"))
+    ap.add_argument("--decompose", default=None,
+                    help="where a step goes, one row a port run with every trailer key; "
+                         "default decompose.csv beside --csv")
     ap.add_argument("--build", default=str(REPO / "build"))
     ap.add_argument("--quick", action="store_true",
                     help="the small problems only")
     a = ap.parse_args()
 
     build = pathlib.Path(a.build)
-    ref, cft = build / "ias15_ref", build / "ias15_cft"
+    exe = ".exe" if os.name == "nt" else ""   # as tools/check_program_engine.py
+    ref, cft = build / ("ias15_ref" + exe), build / ("ias15_cft" + exe)
     for p in (ref, cft):
         if not p.exists():
             print(f"missing {p}; run make first", file=sys.stderr)
@@ -223,6 +254,7 @@ def main() -> int:
 
     formats = a.formats.split(",")
     rows, failures = [], 0
+    decomp = []   # one dict a port run: the problem, the backend, every trailer key
     outdir = pathlib.Path(a.csv).parent
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -266,6 +298,8 @@ def main() -> int:
             d = energy_drift(out)
             rows.append((pname, steps, "sw-rebound-form", "fp64", secs,
                          ref_secs / secs, d, rec, passes(out)))
+            decomp.append({"problem": pname, "steps": steps, "format": "fp64",
+                           "backend": "software-rebound-form", **trailer(out), "passes": passes(out)})
             print(f"{pname:<12} {steps:>6} {'sw REBOUND fm':<14} {'fp64':<6} {secs:>9.2f} "
                   f"{steps/secs:>9.1f} {ref_secs/secs:>8.2f} {fmt_drift(d):>13} "
                   f"{rec:<10} {passes(out)}")
@@ -290,6 +324,8 @@ def main() -> int:
             d = energy_drift(out)
             rows.append((pname, steps, "sw", f, secs, ref_secs / secs, d,
                          "fma reference", passes(out)))
+            decomp.append({"problem": pname, "steps": steps, "format": f,
+                           "backend": "software", **trailer(out), "passes": passes(out)})
             print(f"{pname:<12} {steps:>6} {'sw FMA form':<14} {f:<6} {secs:>9.2f} "
                   f"{steps/secs:>9.1f} {ref_secs/secs:>8.2f} {fmt_drift(d):>13} "
                   f"{'fma ref':<10} {passes(out)}")
@@ -313,6 +349,8 @@ def main() -> int:
                 if not same:
                     failures += 1
                 rows.append((pname, steps, label, f, secs, ref_secs / secs, d, rec, passes(out)))
+                decomp.append({"problem": pname, "steps": steps, "format": f,
+                               "backend": label, **trailer(out), "passes": passes(out)})
                 print(f"{pname:<12} {steps:>6} {label:<14} {f:<6} {secs:>9.2f} "
                       f"{steps/secs:>9.1f} {ref_secs/secs:>8.2f} {fmt_drift(d):>13} "
                       f"{rec:<10} {passes(out)}")
@@ -322,6 +360,21 @@ def main() -> int:
         for r in rows:
             fh.write(f"{r[0]},{r[1]},{r[2]},{r[3]},{r[4]:.4f},{r[1]/r[4]:.4f},"
                      f"{r[5]:.4f},{'' if r[6] is None else f'{r[6]:.6e}'},{r[7]},{r[8]}\n")
+    # Where a step goes, with whatever the trailers carried as columns:
+    # the union of keys in first-seen order, so the decomposition pass
+    # ROADMAP item 4 asks for is this file, with nothing to keep in step.
+    dpath = a.decompose or str(pathlib.Path(a.csv).parent / "decompose.csv")
+    if decomp:
+        cols = ["problem", "steps", "format", "backend"]
+        for r in decomp:
+            for k in r:
+                if k not in cols:
+                    cols.append(k)
+        with open(dpath, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(",".join(cols) + "\n")
+            for r in decomp:
+                fh.write(",".join(str(r.get(k, "")) for k in cols) + "\n")
+        print(f"{len(decomp)} rows -> {dpath}, {len(cols)} columns: every key the trailers carried")
     print(f"\n{len(rows)} rows -> {a.csv}; {failures} failure(s)")
     print("vs ref = REBOUND-in-double seconds / this row's seconds; above 1.00 beats REBOUND.")
     print("Compare DOWN a column of equal energy drift: a slower row that is many orders")

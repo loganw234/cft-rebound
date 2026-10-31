@@ -62,6 +62,10 @@
  *             [--no-flag-abort] [--artifact PATH] [--dump-constants] [--quiet]
  *             [--member K] [--dt-file FILE] [--dt-out FILE]
  *             [--softening S] [--min-dt M] [--adaptive-mode 0|1|2|3]
+ *             [--probe] [--door-selftest]
+ *
+ * --door-selftest holds each route engine_routes() can open against the
+ * route it replaces, and exits; tools/check_door.py is its gate.
  *
  * --artifact opens a tile instead of the software backend; with no flag
  * the program falls back to $CFT_REBOUND_ARTIFACT, which is how the
@@ -137,6 +141,119 @@ static int engine_check_format(const char *artifact){
     return -1;
 }
 
+/* ------------------------------------------------------------------ */
+/* The door to the calls the library added for this port               */
+/* ------------------------------------------------------------------ */
+/* ABI 0.12 to 0.14 added three ways of issuing a call that this port
+ * asked for and has never used (docs/HARDWARE.md's asks; ROUND3.md, P0):
+ *   - an operand that is ONE element applied to the whole run
+ *     (scalar_mask);
+ *   - operands read through an index table (idx_*);
+ *   - a reduction that restarts every seg elements (cft_reduce_seg).
+ *
+ * Each sits behind a capability bit. Each also has a route this port
+ * already takes, which the contract makes give the same bits: the
+ * broadcast vector, the host's gather, and one cft_reduce a segment.
+ * So each family is decided here, once, at open, for the program and
+ * the library half alike:
+ *   - by the device's bit, in cft_caps.seq_features;
+ *   - CFT_REBOUND_ROUTE_<NAME>=off takes today's route whatever the
+ *     device publishes. That is the fallback's own gate.
+ *   - CFT_REBOUND_ROUTE_<NAME>=on demands the new route. On a device
+ *     without the bit it is REFUSED by name, never quietly fallen back.
+ *   - CFT_REBOUND_HIDE_FEATURES=<name>[,<name>] makes the device look as
+ *     if it lacked a bit. The software backend publishes every bit, so
+ *     this test-only hook is what lets the fallback and the refusal run
+ *     in the suite at all.
+ *
+ * Every call and every fallback is counted and printed on a `# route`
+ * line of the trailer. The trailer is a comment, and no record
+ * comparison reads comments. Without the line, a card run that took the
+ * fallback would pass every gate looking like one that did not. */
+enum { ROUTE_SCALAR, ROUTE_INDEXED, ROUTE_REDUCE_SEG, N_ROUTES };
+static const struct {
+    const char *name, *env;      /* the trailer's name, and its variable */
+    uint32_t bit;                /* in cft_caps.seq_features */
+    const char *bit_name;
+} route_def[N_ROUTES] = {
+    { "scalar",     "CFT_REBOUND_ROUTE_SCALAR",     CFT_SEQ_FEAT_SCALAR,  "CFT_SEQ_FEAT_SCALAR (CAPS2[7], ABI 0.12)" },
+    { "indexed",    "CFT_REBOUND_ROUTE_INDEXED",    CFT_SEQ_FEAT_INDEXED, "CFT_SEQ_FEAT_INDEXED (CAPS2[9], ABI 0.14)" },
+    { "reduce_seg", "CFT_REBOUND_ROUTE_REDUCE_SEG", CFT_FEAT_REDUCE_SEG,  "CFT_FEAT_REDUCE_SEG (CAPS2[8], ABI 0.13)" },
+};
+static int route_on[N_ROUTES];           /* this run takes the new route */
+static int route_have[N_ROUTES];         /* the device publishes it, unhidden */
+static const char *route_by[N_ROUTES];   /* device, absent, hidden or forced */
+static unsigned long long route_calls[N_ROUTES], route_fallbacks[N_ROUTES];
+
+static int engine_routes(const char *artifact){
+    const char *dname = artifact ? artifact : "the software backend";
+    const char *hide = getenv("CFT_REBOUND_HIDE_FEATURES");
+    uint32_t hidden = 0;
+    cft_caps c;
+    memset(&c, 0, sizeof c);
+    c.struct_size = sizeof c;
+    if (cft_get_caps(dev, &c) != CFT_OK){
+        snprintf(eng_err, sizeof eng_err, "cft_get_caps(%s) failed: %s", dname, cft_last_error());
+        return -1;
+    }
+    for (const char *p = hide ? hide : ""; *p; ){
+        size_t l = strcspn(p, ",");
+        int r;
+        for (r = 0; r < N_ROUTES; r++)
+            if (strlen(route_def[r].name) == l && !strncmp(p, route_def[r].name, l)) break;
+        if (l && r == N_ROUTES){
+            snprintf(eng_err, sizeof eng_err, "CFT_REBOUND_HIDE_FEATURES names \"%.*s\", which is not a "
+                     "route: the routes are scalar, indexed and reduce_seg", (int)l, p);
+            return -1;
+        }
+        if (l) hidden |= route_def[r].bit;
+        p += l;
+        if (*p == ',') p++;
+    }
+    for (int r = 0; r < N_ROUTES; r++){
+        const char *want = getenv(route_def[r].env);
+        int hid = (hidden & route_def[r].bit) != 0;
+        route_have[r] = (c.seq_features & route_def[r].bit) && !hid;
+        if (!want || !want[0] || !strcmp(want, "auto")){
+            route_on[r] = route_have[r];
+            route_by[r] = route_have[r] ? "device" : hid ? "hidden" : "absent";
+        }else if (!strcmp(want, "off")){
+            route_on[r] = 0; route_by[r] = "forced";
+        }else if (!strcmp(want, "on")){
+            if (!route_have[r]){
+                snprintf(eng_err, sizeof eng_err, "%s=on asks for the %s route, and %s does not publish %s%s. "
+                         "Refused rather than run by the route it would otherwise take, which gives the "
+                         "same bits but is not what was asked for.", route_def[r].env, route_def[r].name,
+                         dname, route_def[r].bit_name, hid ? " (it is hidden by CFT_REBOUND_HIDE_FEATURES)" : "");
+                return -1;
+            }
+            route_on[r] = 1; route_by[r] = "forced";
+        }else{
+            snprintf(eng_err, sizeof eng_err, "%s=%s: expected on, off or auto", route_def[r].env, want);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* What the producer says it ran on (cft-fp256 docs/CERTIFICATES.md,
+ * "Identity"): the library build and, where the device answers, the
+ * image. It is read once at open, printed as the record's `# identity`
+ * line, and handed to the archive (ROUND3.md, P3). An audit reports
+ * both as stated and never as checked: every conforming build computes
+ * the same bits, so the bits cannot say which build made them. The
+ * software backend and a remote handle refuse cft_get_image_id by name,
+ * and that refusal is recorded as "none", not as an error. */
+static const char  *eng_build_id;
+static cft_image_id eng_image;
+static int          eng_have_image;
+static void engine_identity(void){
+    eng_build_id = cft_build_id();
+    memset(&eng_image, 0, sizeof eng_image);
+    eng_image.struct_size = sizeof eng_image;
+    eng_have_image = cft_get_image_id(dev, &eng_image) == CFT_OK;
+}
+
 #ifndef IAS15_CFT_LIBRARY
 /* --probe: the device's own word on itself, for a reader deciding
  * which image to load - one line per fact, nothing computed. The
@@ -163,6 +280,11 @@ static void probe_device(const char *artifact){
            (unsigned long)c.max_deposits, (unsigned long)c.max_insns,
            (unsigned long)c.max_consts, (unsigned long)c.max_scratch,
            (unsigned long)c.seq_features, (int)c.buffers_resident);
+    /* The device's own word, so CFT_REBOUND_HIDE_FEATURES does not
+     * apply here. */
+    for (int r = 0; r < N_ROUTES; r++)
+        printf("route %s: %s %s\n", route_def[r].name, route_def[r].bit_name,
+               (c.seq_features & route_def[r].bit) ? "published" : "NOT published - today's route only");
 }
 #endif /* !IAS15_CFT_LIBRARY */
 static int         FI;          /* 0 fp64, 1 fp128, 2 fp256 */
@@ -181,6 +303,9 @@ static unsigned long long ncalls, ncalls_divsqrt;
  * point. Appended to the trailer as key=value; nothing else changes. */
 static unsigned long long ncalls_program, nbytes_staged;
 static double t_program, t_elem, t_divsqrt, t_gravity;
+/* Segmented reductions, through the door's vreduce_seg() alone. Nothing
+ * else in the engine reduces (2026-10-31). */
+static double t_reduce;
 /* Inside gravity(), split four ways so its inclusive time can be read
  * as host byte-copies (the pair gathers and the accumulate's scatter),
  * the accumulate half as a whole, the library calls it issues, and the
@@ -273,6 +398,174 @@ static void vclass(uint8_t *cls, const V a, size_t n){
     if (st != CFT_OK) die("class: %s", cft_strerror(st)); }
 static void vaugadd(V r, V e, const V a, const V b, size_t n){
     uint32_t fl = 0; cft_status st = cft_augmented_add(dev, F, a, b, r, e, n, &fl); note(st, fl, "augmented_add"); }
+
+/* ------------------------------------------------------------------ */
+/* The door's wrappers. Each takes its route where engine_routes()      */
+/* put it, or today's route, which gives the same bits by the contract. */
+/* ------------------------------------------------------------------ */
+/* Nothing in the integration calls these yet. A parcel does that
+ * (ROUND3.md: P5 the scalar family, P1 the gather, P2 the segmented
+ * maximum). Until then only --door-selftest does, and the library half
+ * would warn that they are unused. When a parcel's call lands, its
+ * DOOR_UNUSED comes off.
+ *
+ * Each counts as ONE call in ncalls, whichever route carries it: calls=
+ * in the trailer is the integrator's operation count, and it has to
+ * compare equal between a card that lacks a bit and a backend that has
+ * it. The route line says which route ran. */
+#if defined(__GNUC__)
+#define DOOR_UNUSED __attribute__((unused))
+#else
+#define DOOR_UNUSED
+#endif
+
+/* Scratch for today's route, one per operand position: the broadcast
+ * or gathered operand it needs. It grows and never shrinks. */
+static V door_buf[3];
+static size_t door_cap[3];
+static V door_scratch(int k, size_t n){
+    if (door_cap[k] < n){
+        free(door_buf[k]);
+        door_buf[k] = calloc(n ? n : 1, ESZ);
+        if (!door_buf[k]) die("out of memory");
+        door_cap[k] = n;
+    }
+    return door_buf[k];
+}
+
+/* d = op(a, b, c) over n elements. Each bit of smask (0 a, 1 b, 2 c,
+ * as cft_elem_args) marks an operand that is ONE element applying to
+ * every element of the run. This goes through cft_run_ex where the
+ * device publishes CFT_SEQ_FEAT_SCALAR. Otherwise each such operand is
+ * broadcast into scratch and the run is today's cft_run: the same bits,
+ * because the contract defines a scalar operand as element 0 applied to
+ * the whole run. Timed and counted as the elementwise call it is. */
+static DOOR_UNUSED void vrun_k(cft_op op, V d, const V a, const V b, const V c, size_t n,
+                               uint32_t smask, const char *what){
+    const V in[3] = { a, b, c };
+    unsigned nops = 0, nscal = 0;
+    uint32_t fl = 0;
+    cft_status st;
+    double _t0 = now_s();
+    for (int k = 0; k < 3; k++){ nops += in[k] != NULL; nscal += in[k] && (smask >> k & 1u); }
+    if (route_on[ROUTE_SCALAR]){
+        cft_elem_args ea;
+        memset(&ea, 0, sizeof ea);
+        ea.struct_size = sizeof ea;
+        ea.a = a; ea.b = b; ea.c = c; ea.d = d; ea.n = n;
+        ea.scalar_mask = smask; ea.flags_out = &fl;
+        nbytes_staged += (unsigned long long)ESZ * ((unsigned long long)n * (nops - nscal + 1) + nscal);
+        st = cft_run_ex(dev, op, F, CFT_RNE, &ea);
+        route_calls[ROUTE_SCALAR]++;
+    }else{
+        V v[3];
+        for (int k = 0; k < 3; k++){
+            v[k] = in[k];
+            if (in[k] && (smask >> k & 1u)){
+                v[k] = door_scratch(k, n);
+                for (size_t i = 0; i < n; i++) memcpy(E(v[k], i), in[k], ESZ);
+            }
+        }
+        nbytes_staged += (unsigned long long)n * ESZ * (nops + 1);
+        st = cft_run(dev, op, F, CFT_RNE, v[0], v[1], v[2], d, n, &fl, NULL);
+        route_fallbacks[ROUTE_SCALAR]++;
+    }
+    { double _d = now_s() - _t0; t_elem += _d; if (in_gravity) t_g_lib += _d; }
+    note(st, fl, what);
+}
+
+/* d = op(a[ia], b[ib], c[ic]) over n elements. An operand with a table
+ * is read through it from a source of src elements; an operand without
+ * one is dense, n elements, as cft_run's. CFT_IDX_NONE reads +0. This
+ * goes through cft_run_ex's idx_* where the device publishes
+ * CFT_SEQ_FEAT_INDEXED. Otherwise the host gathers into scratch and the
+ * run is today's cft_run, which is the software backend's own
+ * definition of the indexed call (cft.h, cft_elem_args).
+ *
+ * d may not overlap an indexed operand's source: cft.h refuses that by
+ * name, and so does this, on either route. An index at or past its
+ * source is refused by the library on the new route and by die() here
+ * on today's route. Neither route reads past a source. */
+static DOOR_UNUSED void vrun_ix(cft_op op, V d, const V a, const uint32_t *ia, size_t asrc,
+                                const V b, const uint32_t *ib, size_t bsrc,
+                                const V c, const uint32_t *ic, size_t csrc, size_t n, const char *what){
+    const V in[3] = { a, b, c };
+    const uint32_t *ix[3] = { ia, ib, ic };
+    const size_t src[3] = { asrc, bsrc, csrc };
+    unsigned long long bytes = (unsigned long long)n * ESZ;    /* the result */
+    uint32_t fl = 0;
+    cft_status st;
+    double _t0 = now_s();
+    for (int k = 0; k < 3; k++){
+        if (!in[k] || !ix[k]) continue;
+        if (d + n * ESZ > in[k] && in[k] + src[k] * ESZ > d)
+            die("%s: the result overlaps operand %c's indexed source, which cft_run_ex refuses", what, "abc"[k]);
+    }
+    if (route_on[ROUTE_INDEXED]){
+        cft_elem_args ea;
+        memset(&ea, 0, sizeof ea);
+        ea.struct_size = sizeof ea;
+        ea.a = a; ea.b = b; ea.c = c; ea.d = d; ea.n = n; ea.flags_out = &fl;
+        ea.idx_a = ia; ea.idx_b = ib; ea.idx_c = ic;
+        ea.idx_a_src = ia ? asrc : 0; ea.idx_b_src = ib ? bsrc : 0; ea.idx_c_src = ic ? csrc : 0;
+        for (int k = 0; k < 3; k++)
+            if (in[k]) bytes += ix[k] ? (unsigned long long)src[k] * ESZ + 4ull * n : (unsigned long long)n * ESZ;
+        nbytes_staged += bytes;
+        st = cft_run_ex(dev, op, F, CFT_RNE, &ea);
+        route_calls[ROUTE_INDEXED]++;
+    }else{
+        V v[3];
+        for (int k = 0; k < 3; k++){
+            v[k] = in[k];
+            if (!in[k]) continue;
+            bytes += (unsigned long long)n * ESZ;
+            if (!ix[k]) continue;
+            v[k] = door_scratch(k, n);
+            for (size_t i = 0; i < n; i++){
+                if (ix[k][i] == CFT_IDX_NONE) memset(E(v[k], i), 0, ESZ);     /* +0, all bits clear */
+                else if (ix[k][i] >= src[k]) die("%s: operand %c's index %lu at element %zu is past its source of %zu",
+                                                 what, "abc"[k], (unsigned long)ix[k][i], i, src[k]);
+                else memcpy(E(v[k], i), E(in[k], ix[k][i]), ESZ);
+            }
+        }
+        nbytes_staged += bytes;
+        st = cft_run(dev, op, F, CFT_RNE, v[0], v[1], v[2], d, n, &fl, NULL);
+        route_fallbacks[ROUTE_INDEXED]++;
+    }
+    { double _d = now_s() - _t0; t_elem += _d; if (in_gravity) t_g_lib += _d; }
+    note(st, fl, what);
+}
+
+/* d[s] = op over a[s*seg] .. a[(s+1)*seg - 1], for s < n/seg. b is as
+ * cft_reduce's: NULL except for the two-operand reductions. This goes
+ * through cft_reduce_seg where the device publishes CFT_FEAT_REDUCE_SEG.
+ * Otherwise it issues one cft_reduce per segment. That IS
+ * cft_reduce_seg's definition (cft.h: the same tree on each slice), so
+ * the bits are the same by construction, and today's route costs n/seg
+ * round trips. */
+static DOOR_UNUSED void vreduce_seg(cft_op op, V d, const V a, const V b, size_t n, size_t seg,
+                                    const char *what){
+    size_t ns;
+    uint32_t fl = 0;
+    cft_status st = CFT_OK;
+    double _t0 = now_s();
+    if (!seg || n % seg) die("%s: %zu elements are not whole segments of %zu", what, n, seg);
+    ns = n / seg;
+    nbytes_staged += (unsigned long long)ESZ * ((unsigned long long)n * (b ? 2 : 1) + ns);
+    if (route_on[ROUTE_REDUCE_SEG]){
+        st = cft_reduce_seg(dev, op, F, CFT_RNE, a, b, d, n, seg, &fl, NULL);
+        route_calls[ROUTE_REDUCE_SEG]++;
+    }else{
+        for (size_t s = 0; s < ns && st == CFT_OK; s++){
+            uint32_t f1 = 0;
+            st = cft_reduce(dev, op, F, CFT_RNE, E(a, s * seg), b ? E(b, s * seg) : NULL, E(d, s), seg, &f1, NULL);
+            fl |= f1;
+        }
+        route_fallbacks[ROUTE_REDUCE_SEG]++;
+    }
+    { double _d = now_s() - _t0; t_reduce += _d; if (in_gravity) t_g_lib += _d; }
+    note(st, fl, what);
+}
 
 /* Scalars are vectors of one element. A predicate result is 1.0 or
  * +0.0; "nonzero bits" reads it without arithmetic. */
@@ -1895,6 +2188,210 @@ static void read_dt_file(const char *path, long steps){
     ndtlist = n;
 }
 
+/* The trailer's instrumentation keys. They are printed from this table
+ * and nowhere else (ROUND3.md, P0), so a key is one row, and a format
+ * string and its arguments cannot drift apart. hw/ reads the keys by
+ * pattern, not by list: every timing is a t_ key, plus wall_seconds. */
+static double t_wall;
+static const struct { const char *key; const double *dbl; const unsigned long long *ull; } trailer_keys[] = {
+    { "wall_seconds",  &t_wall,      NULL },
+    { "t_program",     &t_program,   NULL },
+    { "t_elem",        &t_elem,      NULL },
+    { "t_divsqrt",     &t_divsqrt,   NULL },
+    { "t_gravity",     &t_gravity,   NULL },
+    { "program_calls", NULL,         &ncalls_program },
+    { "staged_bytes",  NULL,         &nbytes_staged },
+    { "t_g_copy",      &t_g_copy,    NULL },
+    { "t_g_accum",     &t_g_accum,   NULL },
+    { "t_g_lib",       &t_g_lib,     NULL },
+    { "t_g_divsqrt",   &t_g_divsqrt, NULL },
+    { "t_reduce",      &t_reduce,    NULL },
+};
+
+/* --door-selftest: each of the door's new routes against today's route
+ * on the same data, plus one control per family showing the comparison
+ * can see a difference at all.
+ *
+ * The data:
+ *   - both zeros, one value in sixteen, and exponents from 2^-20 to
+ *     2^20;
+ *   - built from binary64 bit patterns and widened exactly, so no C
+ *     arithmetic touches a floating-point value here either.
+ *
+ * The shapes, at the edges and the largest the integrator presents, and
+ * one past the largest:
+ *   - 1 and 7, the edges of a beat;
+ *   - 3 * CFT_MAX_BODIES, one system at the body cap;
+ *   - 24,576 lanes, the widest ensemble vector the port has run
+ *     (docs/VALIDATION.md entry 37), and one past it;
+ *   - the pair count at the cap, and one past it, for the gather.
+ *
+ * Output is one line per case. tools/check_door.py reads the lines and
+ * the exit status. A route the device does not publish is reported as
+ * not compared, never as a pass. */
+static uint64_t door_lcg = 0x9e3779b97f4a7c15ull;
+static void door_fill(V dst, size_t n){
+    uint64_t *bits = malloc((n ? n : 1) * sizeof *bits);
+    if (!bits) die("out of memory");
+    for (size_t i = 0; i < n; i++){
+        door_lcg = door_lcg * 6364136223846793005ull + 1442695040888963407ull;
+        bits[i] = door_lcg & (1ull << 63);                     /* the sign */
+        if ((door_lcg >> 56 & 15u) != 0)                       /* else a zero of that sign */
+            bits[i] |= (1003ull + (door_lcg >> 40) % 41) << 52 | (door_lcg & 0xfffffffffffffull);
+    }
+    if (F == CFT_FP64) memcpy(dst, bits, n * ESZ);
+    else{
+        uint32_t fl = 0;
+        if (cft_convert(dev, CFT_FP64, F, CFT_RNE, bits, dst, n, &fl) != CFT_OK) die("door: widening failed");
+    }
+    free(bits);
+}
+static uint32_t *door_table(size_t n, size_t src){
+    uint32_t *t = malloc((n ? n : 1) * sizeof *t);
+    if (!t) die("out of memory");
+    for (size_t i = 0; i < n; i++){
+        door_lcg = door_lcg * 6364136223846793005ull + 1442695040888963407ull;
+        t[i] = (door_lcg >> 60) == 0 ? CFT_IDX_NONE : (uint32_t)((door_lcg >> 20) % src);
+    }
+    return t;
+}
+static int door_same, door_differ, door_skipped, door_controls, door_controls_ok;
+static void door_compare(const char *label, const V x, uint32_t fx, const V y, uint32_t fy, size_t n){
+    size_t k = 0;
+    for (size_t i = 0; i < n; i++) k += memcmp(E(x, i), E(y, i), ESZ) != 0;
+    if (!k && fx == fy){ door_same++; printf("ok   %s: identical, flags 0x%02x\n", label, (unsigned)fx); }
+    else{ door_differ++; printf("DIFF %s: %zu of %zu differ, flags 0x%02x against 0x%02x\n", label, k, n, (unsigned)fx, (unsigned)fy); }
+}
+static void door_control(const char *label, const V x, const V y, size_t n){
+    size_t k = 0;
+    for (size_t i = 0; i < n; i++) k += memcmp(E(x, i), E(y, i), ESZ) != 0;
+    door_controls++;
+    if (k){ door_controls_ok++; printf("control ok   %s: %zu of %zu differ, as they must\n", label, k, n); }
+    else printf("CONTROL FAILED %s: identical, so this comparison cannot see a difference\n", label);
+}
+
+static int door_selftest(const char *artifact){
+    const size_t P = (size_t)CFT_MAX_BODIES * (CFT_MAX_BODIES - 1) / 2;
+    const size_t nel[] = { 1, 7, 3 * (size_t)CFT_MAX_BODIES, 24576, 24577 };
+    const size_t npair[] = { 1, 7, P, P + 1 };
+    const size_t SRC = 3 * (size_t)CFT_MAX_BODIES;     /* the gather's source: one system's coordinates */
+    const size_t nmax = P + 1;
+    static const struct { cft_op op; const char *name; uint32_t reads; } sops[] = {
+        { CFT_MUL, "mul", 3 }, { CFT_ADD, "add", 5 }, { CFT_SUB, "sub", 5 }, { CFT_FMA, "fma", 7 },
+    };
+    V a = valloc(nmax), b = valloc(nmax), c = valloc(nmax), d0 = valloc(nmax), d1 = valloc(nmax);
+    uint32_t f0, f1;
+    char label[160];
+    printf("door: %s on %s\n", cft_format_name(F), artifact ? artifact : "the software backend");
+    for (int r = 0; r < N_ROUTES; r++)
+        printf("door route %s=%s by=%s env=%s bit=%.*s\n", route_def[r].name, route_on[r] ? "on" : "off",
+               route_by[r], route_def[r].env, (int)strcspn(route_def[r].bit_name, " "), route_def[r].bit_name);
+
+    /* The scalar family: every way an operand of mul, add, sub or fma
+     * can be the one-element one, with at least one operand left a
+     * vector, at every shape. */
+    for (size_t o = 0; o < sizeof sops / sizeof sops[0]; o++)
+        for (uint32_t m = 1; m < 8; m++){
+            if ((m & ~sops[o].reads) || m == sops[o].reads) continue;
+            for (size_t s = 0; s < sizeof nel / sizeof nel[0]; s++){
+                size_t n = nel[s];
+                snprintf(label, sizeof label, "scalar %s mask=%u n=%zu", sops[o].name, (unsigned)m, n);
+                if (!route_have[ROUTE_SCALAR]){ door_skipped++; printf("skip %s: the route is %s\n", label, route_by[ROUTE_SCALAR]); continue; }
+                door_fill(a, n); door_fill(b, n); door_fill(c, n);
+                {
+                    const V A = (sops[o].reads & 1) ? a : NULL, B = (sops[o].reads & 2) ? b : NULL, C = (sops[o].reads & 4) ? c : NULL;
+                    route_on[ROUTE_SCALAR] = 0; flags_union = 0; vrun_k(sops[o].op, d0, A, B, C, n, m, "door scalar"); f0 = flags_union;
+                    route_on[ROUTE_SCALAR] = 1; flags_union = 0; vrun_k(sops[o].op, d1, A, B, C, n, m, "door scalar"); f1 = flags_union;
+                }
+                door_compare(label, d1, f1, d0, f0, n);
+            }
+        }
+    if (route_have[ROUTE_SCALAR]){
+        /* the control: the same run with its scalar taken from element 1 */
+        size_t n = nel[3];
+        door_fill(a, n); door_fill(b, n);
+        route_on[ROUTE_SCALAR] = 1;
+        vrun_k(CFT_MUL, d0, a, b, NULL, n, 2, "door scalar control");
+        vrun_k(CFT_MUL, d1, a, b + ESZ, NULL, n, 2, "door scalar control");
+        door_control("scalar mul, the scalar from element 1 rather than 0", d0, d1, n);
+    }
+
+    /* The gather: the pair shape dx = x[j] - x[i], a product with one
+     * operand gathered, and an fma with all three, at every pair count. */
+    {
+        static const struct { cft_op op; const char *name; uint32_t gathered, reads; } gops[] = {
+            { CFT_SUB, "sub", 5, 5 }, { CFT_MUL, "mul", 1, 3 }, { CFT_FMA, "fma", 7, 7 },
+        };
+        for (size_t o = 0; o < sizeof gops / sizeof gops[0]; o++)
+            for (size_t s = 0; s < sizeof npair / sizeof npair[0]; s++){
+                size_t n = npair[s];
+                uint32_t *t[3] = { NULL, NULL, NULL };
+                const V in[3] = { a, b, c };
+                V op3[3];
+                size_t src[3];
+                snprintf(label, sizeof label, "indexed %s gathered=%u n=%zu", gops[o].name, (unsigned)gops[o].gathered, n);
+                if (!route_have[ROUTE_INDEXED]){ door_skipped++; printf("skip %s: the route is %s\n", label, route_by[ROUTE_INDEXED]); continue; }
+                for (int k = 0; k < 3; k++){
+                    op3[k] = (gops[o].reads >> k & 1u) ? in[k] : NULL;
+                    src[k] = (gops[o].gathered >> k & 1u) ? SRC : n;
+                    if (op3[k]) door_fill(op3[k], src[k]);
+                    if (gops[o].gathered >> k & 1u) t[k] = door_table(n, SRC);
+                }
+                route_on[ROUTE_INDEXED] = 0; flags_union = 0;
+                vrun_ix(gops[o].op, d0, op3[0], t[0], src[0], op3[1], t[1], src[1], op3[2], t[2], src[2], n, "door indexed"); f0 = flags_union;
+                route_on[ROUTE_INDEXED] = 1; flags_union = 0;
+                vrun_ix(gops[o].op, d1, op3[0], t[0], src[0], op3[1], t[1], src[1], op3[2], t[2], src[2], n, "door indexed"); f1 = flags_union;
+                door_compare(label, d1, f1, d0, f0, n);
+                if (o == 0 && s == 2){
+                    /* The control: every index of a moved on by one partner.
+                     * Moving one index could land a +0 on a -0, which a
+                     * subtraction need not see. Moving them all cannot be
+                     * inert. */
+                    for (size_t i = 0; i < n; i++)
+                        if (t[0][i] != CFT_IDX_NONE) t[0][i] = (uint32_t)((t[0][i] + 1u) % SRC);
+                    vrun_ix(gops[o].op, d0, op3[0], t[0], src[0], op3[1], t[1], src[1], op3[2], t[2], src[2], n, "door indexed control");
+                    door_control("indexed sub, every index of a moved on by one partner", d0, d1, n);
+                }
+                for (int k = 0; k < 3; k++) free(t[k]);
+            }
+    }
+
+    /* The segmented reduction: the per-system maximum's shape and a sum,
+     * over six-lane systems (Kepler, the widest ensemble) and systems at
+     * the body cap. */
+    {
+        static const struct { cft_op op; const char *name; } rops[] = { { CFT_MAXALL, "maxall" }, { CFT_SUM, "sum" } };
+        static const struct { size_t seg, nseg; } shapes[] = {
+            { 6, 1 }, { 6, 4096 }, { 6, 4097 }, { 3 * (size_t)CFT_MAX_BODIES, 1 }, { 3 * (size_t)CFT_MAX_BODIES, 8 }, { 3 * (size_t)CFT_MAX_BODIES, 9 },
+        };
+        for (size_t o = 0; o < sizeof rops / sizeof rops[0]; o++)
+            for (size_t s = 0; s < sizeof shapes / sizeof shapes[0]; s++){
+                size_t n = shapes[s].seg * shapes[s].nseg;
+                snprintf(label, sizeof label, "reduce_seg %s seg=%zu n=%zu", rops[o].name, shapes[s].seg, n);
+                if (!route_have[ROUTE_REDUCE_SEG]){ door_skipped++; printf("skip %s: the route is %s\n", label, route_by[ROUTE_REDUCE_SEG]); continue; }
+                door_fill(a, n);
+                route_on[ROUTE_REDUCE_SEG] = 0; flags_union = 0; vreduce_seg(rops[o].op, d0, a, NULL, n, shapes[s].seg, "door reduce_seg"); f0 = flags_union;
+                route_on[ROUTE_REDUCE_SEG] = 1; flags_union = 0; vreduce_seg(rops[o].op, d1, a, NULL, n, shapes[s].seg, "door reduce_seg"); f1 = flags_union;
+                door_compare(label, d1, f1, d0, f0, shapes[s].nseg);
+                if (o == 0 && s == 1){
+                    /* the control: the first system's first element made the largest, 2^30 */
+                    uint64_t big = (1023ull + 30) << 52;
+                    if (F == CFT_FP64) memcpy(a, &big, ESZ);
+                    else{ uint32_t fl = 0; cft_convert(dev, CFT_FP64, F, CFT_RNE, &big, a, 1, &fl); }
+                    vreduce_seg(rops[o].op, d0, a, NULL, n, shapes[s].seg, "door reduce_seg control");
+                    door_control("reduce_seg maxall, one element raised past every other", d0, d1, shapes[s].nseg);
+                }
+            }
+    }
+
+    for (int r = 0; r < N_ROUTES; r++)
+        printf("door route %s calls=%llu fallbacks=%llu\n", route_def[r].name, route_calls[r], route_fallbacks[r]);
+    printf("door: %d identical, %d differ, %d not compared; controls %d of %d\n",
+           door_same, door_differ, door_skipped, door_controls_ok, door_controls);
+    free(a); free(b); free(c); free(d0); free(d1);
+    return door_differ || door_controls_ok != door_controls ? 1 : 0;
+}
+
 int main(int argc, char **argv){
     const char *problem = NULL, *artifact = NULL, *fmtname = "fp64", *dt_file = NULL, *dt_out_path = NULL;
     const char *mindt_txt = NULL;  /* --min-dt; NULL is +0, which disables
@@ -1904,7 +2401,7 @@ int main(int argc, char **argv){
                                     * the addend the port always issued */
     const char *dt_txt = "0.01", *eps_txt = "1e-9";
     long steps = 1000, sample = 100;
-    int tol_shift = -1, quiet = 0, do_dump = 0, do_probe = 0;
+    int tol_shift = -1, quiet = 0, do_dump = 0, do_probe = 0, do_door = 0;
     for (int i = 1; i < argc; i++){
         if (!strcmp(argv[i], "--format") && i + 1 < argc) fmtname = argv[++i];
         else if (!strcmp(argv[i], "--problem") && i + 1 < argc) problem = argv[++i];
@@ -1945,6 +2442,7 @@ int main(int argc, char **argv){
         else if (!strcmp(argv[i], "--no-flag-abort")) flag_abort = 0;
         else if (!strcmp(argv[i], "--dump-constants")) do_dump = 1;
         else if (!strcmp(argv[i], "--probe")) do_probe = 1;
+        else if (!strcmp(argv[i], "--door-selftest")) do_door = 1;
         else if (!strcmp(argv[i], "--quiet")) quiet = 1;
         else die("unknown argument %s", argv[i]);
     }
@@ -1967,6 +2465,9 @@ int main(int argc, char **argv){
      * here, by name, before a constant is derived or a byte issued. */
     if (do_probe){ probe_device(artifact); return 0; }
     if (engine_check_format(artifact)) die("%s", eng_err);
+    if (engine_routes(artifact)) die("%s", eng_err);
+    engine_identity();
+    if (do_door){ int rc = door_selftest(artifact); cft_close(dev); return rc; }
     if (!problem){
         if (do_dump){ NMAX = 8; make_constants(tol_shift, quiet); dump_constants(); return 0; }
         die("usage: ias15_cft --format F --problem FILE [--dt DT] [--epsilon EPS] [--steps N] [--sample K] [--cs kahan|augmented] [--member K] [--dt-file FILE]");
@@ -2047,6 +2548,18 @@ int main(int argc, char **argv){
     if (member >= 0) printf(" member=%d system=%s", member, sys_names[0]);
     if (dt_file) printf(" dt_file=%s", dt_file);
     printf("\n");
+    /* The producer's own word on what it ran on. It gets its own line so
+     * that tools/check_records.py, which reads `# program=` back as the
+     * run's arguments, never sees it. hw/'s normalisers drop it with the
+     * `# route` lines. */
+    printf("# identity libcft_build=");
+    for (const char *p = eng_build_id; *p; p++) putchar(*p == ' ' ? ',' : *p);
+    if (eng_have_image){
+        printf(" image_sha256=");
+        for (int i = 0; i < 32; i++) printf("%02x", eng_image.sha256[i]);
+        printf(" image_bytes=%llu image_version=0x%x", (unsigned long long)eng_image.image_bytes, (unsigned)eng_image.version);
+    }else printf(" image=none");
+    printf("\n");
     printf("# dt0="); puthex(E(SDT, 0)); printf(" epsilon="); puthex(EPS); printf(" G="); puthex(G); printf(" pc_tol="); puthex(TOL); printf("\n");
     if (E == 1){
         for (size_t i = 0; i < N; i++){ printf("# body %zu %s m=", i, body_names[i]); puthex(E(mass, i)); printf("\n"); }
@@ -2099,13 +2612,17 @@ int main(int argc, char **argv){
            done[0], mx_all, rej_all,
            att_all ? (double)pc_all / (double)att_all : 0.0, pcmax_all,
            flags_union, ncalls, ncalls_divsqrt, secs, secs > 0 ? done[0] / secs : 0.0);
-    printf(" wall_seconds=%.3f t_program=%.3f t_elem=%.3f t_divsqrt=%.3f t_gravity=%.3f program_calls=%llu staged_bytes=%llu"
-           " t_g_copy=%.3f t_g_accum=%.3f t_g_lib=%.3f t_g_divsqrt=%.3f",
-           now_s() - w0, t_program, t_elem, t_divsqrt, t_gravity, ncalls_program, nbytes_staged,
-           t_g_copy, t_g_accum, t_g_lib, t_g_divsqrt);
+    t_wall = now_s() - w0;
+    for (size_t k = 0; k < sizeof trailer_keys / sizeof trailer_keys[0]; k++){
+        if (trailer_keys[k].ull) printf(" %s=%llu", trailer_keys[k].key, *trailer_keys[k].ull);
+        else printf(" %s=%.3f", trailer_keys[k].key, *trailer_keys[k].dbl);
+    }
     if (E > 1) printf(" E=%zu system_steps_per_s=%.2f pc_lane_efficiency=%.3f", E, secs > 0 ? (double)done[0] * (double)E / secs : 0.0,
                       pc_lane_max ? (double)pc_lane_sum / (double)pc_lane_max : 0.0);
     printf("\n");
+    for (int r = 0; r < N_ROUTES; r++)
+        printf("# route %s=%s by=%s calls=%llu fallbacks=%llu\n", route_def[r].name,
+               route_on[r] ? "on" : "off", route_by[r], route_calls[r], route_fallbacks[r]);
     if (!quiet) fprintf(stderr, "done: %ld steps%s, %llu library calls, %.1f s, flags 0x%02x\n", done[0], E > 1 ? " per system" : "", ncalls, secs, flags_union);
     if (dt_out){
         /* the step the run would take next, so that a replay of this
@@ -2178,6 +2695,15 @@ int ias15_engine_open(int fmt, const char *artifact){
         cft_close(dev); dev = NULL;
         return -4;
     }
+    /* The door's routes, decided as the program decides them. A route
+     * forced on against a device without its bit is refused in the same
+     * way as an absent format, with its own sentence in
+     * ias15_engine_error(). */
+    if (engine_routes(artifact)){
+        cft_close(dev); dev = NULL;
+        return -4;
+    }
+    engine_identity();
     /* A REBOUND user's process must not be killed by an underflow that
      * REBOUND's own IAS15 would have taken silently. The flags are still
      * accumulated and readable through ias15_engine_flags(). */
@@ -2193,6 +2719,18 @@ size_t ias15_engine_capacity(void){ return eng_cap; }
 uint32_t ias15_engine_flags(void){ return flags_union; }
 unsigned long long ias15_engine_calls(void){ return ncalls; }
 uint64_t ias15_engine_constants_digest(void){ return eng_digest; }
+
+/* What the producer says it ran on, for the archive (ROUND3.md, P3).
+ * The image is -1 where the device refused to name it, which the
+ * software backend and a remote handle always do. */
+const char *ias15_engine_build_id(void){ return eng_build_id ? eng_build_id : "unknown"; }
+int ias15_engine_image_digest(unsigned char sha256[32], unsigned long long *image_bytes, uint32_t *version){
+    if (!eng_have_image) return -1;
+    memcpy(sha256, eng_image.sha256, 32);
+    if (image_bytes) *image_bytes = (unsigned long long)eng_image.image_bytes;
+    if (version) *version = eng_image.version;
+    return 0;
+}
 unsigned long long ias15_engine_max_exceeded(void){ return eng_open && max_exceeded ? (unsigned long long)max_exceeded[0] : 0; }
 
 /* A 64-bit FNV-STYLE hash over the exact bytes of the derived
@@ -2498,5 +3036,6 @@ void ias15_engine_view(struct ias15_engine_view *o){
     o->n_elem = N3;
     o->elem_size = ESZ;
     o->n_bodies = N;
+    o->t = STPLAIN; o->t_hi = STHI; o->t_lo = STLO;
 }
 #endif /* IAS15_CFT_LIBRARY */
