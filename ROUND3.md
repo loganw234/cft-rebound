@@ -848,7 +848,8 @@ while the bits do not move.
   - fixes nothing.
 
   "Found nothing" is an acceptable answer.
-- **The VALIDATION entries**, from 39. Parcels report; the lead writes.
+- **The VALIDATION entries.** Entry 39 is P0's and its verification.
+  The parcels' entries start at 40. Parcels report; the lead writes.
 - **The docs sweep, in idle time.**
   - HARDWARE.md's sentences that call a mechanism missing now mean
     "missing at the old pin" (its 2026-10-30 note).

@@ -3956,3 +3956,214 @@ except in one column, the round trip's wall seconds.
   The index tables, `cft_reduce_seg`, `CFT_XRT_TILES` and the identity
   calls are in the pinned library and unused, as `scalar_mask` already
   was at the old pin.
+
+## 39. Round 3's P0: one door to what libcft added for this port, sent back twice and changed in no record line; and entry 38's Linux and Python items
+
+**2026-10-31.** Two hosts:
+- this desktop: Windows 11, MSYS2 mingw64 gcc 16.1.0, `-std=c99 -O2`,
+  Miniconda Python 3.12.15 with mpmath 1.3.0;
+- cft2204, a WSL2 Ubuntu 22.04 distro on the same box: gcc 11.4.0,
+  Python 3.10.12, mpmath 1.4.1.
+
+Pins: REBOUND at bdfda4bd and cft-fp256 at 922c2ad (ABI 0.18), on the
+software backend only. The port was at `ebaeaa1` for the Linux leg, and
+P0's commits on branch `round3-p0` are `971f93d` and `20c05d8`. The fixes
+on `round3-p0-v1` are `47f0bc3`, `21579ee`, `90e6f3f`, `d7d964b` and
+`733b067`.
+
+ROUND3.md is the round's plan and has P0's design. This entry is what
+ran.
+
+### Entry 38's two open items
+
+**Linux, at `ebaeaa1`, in cft2204, from local clones only.**
+- `make check`: rc 0, 14 legs, 222 `ok` lines (the same count as
+  Windows at that pin), 0 FAIL, in 5,608 s on a loaded box.
+- All six wide-state digests are identical to Windows': fp64
+  `e08541bc0af9b3ec` and `56bacf3bf63f19a7`; fp128 `5d7cf4588fad050e`
+  and `cd16e6dc29aa0589`; fp256 `a1052750e206bebe` and
+  `ba4d447c8e58bd20`.
+- `make example`: rc 0.
+
+The leg found two warnings that the mingw build hides, both in this
+repository's tests:
+- `tests/gate_real.c:650` printed a `uint64_t` with `%llu`, which is
+  `unsigned long` on LP64.
+- `tests/gate_subprocess.c` called `putenv()` with no declaration under
+  `-std=c99`. That is the same trap as the trailer's clock of
+  2026-09-14, and gcc 14 or later rejects it outright.
+
+Both are fixed in `90e6f3f`. At `733b067` the Linux build has no warning
+outside `third_party/`.
+
+This is the first full Linux suite in this ledger, but it was run in
+WSL, not on amd-arc-box. So entry 29's item is answered for Linux and
+not for that host.
+
+**Python, on Windows.** The owner allowed the download, and rebound
+5.1.1 went into the Miniconda env: the `cp312-win_amd64` wheel at
+githash `33549d1d`. `check-rebound-match` found the pinned and installed
+headers identical.
+
+The first `check-python` failed. `ctypes` could not load
+`build/libcft_ias15.dll` "or one of its dependencies". The DLL imported
+`libwinpthread-1.dll`, which it had done since `24900ee` on 2026-09-14:
+the trailer's `clock_gettime()` comes from winpthreads under mingw-w64,
+and nothing had run the Windows Python leg since 2026-09-11. The link
+rule printed the import table on every build, and nothing read it.
+
+`47f0bc3` links winpthreads statically and turns the print into a
+refusal of any `lib*.dll` import.
+- Control: `make python-lib SHSTATIC=` is refused, naming
+  `libwinpthread-1.dll`, with rc 2 and no library left behind.
+- After the fix, `check-python` gives "IDENTICAL: 13 values, bit for
+  bit", and `check-python-control` gives "DIFFERS: 9 of 13 values".
+
+### What P0 is, in one paragraph
+
+ABI 0.12 to 0.14 added three ways of issuing a call that this port had
+never used: a scalar operand, an indexed gather and a segmented
+reduction. Each sits behind a capability bit, and each has an older
+route that the contract makes give the same bits.
+- `engine_routes()` decides each family once, at open, in the program
+  and the library half alike. The variables are `CFT_REBOUND_ROUTE_*`
+  and `CFT_REBOUND_HIDE_FEATURES`, and every misuse is refused by name.
+- Three wrappers carry the calls: `vrun_k`, `vrun_ix` and
+  `vreduce_seg`. Nothing in the integration calls them yet.
+- Every record now has a `# route` line per family and a `# identity`
+  line.
+- `--door-selftest` and `tools/check_door.py` hold the routes to each
+  other, in all three suite tiers.
+- The trailer's timing keys print from one table.
+- `hw/bench-workload.py` writes `decompose.csv` with every trailer key.
+- The gate cache keys on every `CFT_REBOUND_` variable.
+
+### The gate, and the controls that show it can fail
+
+At `733b067`, `--door-selftest` holds 131 cases at each format against
+a reference computed outside the wrappers, straight from libcft.
+- **Each case runs both routes:** 98 scalar (two with the result
+  aliasing the scalar), 15 indexed, and 18 segmented, six of those a
+  two-operand dot product.
+- **Every wrapper call's accounting is checked:** one operation in
+  `calls=`, and exactly the counter meant.
+- **The data checks itself** at every format:
+  - every nonzero value at binary128 and binary256 carries bits that
+    binary64 cannot hold, by a round trip in libcft;
+  - every one of those bit positions is set in some value, with the
+    positions measured by widening 1 + 2^-52;
+  - zeros of both signs occur.
+
+  Measured: 9,423,979 of 9,423,979 values at binary128 and 9,425,290 of
+  9,425,290 at binary256. All 60 and all 184 positions were set. There
+  were about 314,000 zeros of each sign at every format.
+
+`tools/check_door.py` passes with 56 `ok` and 0 FAIL, on Windows and on
+Linux. Besides the cases it checks:
+- every refusal by name, on both routes where a route is involved;
+- that hidden bits count as not compared;
+- that nothing compared is a failure;
+- that a forced-off run gives the default's record.
+
+That last comparison is vacuous until a parcel routes a call, and the
+gate says so.
+
+**Twenty-one sabotaged copies of the engine** were built from copies of
+the source; the tree was never patched. Every one made the gate fail,
+at the check meant for it:
+- the five the first version caught;
+- the five V0 found that version passing, N1-N4 and N7/N8;
+- the four its first re-check found passing, F4, F4+N8, F6 and F11;
+- the two refusals that re-check added, each removed, F12 and F13;
+- the three its second re-check found, F15 (at two formats), F16 and
+  F18.
+
+### No record line moved
+
+- **The A/B.** The same 27 integrations as entry 38 ran through the
+  pre-P0 binaries (`21579ee`'s, built and kept) and through each P0
+  build: `971f93d`, `90e6f3f`, `d7d964b` and `733b067`.
+  - Every time, 27 of 27 were identical on every non-comment line and
+    every counter. The two ensembles were compared on all their lines,
+    for the reason entry 38 gives.
+  - The control saw 4 of 5 lines differ every time.
+  - The 27 assembled program images were byte-identical every time.
+- **The suite.** `make check` at `971f93d` gave rc 0, 15 legs, 250
+  `ok` lines and 0 FAIL. At `733b067` it gave rc 0 in 2,828 s, 15 legs,
+  278 `ok` lines and 0 FAIL. Both had the same two skip lines as entry
+  38's run.
+  - The six wide-state digests are identical to entry 38's at both
+    commits.
+  - The only comment lines that differ from the pre-P0 records are the
+    `# identity` line, the `# route` lines and `t_reduce` in the
+    trailer.
+
+### The verifier, three times
+
+V0 is a separate agent with its own worktree and builds. Its entries
+are in the round's ledger, which is to be archived as
+`archive/round3-ledger.zip` at the round's end.
+
+**On `971f93d`.** It confirmed that no record line moved, across 51
+integrations of its own. It also confirmed the library path's refusal
+and the DLL fix. It sent P0 back on what P0 hands the parcels:
+- **Five sabotages the gate passed.** One of them, a probe that reads
+  no bit, passed with nothing compared.
+- **Two wrappers answering differently by route on aliased calls.**
+  libcft's software backend reads a scalar again after writing the
+  result (cft-fp256 `host/src/device.c`, 2068-2086). Whether that is
+  libcft's intended contract is a question for cft-fp256.
+- **Three false claims.** The worst was "the largest shapes the
+  integrator presents". An ensemble has no width cap: `CFT_MAX_BODIES`
+  bounds the bodies of one system, not the number of systems.
+- **Smaller items**, such as the gate cache's key, `staged_bytes`
+  depending on the route, and a misspelled variable being silently
+  ignored.
+
+**On `90e6f3f`.** It confirmed every fix. It found four of its ten new
+sabotages passing, one more route split in `vrun_ix`, and the Windows
+limit below.
+
+**On `d7d964b`.** It confirmed every fix, and found that no new refusal
+rejects a call the engine makes. It found three ways to fool the data's
+check. One of them was a gap in the shipped data: binary128's bits 56-59
+were never set.
+
+`733b067` closes those three, **after V0's last cut**. The lead checked
+it with V0's own three sabotages, which all fail. V0 has not re-checked
+it.
+
+### Stated limits, not closed
+
+- **Arity.** `vrun_ix` does not refuse a table on an operand the opcode
+  does not read, because libcft exports no arity. On that call the new
+  route refuses by name, and today's route ignores the operand, so its
+  result is the opcode's own.
+- **Prefix typos.** A typo inside the `CFT_REBOUND_ROUTE_` or
+  `CFT_REBOUND_HIDE` prefix makes an unrelated variable, which nothing
+  reads.
+- **Windows and Python.** In a Python process on Windows, the library
+  half's `getenv()` and `_environ` are msvcrt's, and that runtime's copy
+  of the environment is taken when the process starts. A variable set
+  through `os.environ` is never seen. That holds for the door's
+  variables and for `CFT_REBOUND_ARTIFACT`. V0 measured it, and
+  docs/PYTHON.md, "The Windows rule", says so.
+- **Before P0, found during it.** On the drop-in's refusal path, the
+  sentence prints twice and `steps_done` becomes 1. The pre-P0 build did
+  the same for a missing artifact. From Python, REBOUND's message store
+  cuts the sentence at 254 characters. ROUND3.md files both for the next
+  round.
+
+### What this does not establish
+
+- **The card.** No artifact was opened.
+  - Nothing here shows that 0.18 opens this repository's f128 image.
+  - A tile's own route for any family has not run. On the software
+    backend each new route is the same primitive today's route uses,
+    so these cases test the wrappers, not a tile.
+  - The card day's gravity split (ROADMAP item 4) is still owed.
+- **Use.** Nothing in the integration calls the door. The forced-off
+  comparison is vacuous, and the gate says so.
+- **amd-arc-box's Linux**, as against WSL's.
+- **UCRT64**, which docs/PYTHON.md reasons would give the Windows
+  library one heap and one environment. It has not been built.
