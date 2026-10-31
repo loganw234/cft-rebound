@@ -2346,28 +2346,49 @@ static uint64_t door_next(void){
     door_lcg = door_lcg * 6364136223846793005ull + 1442695040888963407ull;
     return door_lcg;
 }
-/* The bytes below binary64's reach in this format's mantissa.
- *   - An interchange format of k bits has p = k - 4 log2(k) + 13
- *     (754-2019, 3.6), and widening leaves its low p - 53 bits zero:
- *     0 bytes at binary64, 7 at binary128, 23 at binary256.
- *   - The layout is little-endian with the sign in the top bit of the
- *     last byte. Measured on 2026-10-31 by widening 1.0 and -0.0 and
- *     reading them byte by byte. */
-static size_t door_low_bytes(void){
+/* The bits below binary64's reach in this format's mantissa, from the
+ * standard: an interchange format of k bits has p = k - 4 log2(k) + 13
+ * (754-2019, 3.6), and widening leaves its low p - 53 bits zero. That is
+ * 0 at binary64, 60 at binary128 and 184 at binary256. binary128's 60 is
+ * seven bytes and a nibble: whole bytes alone left its bits 56-59 never
+ * set, which a route could have dropped unseen (V0's F16). The layout is
+ * little-endian with the sign in the last byte's top bit, measured on
+ * 2026-10-31 by widening 1.0 and -0.0 and reading the bytes. */
+static size_t door_low_bits(void){
     size_t k = 8 * ESZ, m = 0;
     while ((k >> m) > 1) m++;
-    return (k - 4 * m + 13 - 53) / 8;
+    return k - 4 * m + 13 - 53;
 }
-/* The data's own check, which tools/check_door.py asserts. At binary128
- * and binary256 every nonzero value must carry bits below binary64's
- * reach, and at binary64 none can. It is measured by a round trip
- * through binary64 in libcft, not by the byte arithmetic above, so a
- * door_low_bytes() that went wrong cannot vouch for itself. V0's F4,
- * door_low_bytes() returning 0, passed the gate before this check. */
-static unsigned long long door_values, door_values_beyond;
+/* The same count, MEASURED instead: binary64's last bit, 1 + 2^-52
+ * widened, lands at this bit of the format's bytes. The data's checks
+ * use this, so that door_low_bits() cannot vouch for itself. */
+static size_t door_ulp_bit(void){
+    static size_t bit = (size_t)-1;
+    if (bit == (size_t)-1){
+        uint64_t one_ulp = 0x3ff0000000000001ull;
+        unsigned char w[32];
+        uint32_t fl = 0;
+        if (F == CFT_FP64) memcpy(w, &one_ulp, ESZ);
+        else if (cft_convert(dev, CFT_FP64, F, CFT_RNE, &one_ulp, w, 1, &fl) != CFT_OK) die("door: widening failed");
+        for (bit = 0; bit < 8 * ESZ && !(w[bit / 8] >> (bit % 8) & 1u); bit++) ;
+    }
+    return bit;
+}
+/* The data's own checks, which tools/check_door.py asserts:
+ *   - At binary128 and binary256 every nonzero value carries bits below
+ *     binary64's reach, and at binary64 none can. This is measured by a
+ *     round trip through binary64 in libcft. V0's F4, door_low_bytes()
+ *     returning 0, passed the gate before this check.
+ *   - Every bit position below binary64's reach is set in some value.
+ *     The positions are measured by door_ulp_bit(). V0's F15, an
+ *     under-counted width, satisfied the first check alone.
+ *   - Zeros of both signs occur. V0's F18, a generator making none,
+ *     passed every other check. */
+static unsigned long long door_values, door_values_beyond, door_zeros_pos, door_zeros_neg;
+static unsigned char door_seen[32];
 static void door_fill(V dst, size_t n){
     uint64_t *bits = malloc((n ? n : 1) * sizeof *bits);
-    size_t low = door_low_bytes();
+    size_t low = door_low_bits();
     if (!bits) die("out of memory");
     for (size_t i = 0; i < n; i++){
         uint64_t r = door_next();
@@ -2380,8 +2401,11 @@ static void door_fill(V dst, size_t n){
         uint32_t fl = 0;
         if (cft_convert(dev, CFT_FP64, F, CFT_RNE, bits, dst, n, &fl) != CFT_OK) die("door: widening failed");
         for (size_t i = 0; i < n; i++)
-            if (bits[i] << 1)                                        /* not a zero */
-                for (size_t j = 0; j < low; j++) dst[i * ESZ + j] = (unsigned char)(door_next() >> 56);
+            if (bits[i] << 1){                                       /* not a zero */
+                for (size_t j = 0; j < low / 8; j++) dst[i * ESZ + j] = (unsigned char)(door_next() >> 56);
+                if (low % 8)                                         /* and the partial byte's low bits */
+                    dst[i * ESZ + low / 8] |= (unsigned char)((door_next() >> 56) & ((1u << (low % 8)) - 1u));
+            }
     }
     {   /* narrowed to binary64 and widened back: a value that comes back
          * different had bits binary64 cannot hold */
@@ -2393,10 +2417,16 @@ static void door_fill(V dst, size_t n){
                  cft_convert(dev, CFT_FP64, F, CFT_RNE, bits, back, n, &fl) != CFT_OK) die("door: the round trip failed");
         for (size_t i = 0; i < n; i++){
             int zero = 1;
+            size_t ub = door_ulp_bit();
             for (size_t j = 0; j + 1 < ESZ && zero; j++) zero = dst[i * ESZ + j] == 0;
-            if (zero && (dst[i * ESZ + ESZ - 1] & 0x7f) == 0) continue;     /* +0 or -0 */
+            if (zero && (dst[i * ESZ + ESZ - 1] & 0x7f) == 0){             /* +0 or -0 */
+                if (dst[i * ESZ + ESZ - 1] & 0x80) door_zeros_neg++; else door_zeros_pos++;
+                continue;
+            }
             door_values++;
             door_values_beyond += memcmp(back + i * ESZ, dst + i * ESZ, ESZ) != 0;
+            for (size_t j = 0; j < ub / 8; j++) door_seen[j] |= dst[i * ESZ + j];     /* the positions it sets */
+            if (ub % 8) door_seen[ub / 8] |= (unsigned char)(dst[i * ESZ + ub / 8] & ((1u << (ub % 8)) - 1u));
         }
         free(back);
     }
@@ -2654,6 +2684,12 @@ static int door_selftest(const char *artifact){
     for (int r = 0; r < N_ROUTES; r++)
         printf("door route %s calls=%llu fallbacks=%llu\n", route_def[r].name, route_calls[r], route_fallbacks[r]);
     printf("door data: %llu of %llu nonzero values carry bits below binary64's reach\n", door_values_beyond, door_values);
+    {
+        size_t ub = door_ulp_bit(), seen = 0;
+        for (size_t b = 0; b < ub; b++) seen += door_seen[b / 8] >> (b % 8) & 1u;
+        printf("door data: %zu of %zu bit positions below binary64's reach are set in some value\n", seen, ub);
+        printf("door data: zeros %llu positive and %llu negative\n", door_zeros_pos, door_zeros_neg);
+    }
     printf("door: %d identical, %d differ, %d not compared, %d accounting errors; controls %d of %d\n",
            door_same, door_differ, door_skipped, door_counts_bad, door_controls_ok, door_controls);
     free(a); free(b); free(c); free(d0); free(d1); free(ref); free(rb[0]); free(rb[1]); free(rb[2]);

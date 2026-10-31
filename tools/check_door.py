@@ -66,6 +66,8 @@ REFUSALS = {"ix-alias-dense": ("indexed", "once any operand has an index table")
             "ix-zero-source": ("indexed", "beside a source of zero elements"),
             "reduce-partial": ("reduce_seg", "are not whole segments")}
 DATA = re.compile(r"^door data: (\d+) of (\d+) nonzero values carry bits below binary64's reach$", re.M)
+POSITIONS = re.compile(r"^door data: (\d+) of (\d+) bit positions below binary64's reach are set in some value$", re.M)
+ZEROS = re.compile(r"^door data: zeros (\d+) positive and (\d+) negative$", re.M)
 
 
 def run(cmd, extra_env=None):
@@ -162,6 +164,15 @@ def main():
         verdict(values > 0 and beyond == (values if wide else 0),
                 "the data: %d of %d nonzero values carry bits below binary64's reach (wanted %s)"
                 % (beyond, values, "all of them" if wide else "none, at binary64"))
+        # Every such bit position set somewhere, the positions measured by
+        # the program (V0's F15 and F16), and zeros of both signs present
+        # (V0's F18).
+        pm, zm = POSITIONS.search(out), ZEROS.search(out)
+        seen, posns = (int(pm.group(1)), int(pm.group(2))) if pm else (-1, -2)
+        zpos, zneg = (int(zm.group(1)), int(zm.group(2))) if zm else (0, 0)
+        verdict(seen == posns and (posns > 0) == wide,
+                "the data: %d of %d bit positions below binary64's reach are set in some value" % (seen, posns))
+        verdict(zpos > 0 and zneg > 0, "the data: zeros of both signs, %d positive and %d negative" % (zpos, zneg))
         verdict(cok == cn and cn >= len(present),
                 "controls: %d of %d saw their difference, one or more for each of %d published families" % (cok, cn, len(present)))
         if software:
