@@ -18,6 +18,14 @@ Where a projection and a measurement disagree, the measurement is the
 one to believe; the projections are kept because the model they came
 from is what the measurements are a check on.
 
+*2026-10-30: the pin moved to cft-fp256 `922c2ad` (libcft ABI 0.18,
+docs/VALIDATION.md entry 38), and the device-side gather, the lane mask
+and the per-system reduction this document asks for below are in the
+pinned library now. ROADMAP.md, "What entry 37 leaves to build", says
+which ask became which call - and that nothing in this port calls any
+of them yet. Where this document says a mechanism does not exist, read
+"was not in the pinned library when this was written".*
+
 ## Why IAS15 is unusually favourable, and where it is not
 
 An IAS15 step is seven substeps, each a prediction of every
@@ -473,7 +481,8 @@ after reading both sides of the seam.
 
 ### What the library already does, verified rather than assumed
 
-The pinned libcft (`ca19fe3`, ABI 0.12) binds **every** operand of
+The libcft pinned when this was written (`ca19fe3`, ABI 0.12; and
+`922c2ad`, ABI 0.18, the pin since 2026-10-30) binds **every** operand of
 `cft_program_run_ex` through the device-resident buffer registry - the
 three streams, the deposit window, **and both scratch blocks**
 (`host/src/device.c`, `bind_role` for `CFT_ROLE_SI` and `CFT_ROLE_SO`).

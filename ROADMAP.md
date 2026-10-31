@@ -583,6 +583,35 @@ residency. Each item, sized from the tree as it stands rather than
 from the design document, so the next round can pick one up without
 re-deriving it.
 
+**2026-10-30: the pin moved, and the device-side halves below are no
+longer asks.** third_party/MANIFEST pins cft-fp256 `922c2ad` (libcft
+ABI 0.18) since docs/VALIDATION.md entry 38, and every mechanism this
+section calls missing on the device is in that library, built by
+cft-fp256 against this repository's own code (its docs/ROUND2.md, and
+its docs/ROADMAP.md, "What a real workload asked for"):
+
+- item 1's gather and scatter are ABI 0.14's index tables: `idx_*` on
+  `cft_run_args` for a program run's three streams and its scratch-in
+  block, and on `cft_elem_args` for an elementwise call, with
+  `CFT_IDX_NONE` reading as +0. cft-fp256 built them for
+  `build_scatter()`'s shape - which it read as a gather by a static
+  table followed by a fixed-order fold from +0 - and measured that shape
+  on the card at 128 bodies: one indexed run against the 127 dense
+  calls it replaces, 1.51x to 1.71x by format, with the 127 host
+  gathers gone as well;
+- `pc_error`'s per-system maximum is `cft_reduce_seg` (ABI 0.13) over
+  the output of `programs/normalabs-<fmt>`, which that project states is
+  `pc_error` exactly in both modes, the +0 identity included;
+- a program run is cut across every tile of a device since 2026-09-25,
+  and `CFT_XRT_TILES` opens a subset of an image's tiles, so a quad can
+  be run as a single without building a one-tile image.
+
+All of that is read from cft-fp256's header and record, not measured
+here. Nothing in this port calls any of it yet: entry 38 establishes
+only that the calls the port already makes return the same bits
+through the new library, which is the precondition for starting item 1
+and not a start on it.
+
 ### 1. Cut the call count (the biggest lever, rebound-side)
 
 172,000 elementwise calls of six elements in a 200-step Kepler run, at
@@ -650,9 +679,11 @@ byte-copies against the accumulate adds against the divide against the
 launches. `src/ias15_cft.c` now times the three pair gathers and the
 scatter loop as `t_g_copy`, the accumulate half as `t_g_accum`, and
 every library call inside gravity as `t_g_lib` with `t_g_divsqrt`
-separately; the decomposition pass re-runs with them and entry 38 will
-carry the table. Whether item 1 starts with the pair program or with
-the device gather depends on it.
+separately; the decomposition pass was to re-run with them and entry 38
+to carry the table. Whether item 1 starts with the pair program or with
+the device gather depends on it. *As of 2026-10-30 no entry carries the
+table, and entry 38 is the re-pin: if the pass ran on amd-arc-box, its
+output was never folded in here, and the table is still owed.*
 
 ### 5. Residency, demoted to last, still real
 
@@ -669,8 +700,8 @@ at 1-10% of a step. Worth doing after 1 and 3, not before.
 - The wide clock `t` across a checkpoint: 1 ulp on 2 of 40 splits
   ("What round 2 leaves open: the wide clock").
 - The full software suite on Linux, entry 29's open item: `make check`
-  on amd-arc-box, 2026-09-14, result in entry 38.
+  on amd-arc-box, 2026-09-14; no result recorded as of 2026-10-30.
 - docs/HARDWARE.md "What to do first" items 1 and 4: the ensemble gate
   with an artifact, and the mixed-pass-count ensemble that prices idle
-  lanes - both in the chain running as this is written, results in
-  entry 38.
+  lanes - both in the chain running as this is written; no result
+  recorded as of 2026-10-30.

@@ -13,8 +13,9 @@ Python 3.12.9 with mpmath 1.3.0 (on gmpy2), libcft from cft-fp256 at
 (5.1.1 + 6). No card, no XRT, no `cft://` server for those entries:
 both were in use, and everything in them is the software backend, which
 is the contract's definition of the bits. The pin moved to ca19fe3
-(ABI 0.12) on 2026-09-13 (entry 34); third_party/MANIFEST is the
-authority and `make check-pins` holds the tree to it.
+(ABI 0.12) on 2026-09-13 (entry 34) and to 922c2ad (ABI 0.18) on
+2026-10-30 (entry 38); third_party/MANIFEST is the authority and
+`make check-pins` holds the tree to it.
 
 ---
 
@@ -3796,3 +3797,162 @@ across one, four and six tiles, two bitstreams and the software
 backend, which is the property that lets a pooled node's answer be
 trusted without recomputation, and the matrix is that claim drawn from
 the rows rather than asserted.
+
+## 38. The pin moves to cft-fp256 922c2ad, libcft ABI 0.18: the same bits from the same calls, and nothing new called yet
+
+**2026-10-30, this desktop (Windows 11, MSYS2 mingw64 gcc 16.1.0,
+`-std=c99 -O2`, Miniconda Python 3.12.15 with mpmath 1.3.0), REBOUND at
+bdfda4bd, the software backend only; the port at `039e3c3`.** cft-fp256
+moved 1,323 commits and six ABI minors past `ca19fe3` while this
+repository sat idle from 2026-09-14, and by its own record built or
+answered every ask docs/HARDWARE.md made of it on the way (its
+docs/ROUND2.md; ROADMAP.md, "What entry 37 leaves to build", says which
+ask became which call). This entry moves the pin and establishes one
+thing: the calls this port already makes return the same bits through
+the new library. It adopts nothing.
+
+### Which commit, and why not HEAD
+
+`922c2ade`, the newest commit cft-fp256's own gate has passed at:
+`verify/run.sh --only docs,golden,generated,seq,cardstress`, rc 0,
+VERDICT PASS, on 2026-10-30 (its docs/VALIDATION.md, the lead's entry of
+that day; CI green on `77dfc230`, the base). It is parcel M2F2's tip;
+its merge onto main, `d6f55748`, has the identical tree (`6dd047b0...`),
+and HEAD that evening, `f68c6301`, is that tree plus the three documents
+recording the gate.
+
+The part of cft-fp256 this repository builds - `host/src`,
+`host/include` and `host/Makefile`, compared by git tree hash - is
+identical at `6f7ad1d5`, `0f9ff761`, `9dbfa501`, `922c2ade` and
+`f68c6301`, and has not changed since 2026-10-28. So the pinned libcft
+is also the one cft-fp256's night 1029 ran on the U50 (at `6f7ad1d5`:
+1,071 legs, 0 failed, 2,552,252,429,426 cases, 0 disagreements) and its
+night 1030 runs over this weekend. `rtl/` is `44b963dd...` at all five;
+entry 34 built its image from `ca19fe3`'s, `0aef8eea...`.
+
+### How it was run
+
+Two worktrees from main at `039e3c3`, each with fresh clones of its own
+pins: the baseline at `ca19fe3`, and the re-pin at `922c2ade`, fetched
+from GitHub by `tools/fetch_third_party.sh` from the new MANIFEST line
+(rc 0, both pins `ok`) - so the line reproduces from the URL it names.
+`make check-pins` passes in both. Each then ran `make all programs
+check`, the re-pin `make libcft` first, at the same time as the other.
+
+- **The build.** libcft at the new pin builds in 12 s, `all` in 43 s
+  (50 s at the old pin), `programs` in 6 s. Both build logs carry the
+  same five warnings, all REBOUND's own (`simulationarchive.c`,
+  `-Woverflow`); none comes from libcft or from this repository.
+- **No source edit.** `cft.h` grew from 2,798 lines to 3,539, and two
+  input structs grew with it (`cft_run_args` at 0.14 and again at 0.17,
+  refused at an old `struct_size`). The port sets `struct_size =
+  sizeof` at all three of its sites (`src/ias15_cft.c:115`, `:148`,
+  `:1008`), so the rebuild is the whole migration.
+
+### The suite at both pins
+
+| | old pin `ca19fe3` | new pin `922c2ad` |
+|---|---|---|
+| `make check` | rc 0, 4,422 s | rc 0, 4,245 s |
+| legs run | 14 | 14 |
+| `ok` lines | 222 | 222 |
+| `FAIL` lines | 0 | 0 |
+| skips | gate_subprocess's `body_count` row, deliberately untested and named | the same |
+
+Read from the logs, not the exit codes. With paths, temporary
+directories and timings normalised, the two logs differ in exactly
+three things: the pin `check-pins` names, the random temp-directory
+names, and the archive gates' recorded `abi "0.12"` against
+`abi "0.18"` - the archive's own provenance field doing its job. Every
+verdict line, case and count is otherwise the same line in both, and
+that includes the six wide-state digests `gate_real` prints for its
+plain and regrow sequences - fp64 `e08541bc0af9b3ec` and
+`56bacf3bf63f19a7`, fp128 `5d7cf4588fad050e` and `cd16e6dc29aa0589`,
+fp256 `a1052750e206bebe` and `ba4d447c8e58bd20` - which hold the whole
+wide state to the bit at every format across the two libraries, not
+only its binary64 view.
+
+### The same integrations through both libraries
+
+The suite holds each pin to REBOUND at binary64 and to itself across
+engines, members and checkpoints. Above binary64 it holds the new
+library to the old one only through `check_records`' committed samples
+and the digests above. So 27 integrations were run through both builds
+and compared on what the gates compare: every non-comment line of the
+record, byte for byte, and the trailer's counts - steps, rejections,
+capped correctors, mean and maximum passes, flags, library calls. The
+only comment lines that differ are the header's `impl=libcft-0.12`
+against `impl=libcft-0.18`, and the timings.
+
+| problem | formats | variants | identical |
+|---|---|---|---|
+| Kepler, fixed dt 0.05, 200 steps | fp64, fp128, fp256 | REBOUND's roundings; the FMA form on the loop engine; the FMA form on the program engine; `--cs augmented` | 12 of 12 |
+| Kepler, adaptive 1e-9, 200 | fp64, fp128, fp256 | | 3 of 3 |
+| outer solar system, fixed dt 40, 40 | fp64, fp128, fp256 | | 3 of 3 |
+| Pythagorean, adaptive 1e-9, 100 | fp64, fp128, fp256 | | 3 of 3 |
+| Kepler e = 0.99, adaptive 1e-9, 200 | fp64, fp128 | | 2 of 2 |
+| 16 bodies (`tools/make_nbody.py`), fixed, 5 | fp64, fp128 | | 2 of 2 |
+| a 4-member Kepler ensemble, adaptive | fp128 on the loop engine, fp256 on the program engine | | 2 of 2 |
+
+**27 of 27**, and none of them trivially: the fixed Kepler run's
+corrector averages 2.5, 6.2 and 15.0 passes at the three formats, so
+each format took its own path; each e = 0.99 run carries a rejected
+step and a capped corrector; the library-call counts run from 12,430 to
+2,720,328 a run. The 27 program images `make programs` assembles are
+byte-identical between the two pins' `cft-asm`.
+
+**The control**, so that "identical" is a measurement: the same
+comparison on one build, binary256 Kepler with the corrector capped at
+REBOUND's 12 against 60, reports 4 of the 5 sample lines different
+(mean passes 12.000 against 15.035) - ROADMAP's "footgun found by
+building on it", seen by the comparison that has to see it.
+
+The comparison's first pass needed one correction, and it was the
+comparison's: it read `sample` lines only, an ensemble record writes
+`system` lines, and both ensemble cases came back "DIFF, 0 samples" on
+both sides. The guard against an empty comparison caught it before it
+could read as a finding. Re-compared on every non-comment line, both are
+identical, 12 `system` lines each.
+
+### A checkpoint across the re-pin
+
+What a user who upgrades actually does is save under one library and
+resume under the other. The archive records `cft_abi`, but nothing in
+the loader refuses on it (`src/cft_archive.c` reads it as provenance),
+so the question is only whether the bits survive. `gate_real`'s
+three-process form - `--straight` against `--save` then `--resume`, as
+`tools/check_checkpoint.py` drives it - was run with the save and the
+resume in different builds: written by the old pin and resumed by the
+new, and the reverse, at fp64, fp128 and fp256, plain and regrow.
+**12 of 12 identical** to the new build's straight run, all 15 lines of
+each dump including its wide-state hash. The control, a resume with the
+loaded wide state dropped (`CFT_REBOUND_NO_ADOPT=1`), differs in 6 of
+the 15.
+
+### The install path
+
+`make example` at both pins, rc 0: the subprocess round trip asserting
+its declared answers, and the drop-in at binary256 through a checkpoint,
+"restored exactly". With paths normalised the two outputs are identical
+except in one column, the round trip's wall seconds.
+
+### What this does not establish
+
+- **The card.** amd-arc-box's U50 is in cft-fp256's weekend card-stress
+  window, Friday 18:00 to Monday 2026-11-02 07:45 (its rule of
+  2026-10-24), so nothing here opened an artifact. The new library
+  still lists contract `0x800`, the f128 image's (docs/BITSTREAM.md),
+  among its `KNOWN_VERSIONS` (`host/src/backend_xrt.cpp:267`), so it is
+  believed to open that image. That it does, and returns the software
+  backend's bits there, is owed to the next card day.
+- **Linux.** Entry 29's open item stands: no `make check` on
+  amd-arc-box at either pin.
+- **Python.** `make check-python` needs a `rebound` wheel this host's
+  Miniconda does not have, and was not run at either pin.
+- **The bitstream flow.** `hw/build-variant.sh` packages
+  `third_party/cft-fp256/rtl`, which this pin changes. Not run: it needs
+  Vitis on amd-arc-box.
+- **Anything new.** No call this port makes is one the new ABI added.
+  The index tables, `cft_reduce_seg`, `CFT_XRT_TILES` and the identity
+  calls are in the pinned library and unused, as `scalar_mask` already
+  was at the old pin.
