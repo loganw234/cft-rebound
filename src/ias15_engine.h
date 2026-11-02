@@ -53,6 +53,16 @@ struct ias15_engine_view {
      * are why a checkpoint at binary128 can move t by an ulp (ROADMAP.md,
      * "What round 2 leaves open: the wide clock"; ROUND3.md, P3). */
     unsigned char *t, *t_hi, *t_lo;
+    /* The step control's two wide steps, one element each: dt, the step
+     * the next attempt takes, and dt_last, the step last taken. An
+     * adaptive step is computed wide, and ias15_engine_put_dt_f64() and
+     * put_dt_last_f64() rebuild both from binary64. That is why an
+     * adaptive checkpoint above binary64 resumed inexactly before P3
+     * archived them (P3's ledger entry, 2026-11-02).
+     * READ ONLY: an attempt reads dt through a copy broadcast to every
+     * lane, which writing it in place would leave stale. Write them
+     * with ias15_engine_put_dt_wide() and put_dt_last_wide(). */
+    const unsigned char *dt, *dt_last;
 };
 
 /* fmt is a cft_format: CFT_FP64 = 1, CFT_FP128 = 2, CFT_FP256 = 3.
@@ -280,6 +290,11 @@ void   ias15_engine_put_dt_f64(double dt);
 void   ias15_engine_put_dt_last_f64(double dt_last);
 double ias15_engine_get_dt_f64(void);
 double ias15_engine_get_dt_last_f64(void);
+/* The same two steps, from wide bytes in the run's format, elem_size
+ * each: what the view's dt and dt_last read. put_dt_wide() broadcasts
+ * dt to every lane, as put_dt_f64() does. */
+void   ias15_engine_put_dt_wide(const unsigned char *dt);
+void   ias15_engine_put_dt_last_wide(const unsigned char *dt_last);
 void   ias15_engine_put_t_f64(double t);
 double ias15_engine_get_t_f64(void);
 
