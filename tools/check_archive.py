@@ -62,16 +62,29 @@
 #   - A SINGLE SNAPSHOT, with no function pointers set, loads and
 #     continues as that build continues its own archives. 9 of 9 measured:
 #     plain, regrow and adaptive at each format. It reports "restored
-#     exactly", and its finish_load repairs cft_n_elem, the one field it
-#     knows that comes after cft_t. The run is identical to that build's
-#     own resume of its own archive, and to its straight run, on every
-#     line it prints. Like every one of that build's loads, it rebuilds
-#     the clock and steps from binary64, so above binary64 an adaptive
-#     resume diverges there, as it always did (measured at fp128 and
-#     fp256; at fp64 it does not).
+#     exactly", and its finish_load repairs cft_n_elem, the one
+#     integrator field it knows that comes after cft_t. (REBOUND's
+#     function-pointer flag, written after the integrator's fields, goes
+#     unread too; with none set it is 0 and says nothing.) On every line
+#     that build prints, the run is identical to its own resume of its own
+#     archive. That is not always its straight run, because like every
+#     load of that build it rebuilds the clock and steps from binary64.
+#     Plain and regrow at every format, and adaptive at fp64, match the
+#     straight run on those lines; the rebuilt wide clock, which they do
+#     not include, need not. Adaptive at fp128 and fp256 does not: a body's
+#     position or velocity and the wide digest differ, as they do when
+#     that build resumes its own archive. (The adaptive third ran
+#     af2f400's gate_real given an epsilon, since as shipped it writes no
+#     adaptive archive.)
+#   - On ANY snapshot, a single one included, REBOUND's warning that
+#     function pointers must be reset is LOST, because "functionpointers"
+#     is written after the integrator's fields. Measured by V3 on single
+#     snapshots, with additional_forces and with collision_resolve set:
+#     this tree's archive, read by af2f400, gives no warning. Every other
+#     pairing warns. Reproduced here at fp64 with V3's two builds.
 #   - Anything past the first snapshot is NOT safe. Measured by V3 on
 #     2026-11-02. Reproduced here with V3's two builds: the first point at
-#     fp64 and fp128, the other two at fp64.
+#     fp64 and fp128, the second at fp64.
 #     - af2f400 APPENDING a snapshot to such an archive writes one that
 #       neither build can read. Its diff writes a header and a name but no
 #       data for each field its own state does not have. A load of the
@@ -84,11 +97,6 @@
 #       REMOVAL refuses it: "refused: unreadable or inconsistent
 #       archive". The high-water family arrives in that diff's second
 #       pass, after cft_t, where that build's reader has stopped.
-#     - REBOUND's warning that function pointers must be reset is LOST,
-#       because "functionpointers" is written after the integrator's
-#       fields. Measured with additional_forces and with collision_resolve
-#       set: this tree's archive, read by af2f400, gives no warning. Every
-#       other pairing warns.
 #   So: never append to an archive this tree wrote, using a build from
 #   before 2026-11-02. Give such a build a single snapshot only, and reset
 #   its function pointers yourself.
