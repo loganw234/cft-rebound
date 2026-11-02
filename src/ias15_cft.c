@@ -62,10 +62,18 @@
  *             [--no-flag-abort] [--artifact PATH] [--dump-constants] [--quiet]
  *             [--member K] [--dt-file FILE] [--dt-out FILE]
  *             [--softening S] [--min-dt M] [--adaptive-mode 0|1|2|3]
- *             [--probe] [--door-selftest]
+ *             [--probe] [--door-selftest] [--corrector-selftest]
+ *             [--record-iters FILE | --replay-iters FILE]
  *
  * --door-selftest holds each route engine_routes() can open against the
  * route it replaces, and exits; tools/check_door.py is its gate.
+ *
+ * --record-iters writes the corrector's pass count for every system in
+ * every step attempt; --replay-iters runs exactly those and computes
+ * neither the predictor-corrector error nor the exit test. A replay's
+ * record must be its recording's, byte for byte. --corrector-selftest
+ * holds pc_error() on both of its routes against a reference, and exits.
+ * tools/check_corrector.py is the gate of all three (ROUND3.md, P2).
  *
  * --artifact opens a tile instead of the software backend; with no flag
  * the program falls back to $CFT_REBOUND_ARTIFACT, which is how the
@@ -638,8 +646,8 @@ static DOOR_UNUSED void vrun_ix(cft_op op, V d, const V a, const uint32_t *ia, s
  * cft_reduce_seg's definition (cft.h: the same tree on each slice), so
  * the bits are the same by construction, and today's route costs n/seg
  * round trips. */
-static DOOR_UNUSED void vreduce_seg(cft_op op, V d, const V a, const V b, size_t n, size_t seg,
-                                    const char *what){
+static void vreduce_seg(cft_op op, V d, const V a, const V b, size_t n, size_t seg,
+                        const char *what){
     size_t ns;
     uint32_t fl = 0;
     cft_status st = CFT_OK;
@@ -1267,6 +1275,18 @@ static void predict_positions(int n){
 /* ------------------------------------------------------------------ */
 static void pc_error(const V tmp);
 
+/* The corrector's schedule (ROUND3.md, P2). --record-iters FILE writes
+ * how many passes each system took in every step attempt; --replay-iters
+ * FILE runs exactly those, and computes neither pc_error() nor the exit
+ * test. The arithmetic is exactly reproducible, so a pass count is a
+ * function of the input: the same passes over the same bits give the
+ * same bits, and a replay's record must be its recording's, byte for
+ * byte. That identity is the whole proof that skipping the test is exact.
+ * The standalone program's alone: the library half never opens a
+ * schedule, so both stay NULL there. sched_begin() and the rest are
+ * beside step_attempt(). */
+static FILE *sched_in, *sched_out;
+
 static void correct(int n){
     /* gk = at; gk_cs = gravity_cs; add_cs(gk, gk_cs, -a0); add_cs(gk, gk_cs, csa0) */
     static V gk, gk_cs, tmp, neg_a0, gnew, told, y, t, u, prod;
@@ -1294,7 +1314,7 @@ static void correct(int n){
     size_t cbase = (size_t)(n - 1) * (n - 2) / 2;
     for (int m = 0; m < n - 1; m++){ vmul(prod, tmp, KC[cbase + m], N3); add_cs(b[m], csb[m], prod, N3); }
     add_cs(b[n - 1], csb[n - 1], tmp, N3);
-    if (n == 7) pc_error(tmp);
+    if (n == 7 && !sched_in) pc_error(tmp);        /* a replay already knows the answer */
 }
 
 /* predictor_corrector_error, per system over its own coordinates.
@@ -1307,9 +1327,60 @@ static void correct(int n){
  * largest per-coordinate fractional error |tmp/at|, the same shape of
  * estimate its step control uses. A port that implemented only the step
  * control would converge on a different iteration count and diverge at
- * the first step whose corrector stopped one pass earlier. */
+ * the first step whose corrector stopped one pass earlier.
+ *
+ * ON THE DEVICE (ROUND3.md, P2). Every maximum here is REBOUND's, over
+ * the NORMAL values from +0, and on the device it is two calls, as it is
+ * on today's route:
+ *   - cft-fp256's normalabs-<fmt> program: |x| where x is normal, and +0
+ *     everywhere else - zero, subnormal, infinity, NaN - read off the
+ *     encoding with integer instructions, so it raises nothing;
+ *   - CFT_MAXALL over each system's L lanes, through the door's
+ *     vreduce_seg(), which is cft_reduce_seg where the device publishes
+ *     CFT_FEAT_REDUCE_SEG.
+ * A maximum over those values is REBOUND's exactly. A masked lane is +0
+ * and cannot raise it; a system with no normal coordinate gets +0, which
+ * is REBOUND's maxak = 0; and 754's maximum selects an operand, so over
+ * values that hold no NaN it raises nothing. INDIVIDUAL's divide comes
+ * first, as it does on today's route, so its quotients are what the pair
+ * reads.
+ *
+ * Today's route - |x|, a classify, and the host's loop over every
+ * coordinate - is the fallback, wherever engine_routes() put the
+ * reduce_seg family off. The door's own fallback, a cft_reduce a
+ * segment, is not taken here: it costs a round trip a system, where the
+ * host's loop costs none (cft.h, cft_reduce_seg).
+ *
+ * The accounting is the door's. Each maximum over every system is ONE
+ * operation of the reduce_seg family, counted in its calls= on the
+ * device (by vreduce_seg) and in its fallbacks= on today's route (here).
+ * It is two library calls on either route, so calls= does not depend on
+ * the route. The normalabs run is timed in t_elem, with the elementwise
+ * calls it replaces, and is not counted in program_calls, so that key
+ * does not depend on it either: the card-day normalisers keep both. */
+static cft_program *prog_normalabs;
+
+/* d = normalabs(a) over n lanes, one deposit a lane. Any STATUS is a
+ * fault: the program has no scratch, no mark and one deposit. */
+static void normalabs(V d, const V a, size_t n){
+    cft_run_args ra;
+    uint32_t fl = 0, bus = 0;
+    cft_status st;
+    double _t0 = now_s();
+    if (!prog_normalabs) die("pc_error: the device route ran with no normalabs program loaded");
+    memset(&ra, 0, sizeof ra);
+    ra.struct_size = sizeof ra;
+    ra.a = a; ra.n = n; ra.deposits = d; ra.flags_out = &fl; ra.bus_out = &bus;
+    nbytes_staged += (unsigned long long)n * ESZ * 2;
+    st = cft_program_run_ex(prog_normalabs, &ra);
+    t_elem += now_s() - _t0;
+    if (st == CFT_OK && bus) die("normalabs program: STATUS 0x%x, which this program never sets", (unsigned)bus);
+    note(st, fl, "normalabs program");
+}
+
 static void pc_error(const V tmp){
     static V maxak, maxb6, aabs, tabs, fnum, fden, frac; static uint8_t *ca, *ct, *cf;
+    const int device = route_on[ROUTE_REDUCE_SEG];
     if (!maxak){ maxak = valloc(E); maxb6 = valloc(E); aabs = valloc(N3); tabs = valloc(N3); ca = cbytes(N3); ct = cbytes(N3); }
     if (ADAPTIVE_MODE == 0){
         /* errork = fabs(tmp[k]/at[k]), the maximum of the normal ones,
@@ -1329,6 +1400,12 @@ static void pc_error(const V tmp){
             for (size_t k = L * s; k < L * (s + 1); k++){ memcpy(E(fnum, k), K1, ESZ); memcpy(E(fden, k), K1, ESZ); }
         }
         vdiv(frac, fnum, fden, N3);
+        if (device){
+            /* |q| where q is normal, then each system's maximum, into SPCE */
+            normalabs(tabs, frac, N3);
+            vreduce_seg(CFT_MAXALL, SPCE, tabs, NULL, N3, L, "pc_error maximum");
+            return;
+        }
         vabs(frac, frac, N3);
         vclass(cf, frac, N3);
         for (size_t s = 0; s < E; s++){
@@ -1337,22 +1414,70 @@ static void pc_error(const V tmp){
             for (size_t k = L * s; k < L * (s + 1); k++)
                 if (is_normal_class(cf[k]) && bits_gt(E(frac, k), m)) memcpy(m, E(frac, k), ESZ);
         }
+        route_fallbacks[ROUTE_REDUCE_SEG]++;
         return;
     }
-    vabs(aabs, at, N3); vabs(tabs, tmp, N3);
-    vclass(ca, aabs, N3); vclass(ct, tabs, N3);
-    for (size_t s = 0; s < E; s++){
-        V ma = E(maxak, s), mb = E(maxb6, s);
-        if (!pc_active[s]){ memcpy(ma, K1, ESZ); memcpy(mb, K1, ESZ); continue; }   /* unused: a harmless quotient */
-        vzero(ma, 1); vzero(mb, 1);   /* +0, below every normal value, as REBOUND's maxak = 0 */
-        for (size_t k = L * s; k < L * (s + 1); k++){
-            if (is_normal_class(ca[k]) && bits_gt(E(aabs, k), ma)) memcpy(ma, E(aabs, k), ESZ);
-            if (is_normal_class(ct[k]) && bits_gt(E(tabs, k), mb)) memcpy(mb, E(tabs, k), ESZ);
+    if (device){
+        normalabs(aabs, at, N3); normalabs(tabs, tmp, N3);
+        vreduce_seg(CFT_MAXALL, maxak, aabs, NULL, N3, L, "pc_error maximum");
+        vreduce_seg(CFT_MAXALL, maxb6, tabs, NULL, N3, L, "pc_error maximum");
+        for (size_t s = 0; s < E; s++)
+            if (!pc_active[s]){ memcpy(E(maxak, s), K1, ESZ); memcpy(E(maxb6, s), K1, ESZ); }   /* unused: a harmless quotient */
+    }else{
+        vabs(aabs, at, N3); vabs(tabs, tmp, N3);
+        vclass(ca, aabs, N3); vclass(ct, tabs, N3);
+        for (size_t s = 0; s < E; s++){
+            V ma = E(maxak, s), mb = E(maxb6, s);
+            if (!pc_active[s]){ memcpy(ma, K1, ESZ); memcpy(mb, K1, ESZ); continue; }   /* unused: a harmless quotient */
+            vzero(ma, 1); vzero(mb, 1);   /* +0, below every normal value, as REBOUND's maxak = 0 */
+            for (size_t k = L * s; k < L * (s + 1); k++){
+                if (is_normal_class(ca[k]) && bits_gt(E(aabs, k), ma)) memcpy(ma, E(aabs, k), ESZ);
+                if (is_normal_class(ct[k]) && bits_gt(E(tabs, k), mb)) memcpy(mb, E(tabs, k), ESZ);
+            }
         }
+        route_fallbacks[ROUTE_REDUCE_SEG] += 2;
     }
     /* every system's quotient in one call: element s is what system s
      * would get from the scalar divide */
     vdiv(SPCE, maxb6, maxak, E);
+}
+
+/* The image the device route runs, at this run's format: compiled in
+ * (Makefile, $(B)/normalabs_images.h, assembled from the pinned tree),
+ * because the library half has no programs directory to read one from. */
+#include "normalabs_images.h"
+static const struct cft_embedded_image *corrector_image(void){
+    for (size_t i = 0; i < normalabs_images_n; i++)
+        if (!strcmp(normalabs_images[i].format, cft_format_name(F))) return &normalabs_images[i];
+    return NULL;
+}
+static cft_status corrector_load(void){
+    const struct cft_embedded_image *img = corrector_image();
+    if (prog_normalabs) return CFT_OK;
+    if (!img) return CFT_ERR_UNSUPPORTED;
+    return cft_program_load(dev, img->bytes, img->length, &prog_normalabs);
+}
+
+/* Where the routes are decided, in main() and ias15_engine_open() alike.
+ * A device that publishes CFT_FEAT_REDUCE_SEG but refuses the program
+ * the route needs is refused here, by name, as a forced route the device
+ * lacks is - not at the first corrector pass. */
+static int corrector_open(const char *artifact){
+    cft_status st;
+    if (!route_on[ROUTE_REDUCE_SEG]) return 0;
+    st = corrector_load();
+    if (st == CFT_OK) return 0;
+    prog_normalabs = NULL;
+    if (!corrector_image())
+        snprintf(eng_err, sizeof eng_err, "the reduce_seg route is on (by=%s), and this build carries no normalabs-%s "
+                 "image for the corrector's exit test (normalabs_images.h)", route_by[ROUTE_REDUCE_SEG], cft_format_name(F));
+    else
+        snprintf(eng_err, sizeof eng_err, "the reduce_seg route is on (by=%s), and %s refuses the program the corrector's "
+                 "exit test runs there, cft-fp256's normalabs-%s: %s (%s). "
+                 "CFT_REBOUND_ROUTE_REDUCE_SEG=off takes today's route, which needs no program.",
+                 route_by[ROUTE_REDUCE_SEG], artifact ? artifact : "the software backend", cft_format_name(F),
+                 cft_strerror(st), cft_last_error());
+    return -1;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1454,7 +1579,7 @@ static void correct_program(int n){
             memcpy(E(csb[m], k), E(prog_sout, 22 * k + 15 + m), ESZ);
         }
     }
-    if (n == 7) pc_error(prog_dep);
+    if (n == 7 && !sched_in) pc_error(prog_dep);   /* a replay already knows the answer */
 }
 
 /* ------------------------------------------------------------------ */
@@ -2001,6 +2126,123 @@ void ias15_engine_set_force_hook(ias15_engine_force_fn fn, void *user, int veloc
 #endif /* IAS15_CFT_LIBRARY */
 
 /* ------------------------------------------------------------------ */
+/* The corrector's schedule: --record-iters and --replay-iters          */
+/* ------------------------------------------------------------------ */
+/* The unit is the step ATTEMPT, accepted or rejected, in the order they
+ * happen: a schedule keyed on accepted steps would desync at the first
+ * rejection. A line is one attempt and its fields are the systems: the
+ * passes the system took, with c where the cap stopped it - that pass is
+ * what iterations_max_exceeded counts, so a replay must count it too -
+ * or - for a system not in the attempt. */
+static int *sched_want, *sched_cap;
+static long sched_attempts, sched_lineno;
+static const char *sched_path;
+
+/* The schedule's next line, or NULL at its end; comments and empty
+ * lines are skipped unless raw. */
+static char *sched_line(int raw){
+    static char *buf;
+    static size_t cap;
+    for (;;){
+        size_t n = 0;
+        int c;
+        if (!buf){ cap = 256; buf = malloc(cap); if (!buf) die("out of memory"); }
+        while ((c = fgetc(sched_in)) != EOF && c != '\n'){
+            if (n + 2 > cap){ cap *= 2; buf = realloc(buf, cap); if (!buf) die("out of memory"); }
+            buf[n++] = (char)c;
+        }
+        if (c == EOF && n == 0) return NULL;
+        if (n && buf[n - 1] == '\r') n--;
+        buf[n] = 0;
+        sched_lineno++;
+        if (raw || (n && buf[0] != '#')) return buf;
+    }
+}
+
+/* At the top of every attempt. Replaying, this attempt's line is read
+ * and held to the run: a field for every system, a count for exactly the
+ * systems in the attempt, and only counts the test itself could stop at.
+ * Anything else is refused by name, never run. */
+static void sched_begin(void){
+    char *p;
+    if (!sched_want){
+        sched_want = calloc(E, sizeof *sched_want); sched_cap = calloc(E, sizeof *sched_cap);
+        if (!sched_want || !sched_cap) die("out of memory");
+    }
+    sched_attempts++;
+    memset(sched_cap, 0, E * sizeof *sched_cap);
+    if (!sched_in) return;
+    if (!(p = sched_line(0)))
+        die("--replay-iters %s: the schedule ends after %ld step attempts, and this run makes more. "
+            "A schedule replays only the run it was recorded from.", sched_path, sched_attempts - 1);
+    for (size_t s = 0; s < E; s++){
+        char *tok, *end;
+        long n, stop = max_iter > 0 ? max_iter : 0;     /* where the cap stops a system */
+        while (*p == ' ' || *p == '\t') p++;
+        tok = p;
+        while (*p && *p != ' ' && *p != '\t') p++;
+        if (tok == p)
+            die("--replay-iters %s: line %ld, step attempt %ld, has %zu fields, and this run has %zu systems",
+                sched_path, sched_lineno, sched_attempts, s, E);
+        if (*p) *p++ = 0;
+        if (!strcmp(tok, "-")){
+            if (active[s])
+                die("--replay-iters %s: line %ld says system %zu was not in step attempt %ld, and it is",
+                    sched_path, sched_lineno, s, sched_attempts);
+            continue;
+        }
+        n = strtol(tok, &end, 10);
+        if (*tok < '0' || *tok > '9' || end - tok > 6 || (*end && strcmp(end, "c")))
+            die("--replay-iters %s: line %ld, field %zu: '%s' is not a pass count", sched_path, sched_lineno, s + 1, tok);
+        if (!active[s])
+            die("--replay-iters %s: line %ld gives system %zu %s in step attempt %ld, and it is not in that attempt",
+                sched_path, sched_lineno, s, tok, sched_attempts);
+        sched_cap[s] = *end == 'c';
+        if (sched_cap[s] && n != stop)
+            die("--replay-iters %s: line %ld says the cap stopped system %zu after %ld passes, and at --max-iter %d "
+                "the cap stops a system after %ld", sched_path, sched_lineno, s, n, max_iter, stop);
+        if (!sched_cap[s] && (n < 1 || n > max_iter))
+            die("--replay-iters %s: line %ld gives system %zu %ld passes, and a system the cap did not stop leaves "
+                "the corrector after 1 to %d", sched_path, sched_lineno, s, n, max_iter);
+        sched_want[s] = (int)n;
+    }
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p)
+        die("--replay-iters %s: line %ld, step attempt %ld, has more than %zu fields, and this run has %zu systems",
+            sched_path, sched_lineno, sched_attempts, E, E);
+}
+
+/* One pass's decisions, replayed in place of the test: a system leaves
+ * the corrector once it has run the recording's passes, and a cap the
+ * recording hit is counted as it was there. It is the same save_system()
+ * at the same pass as the test made, so an ensemble's masking is the
+ * recording's as well. */
+static int sched_pass(void){
+    int any = 0;
+    for (size_t s = 0; s < E; s++){
+        if (!pc_active[s]) continue;
+        if (iters[s] >= sched_want[s]){
+            if (sched_cap[s]) max_exceeded[s]++;
+            pc_active[s] = 0; save_system(s);
+            continue;
+        }
+        iters[s]++;
+        any = 1;
+    }
+    return any;
+}
+
+/* At the end of every attempt, recording: its line. */
+static void sched_end(void){
+    for (size_t s = 0; s < E; s++){
+        if (s) fputc(' ', sched_out);
+        if (!active[s]) fputc('-', sched_out);
+        else fprintf(sched_out, "%d%s", iters[s], sched_cap[s] ? "c" : "");
+    }
+    fputc('\n', sched_out);
+}
+
+/* ------------------------------------------------------------------ */
 /* One attempt at a step, for every active system at once:             */
 /* REBOUND's reb_integrator_ias15_step_try                              */
 /* ------------------------------------------------------------------ */
@@ -2039,31 +2281,35 @@ static void step_attempt(void){
         iters[s] = 0;
         pc_active[s] = active[s];
     }
+    if (sched_in || sched_out) sched_begin();      /* a replay's passes for this attempt, or refused */
     static V P_TOL, P_STALL; if (!P_TOL){ P_TOL = valloc(E); P_STALL = valloc(E); }
     int npass = 0;
     while (1){
         int any = 0;
-        /* the two exit tests for every system at once; each element is
-         * the scalar compare the system would issue alone */
-        vcmplt(P_TOL, SPCE, TOL, E);
-        vcmple(P_STALL, SPCELAST, SPCE, E);
-        for (size_t s = 0; s < E; s++){
-            if (!pc_active[s]) continue;
-            V pce = E(SPCE, s), pce_last = E(SPCELAST, s);
-            if (trace_pc && s == 0 && iters[s] > 0){
-                char buf[160]; size_t len = 0;
-                cft_to_decimal_char(dev, F, CFT_RNE, pce, 6, buf, sizeof buf, &len, NULL);
-                fprintf(stderr, "  step %ld iteration %d: predictor_corrector_error %s\n", steps_traced, iters[s], buf);
+        if (sched_in) any = sched_pass();          /* the recording's decisions, and no test */
+        else{
+            /* the two exit tests for every system at once; each element is
+             * the scalar compare the system would issue alone */
+            vcmplt(P_TOL, SPCE, TOL, E);
+            vcmple(P_STALL, SPCELAST, SPCE, E);
+            for (size_t s = 0; s < E; s++){
+                if (!pc_active[s]) continue;
+                V pce = E(SPCE, s), pce_last = E(SPCELAST, s);
+                if (trace_pc && s == 0 && iters[s] > 0){
+                    char buf[160]; size_t len = 0;
+                    cft_to_decimal_char(dev, F, CFT_RNE, pce, 6, buf, sizeof buf, &len, NULL);
+                    fprintf(stderr, "  step %ld iteration %d: predictor_corrector_error %s\n", steps_traced, iters[s], buf);
+                }
+                int stop = 0;
+                if (pred_at(P_TOL, s)) stop = 1;
+                else if (iters[s] > 2 && pred_at(P_STALL, s)) stop = 1;
+                else if (iters[s] >= max_iter){ max_exceeded[s]++; if (sched_out) sched_cap[s] = 1; stop = 1; }
+                if (stop){ pc_active[s] = 0; save_system(s); continue; }
+                vcopy(pce_last, pce, 1);
+                vzero(pce, 1);
+                iters[s]++;
+                any = 1;
             }
-            int stop = 0;
-            if (pred_at(P_TOL, s)) stop = 1;
-            else if (iters[s] > 2 && pred_at(P_STALL, s)) stop = 1;
-            else if (iters[s] >= max_iter){ max_exceeded[s]++; stop = 1; }
-            if (stop){ pc_active[s] = 0; save_system(s); continue; }
-            vcopy(pce_last, pce, 1);
-            vzero(pce, 1);
-            iters[s]++;
-            any = 1;
         }
         if (!any) break;
         npass++;
@@ -2086,6 +2332,7 @@ static void step_attempt(void){
         /* a system that left the corrector keeps the state it left with */
         for (size_t s = 0; s < E; s++) if (active[s] && !pc_active[s]) restore_system(s);
     }
+    if (sched_out) sched_end();
     if (trace_pc){ steps_traced++; if (steps_traced >= trace_pc) trace_pc = 0; }
     for (size_t s = 0; s < E; s++){
         if (!active[s]) continue;
@@ -2722,6 +2969,351 @@ static int door_refuse(const char *name){
     return 1;
 }
 
+/* --corrector-selftest (ROUND3.md, P2): pc_error() on both of its routes,
+ * held to a REFERENCE computed here from REBOUND's definition
+ * (integrator_ias15.c:580-598) with libcft's own abs, classify, compare
+ * and divide, called directly - nothing pc_error() calls on either
+ * route. So a defect the two routes share is as visible as one between
+ * them.
+ *
+ * Why it exists. The exit test reads only pce < tolerance and whether
+ * pce stopped falling, and values far below the tolerance - +0, -0, a
+ * subnormal - all pass the first. A route that broke the +0 identity or
+ * let a subnormal through would leave every record and pass count as it
+ * was on any problem the suite integrates: inert by construction. The
+ * error's own bits are what can see those, so this holds the bits.
+ *
+ * The data is an ensemble whose systems are the cases. Each crafted one
+ * is where one property of the device route shows:
+ *   - no normal coordinate in at, in tmp, or in either: the +0 identity;
+ *   - only subnormals and zeros in tmp or in at, and infinities and NaNs
+ *     beside normals: the normal-only mask;
+ *   - systems that have left the corrector, with lanes that would raise
+ *     flags and lanes that would not: the 1/1 they are given;
+ *   - a subnormal beside normals, which cannot win a maximum: the inert
+ *     case, there so that it is not taken for a test of the mask.
+ * Then random systems, every class at random and a fifth of them out of
+ * the corrector. Every value is made by libcft's own parser and its class
+ * is counted by cft_class, so the data checks itself. Every mode runs on
+ * both routes, and each call's accounting is held: the same calls= on
+ * both, and one reduce_seg operation per maximum on the counter meant.
+ * The image the device route loaded is printed through
+ * cft_program_digest() for tools/check_corrector.py to hold to the pinned
+ * MANIFEST. */
+enum { CS_NORM, CS_TINY, CS_ONE, CS_PZ, CS_NZ, CS_PSUB, CS_NSUB, CS_PINF, CS_NINF, CS_QNAN, CS_SNAN, CS_NCLS };
+static const struct {
+    const char *what;
+    int left;                          /* 1: the system has left the corrector */
+    signed char at[6], tmp[6];         /* each lane's class; the systems are two bodies */
+} cs_cases[] = {
+    { "every coordinate normal", 0,
+      { CS_NORM, CS_NORM, CS_NORM, CS_NORM, CS_NORM, CS_NORM }, { CS_TINY, CS_TINY, CS_TINY, CS_TINY, CS_TINY, CS_TINY } },
+    { "no normal coordinate in at (the +0 identity)", 0,
+      { CS_PZ, CS_NZ, CS_PZ, CS_NZ, CS_NZ, CS_PZ }, { CS_TINY, CS_TINY, CS_TINY, CS_TINY, CS_TINY, CS_TINY } },
+    { "no normal coordinate in tmp (the +0 identity)", 0,
+      { CS_NORM, CS_NORM, CS_NORM, CS_NORM, CS_NORM, CS_NORM }, { CS_NZ, CS_PZ, CS_NZ, CS_NZ, CS_PZ, CS_PZ } },
+    { "no normal coordinate in either (the +0 identity)", 0,
+      { CS_PZ, CS_PZ, CS_NZ, CS_PZ, CS_NZ, CS_NZ }, { CS_NZ, CS_PZ, CS_PZ, CS_NZ, CS_PZ, CS_NZ } },
+    { "tmp only subnormal or zero (normal-only)", 0,
+      { CS_ONE, CS_ONE, CS_ONE, CS_ONE, CS_ONE, CS_ONE }, { CS_PSUB, CS_NZ, CS_NSUB, CS_PZ, CS_PSUB, CS_NSUB } },
+    { "at only subnormal or zero (normal-only)", 0,
+      { CS_PSUB, CS_NSUB, CS_PZ, CS_NSUB, CS_NZ, CS_PSUB }, { CS_TINY, CS_TINY, CS_TINY, CS_TINY, CS_TINY, CS_TINY } },
+    { "infinities and NaNs beside normal coordinates (normal-only)", 0,
+      { CS_NORM, CS_PINF, CS_NORM, CS_QNAN, CS_NINF, CS_SNAN }, { CS_TINY, CS_QNAN, CS_NINF, CS_TINY, CS_PINF, CS_SNAN } },
+    { "a subnormal beside normal coordinates (inert: it cannot win)", 0,
+      { CS_NORM, CS_PSUB, CS_NORM, CS_NORM, CS_NSUB, CS_NORM }, { CS_TINY, CS_NSUB, CS_TINY, CS_PSUB, CS_TINY, CS_TINY } },
+    { "left the corrector, every coordinate zero (1/1)", 1,
+      { CS_PZ, CS_NZ, CS_PZ, CS_PZ, CS_NZ, CS_PZ }, { CS_PZ, CS_PZ, CS_NZ, CS_NZ, CS_PZ, CS_NZ } },
+    { "left the corrector, every coordinate normal (1/1)", 1,
+      { CS_NORM, CS_NORM, CS_NORM, CS_NORM, CS_NORM, CS_NORM }, { CS_TINY, CS_TINY, CS_TINY, CS_TINY, CS_TINY, CS_TINY } },
+    { "left the corrector, infinities, NaNs and subnormals (1/1)", 1,
+      { CS_PINF, CS_QNAN, CS_NZ, CS_NINF, CS_PSUB, CS_SNAN }, { CS_QNAN, CS_PINF, CS_PZ, CS_SNAN, CS_NINF, CS_NSUB } },
+};
+static uint64_t cs_lcg = 0x2545f4914f6cdd1dull;
+static uint64_t cs_next(void){ cs_lcg = cs_lcg * 2862933555777941757ull + 3037000493ull; return cs_lcg >> 11; }
+
+/* One value of a class, through libcft's own parser. */
+static void cs_value(V dst, int cls){
+    char text[96];
+    const char *sign = (cs_next() & 1) ? "-" : "";
+    size_t k = 8 * ESZ, m = 0;
+    long emin;
+    while ((k >> m) > 1) m++;
+    emin = 2 - (1L << (4 * m - 13 - 1));         /* 754-2019 3.6: w = 4 log2 k - 13 */
+    switch (cls){
+    case CS_NORM: case CS_TINY: {
+        size_t l = (size_t)snprintf(text, sizeof text, "%s0x1.", sign);
+        for (int i = 0; i < 60; i++) text[l++] = "0123456789abcdef"[cs_next() & 15];
+        snprintf(text + l, sizeof text - l, "p%ld", cls == CS_NORM ? (long)(cs_next() % 17) - 8 : -30 - (long)(cs_next() % 21));
+        break;
+    }
+    case CS_ONE:  snprintf(text, sizeof text, "%s0x1p+%d", sign, (int)(cs_next() & 1)); break;
+    case CS_PZ:   snprintf(text, sizeof text, "0x0p+0"); break;
+    case CS_NZ:   snprintf(text, sizeof text, "-0x0p+0"); break;
+    case CS_PSUB: case CS_NSUB:
+        snprintf(text, sizeof text, "%s0x1.%04xp%ld", cls == CS_NSUB ? "-" : "", (unsigned)(cs_next() & 0xffff),
+                 emin - 1 - (long)(cs_next() % 24));
+        break;
+    case CS_PINF: snprintf(text, sizeof text, "inf"); break;
+    case CS_NINF: snprintf(text, sizeof text, "-inf"); break;
+    case CS_QNAN: snprintf(text, sizeof text, "%snan", sign); break;
+    default:      snprintf(text, sizeof text, "snan"); break;
+    }
+    {
+        const char *in[1] = { text };
+        size_t bad = 0;
+        uint32_t fl = 0;
+        if (cft_from_hex_char(dev, F, CFT_RNE, in, dst, 1, &bad, &fl) != CFT_OK)
+            die("corrector: libcft would not read %s: %s", text, cft_last_error());
+    }
+}
+
+/* m = |v| where |v| is normal and above m: libcft's abs, classify and
+ * compare, one element each. */
+static void cs_max_normal(V m, const V v){
+    unsigned char a[32], lt[32];
+    uint8_t c = 0;
+    uint32_t fl = 0;
+    if (cft_run(dev, CFT_ABS, F, CFT_RNE, v, NULL, NULL, a, 1, &fl, NULL) != CFT_OK ||
+        cft_class(dev, F, a, &c, 1) != CFT_OK) die("corrector: the reference failed: %s", cft_last_error());
+    if (c != CFT_CLASS_POS_NORM) return;
+    if (cft_run(dev, CFT_CMPLT, F, CFT_RNE, m, a, NULL, lt, 1, &fl, NULL) != CFT_OK)
+        die("corrector: the reference failed: %s", cft_last_error());
+    for (size_t i = 0; i < ESZ; i++) if (lt[i]){ memcpy(m, a, ESZ); return; }
+}
+
+/* REBOUND's error for every system, and the flags its divide raises: the
+ * maxima's quotient, or INDIVIDUAL's maximum quotient. A system out of
+ * the corrector divides 1 by 1, as pc_error() gives it. */
+static uint32_t cs_reference(int individual, const V tmp_, V ref){
+    V num = valloc(N3), den = valloc(N3), q = valloc(N3);
+    uint32_t fr = 0;
+    for (size_t s = 0; s < E; s++){
+        if (individual){
+            for (size_t k = L * s; k < L * (s + 1); k++){
+                memcpy(E(num, k), pc_active[s] ? E(tmp_, k) : K1, ESZ);
+                memcpy(E(den, k), pc_active[s] ? E(at, k) : K1, ESZ);
+            }
+            continue;
+        }
+        memset(E(num, s), 0, ESZ); memset(E(den, s), 0, ESZ);
+        if (!pc_active[s]){ memcpy(E(num, s), K1, ESZ); memcpy(E(den, s), K1, ESZ); continue; }
+        for (size_t k = L * s; k < L * (s + 1); k++){ cs_max_normal(E(den, s), E(at, k)); cs_max_normal(E(num, s), E(tmp_, k)); }
+    }
+    if (cft_div(dev, F, CFT_RNE, num, den, individual ? q : ref, individual ? N3 : E, &fr, NULL) != CFT_OK)
+        die("corrector: the reference divide failed: %s", cft_last_error());
+    if (individual)
+        for (size_t s = 0; s < E; s++){
+            memset(E(ref, s), 0, ESZ);
+            for (size_t k = L * s; k < L * (s + 1); k++) cs_max_normal(E(ref, s), E(q, k));
+        }
+    free(num); free(den); free(q);
+    return fr;
+}
+
+/* pc_error() on one route, with SPCE first filled with a pattern no
+ * route writes, and the call's accounting. */
+static uint32_t cs_route(int device, int mode, const V tmp_, V out, unsigned long long cnt[4]){
+    unsigned long long c0 = ncalls, r0 = route_calls[ROUTE_REDUCE_SEG], f0 = route_fallbacks[ROUTE_REDUCE_SEG];
+    unsigned long long d0 = ncalls_divsqrt;
+    ADAPTIVE_MODE = mode;
+    route_on[ROUTE_REDUCE_SEG] = device;
+    memset(SPCE, 0xa5, E * ESZ);
+    flags_union = 0;
+    pc_error(tmp_);
+    memcpy(out, SPCE, E * ESZ);
+    cnt[0] = ncalls - c0;
+    cnt[1] = route_calls[ROUTE_REDUCE_SEG] - r0;
+    cnt[2] = route_fallbacks[ROUTE_REDUCE_SEG] - f0;
+    cnt[3] = ncalls_divsqrt - d0;
+    return flags_union;
+}
+
+static int corrector_selftest(const char *artifact){
+    const size_t ncase = sizeof cs_cases / sizeof cs_cases[0], nrand = 53;
+    static const char *cls_name[] = { "normal", "+0", "-0", "subnormal", "infinite", "NaN" };
+    unsigned long long cls_count[6] = { 0 }, cnt[2][4];
+    int same = 0, differ = 0, skipped = 0, flags_bad = 0, counts_bad = 0, controls = 0, controls_ok = 0, left = 0;
+    const int have = route_have[ROUTE_REDUCE_SEG];
+    flag_abort = 0;                    /* the data divides by zero and NaN on purpose */
+    E = ncase + nrand; N = 2; NB = E * N; N3 = 3 * NB; L = 3 * N;
+    NMAX = N3 > 8 ? N3 : 8;
+    K1 = kint(1);
+    at = valloc(N3); SPCE = valloc(E);
+    pc_active = calloc(E, sizeof *pc_active);
+    if (!pc_active) die("out of memory");
+    V tmp_ = valloc(N3), ref = valloc(E), out[2] = { valloc(E), valloc(E) };
+    printf("corrector: %s on %s, %zu systems of %zu lanes\n", cft_format_name(F),
+           artifact ? artifact : "the software backend", E, L);
+    printf("corrector route %s=%s by=%s env=%s\n", route_def[ROUTE_REDUCE_SEG].name, route_on[ROUTE_REDUCE_SEG] ? "on" : "off",
+           route_by[ROUTE_REDUCE_SEG], route_def[ROUTE_REDUCE_SEG].env);
+    if (have){
+        uint8_t dg[32];
+        cft_status st = corrector_load();
+        if (st != CFT_OK) die("corrector: %s refuses the normalabs-%s image: %s (%s)", artifact ? artifact : "the software backend",
+                              cft_format_name(F), cft_strerror(st), cft_last_error());
+        if (cft_program_digest(prog_normalabs, NULL, 0, dg) != CFT_OK) die("corrector: cft_program_digest: %s", cft_last_error());
+        printf("corrector image normalabs-%s sha256=", cft_format_name(F));
+        for (int i = 0; i < 32; i++) printf("%02x", dg[i]);
+        printf("\n");
+    }else printf("corrector image: none loaded, because the reduce_seg route is %s here\n", route_by[ROUTE_REDUCE_SEG]);
+    for (size_t s = 0; s < E; s++){
+        int lft = s < ncase ? cs_cases[s].left : (cs_next() % 5) == 0;
+        pc_active[s] = !lft;
+        left += lft;
+        for (size_t j = 0; j < L; j++){
+            int ca, ct;
+            if (s < ncase){ ca = cs_cases[s].at[j]; ct = cs_cases[s].tmp[j]; }
+            else{
+                static const signed char pick[16] = { CS_NORM, CS_NORM, CS_NORM, CS_NORM, CS_NORM, CS_NORM, CS_NORM, CS_TINY,
+                                                      CS_PZ, CS_NZ, CS_PSUB, CS_NSUB, CS_PINF, CS_NINF, CS_QNAN, CS_SNAN };
+                ca = pick[cs_next() % 16]; ct = pick[cs_next() % 16];
+            }
+            cs_value(E(at, L * s + j), ca);
+            cs_value(E(tmp_, L * s + j), ct);
+        }
+    }
+    {   /* the data's classes, as libcft classifies them */
+        uint8_t *cl = cbytes(N3);
+        for (int v = 0; v < 2; v++){
+            if (cft_class(dev, F, v ? tmp_ : at, cl, N3) != CFT_OK) die("corrector: cft_class: %s", cft_last_error());
+            for (size_t k = 0; k < N3; k++){
+                int c = cl[k];
+                cls_count[c == CFT_CLASS_POS_NORM || c == CFT_CLASS_NEG_NORM ? 0 : c == CFT_CLASS_POS_ZERO ? 1 :
+                          c == CFT_CLASS_NEG_ZERO ? 2 : c == CFT_CLASS_POS_SUB || c == CFT_CLASS_NEG_SUB ? 3 :
+                          c == CFT_CLASS_POS_INF || c == CFT_CLASS_NEG_INF ? 4 : 5]++;
+            }
+        }
+        free(cl);
+        printf("corrector data:");
+        for (int c = 0; c < 6; c++) printf(" %s %llu%s", cls_name[c], cls_count[c], c < 5 ? "," : ";");
+        printf(" %d of %zu systems out of the corrector\n", left, E);
+    }
+    for (int mode = 0; mode < 4; mode++){
+        const unsigned long long M = mode == 0 ? 1 : 2;   /* maxima a pass: INDIVIDUAL's one, or maxak and maxb6 */
+        uint32_t fr = cs_reference(mode == 0, tmp_, ref), f[2] = { 0, 0 };
+        for (int device = 1; device >= 0; device--){
+            const char *rname = device ? "the device route" : "today's route";
+            int bad = 0;
+            if (device && !have){ skipped++; printf("skip mode %d on the device route: reduce_seg is %s\n", mode, route_by[ROUTE_REDUCE_SEG]); continue; }
+            f[device] = cs_route(device, mode, tmp_, out[device], cnt[device]);
+            for (size_t s = 0; s < E; s++){
+                char h1[160], h2[160];
+                size_t len;
+                if (!memcmp(E(out[device], s), E(ref, s), ESZ)) continue;
+                bad++;
+                if (cft_to_hex_char(dev, F, E(out[device], s), h1, sizeof h1, &len) != CFT_OK) snprintf(h1, sizeof h1, "(no hex)");
+                if (cft_to_hex_char(dev, F, E(ref, s), h2, sizeof h2, &len) != CFT_OK) snprintf(h2, sizeof h2, "(no hex)");
+                printf("DIFF mode %d, %s, system %zu (%s): %s where the reference is %s\n", mode, rname, s,
+                       s < ncase ? cs_cases[s].what : pc_active[s] ? "random" : "random, out of the corrector", h1, h2);
+            }
+            if (f[device] != fr){
+                flags_bad++;
+                printf("DIFF mode %d, %s: flags 0x%02x where the reference raises 0x%02x\n", mode, rname, (unsigned)f[device], (unsigned)fr);
+            }
+            if (bad || f[device] != fr){ differ++; continue; }
+            same++;
+            printf("ok   mode %d, %s: all %zu systems equal the reference, flags 0x%02x\n", mode, rname, E, (unsigned)fr);
+            if (cnt[device][1] != (device ? M : 0) || cnt[device][2] != (device ? 0 : M)){
+                counts_bad++;
+                printf("COUNT mode %d, %s: the route's calls moved %llu and its fallbacks %llu (wanted %llu and %llu)\n", mode, rname,
+                       cnt[device][1], cnt[device][2], device ? M : 0, device ? 0 : M);
+            }
+        }
+        if (have && (cnt[0][0] != cnt[1][0] || cnt[0][3] != cnt[1][3])){
+            counts_bad++;
+            printf("COUNT mode %d: calls= moved %llu and divsqrt_calls= %llu on the device route, %llu and %llu on today's\n",
+                   mode, cnt[1][0], cnt[1][3], cnt[0][0], cnt[0][3]);
+        }else if (have) printf("ok   mode %d: calls= moved %llu and divsqrt_calls= %llu on each route\n", mode, cnt[1][0], cnt[1][3]);
+    }
+    /* The controls: each comparison above can see a change. One coordinate
+     * of the first system raised to 1, past every other, must move its
+     * error, on the device route at both of pc_error()'s two shapes. */
+    if (have){
+        unsigned char keep[32];
+        memcpy(keep, E(tmp_, 0), ESZ);
+        for (int mode = 0; mode < 3; mode += 2){
+            controls++;
+            cs_route(1, mode, tmp_, out[0], cnt[0]);
+            memcpy(E(tmp_, 0), K1, ESZ);
+            cs_route(1, mode, tmp_, out[1], cnt[1]);
+            memcpy(E(tmp_, 0), keep, ESZ);
+            if (memcmp(E(out[0], 0), E(out[1], 0), ESZ)){
+                controls_ok++;
+                printf("control ok   mode %d: one coordinate of tmp raised to 1 moves system 0's error, as it must\n", mode);
+            }else printf("CONTROL FAILED mode %d: system 0's error did not move, so this comparison cannot see a difference\n", mode);
+        }
+    }
+    printf("corrector: %d identical, %d differ, %d not compared, %d flag differences, %d accounting errors; controls %d of %d\n",
+           same, differ, skipped, flags_bad, counts_bad, controls_ok, controls);
+    free(tmp_); free(ref); free(out[0]); free(out[1]);
+    return differ || flags_bad || counts_bad || controls_ok != controls || !same ? 1 : 0;
+}
+
+/* The run a corrector schedule belongs to, as one line: everything that
+ * decides a pass count, and a hash of the initial state, so that two
+ * problems of one name cannot share a schedule. The backend is not in it:
+ * the software backend and a card give the same bits, so a schedule
+ * recorded on one replays on the other - which is the card day's
+ * comparison (ROUND3.md, "The card day", item 4). */
+static void sched_key(char *out, size_t cap, long steps, long sample, int tol_shift){
+    const V val[5] = { E(SDT, 0), EPS, SOFT2, SMINDT, G };
+    char h[5][160];
+    uint64_t hs = CFT_DIGEST_SEED;
+    size_t len;
+    for (int i = 0; i < 5; i++)
+        if (cft_to_hex_char(dev, F, val[i], h[i], sizeof h[i], &len) != CFT_OK) die("to_hex: %s", cft_last_error());
+    for (size_t k = 0; k < NB * ESZ; k++){ hs ^= mass[k]; hs *= 1099511628211ULL; }
+    for (size_t k = 0; k < N3 * ESZ; k++){ hs ^= X0[k]; hs *= 1099511628211ULL; hs ^= V0[k]; hs *= 1099511628211ULL; }
+    for (long i = 0; i < ndtlist; i++)
+        for (size_t k = 0; k < ESZ; k++){ hs ^= dtlist[i][k]; hs *= 1099511628211ULL; }
+    snprintf(out, cap, "format=%s problem=%s E=%zu N=%zu member=%d steps=%ld sample=%ld adaptive_mode=%d max_iter=%d "
+             "pc_tol_shift=%d cs=%s arith=%s engine=%s dt0=%s epsilon=%s softening2=%s min_dt=%s G=%s dt_file=%s state=%016llx",
+             cft_format_name(F), problem_name, E, N, member, steps, sample, ADAPTIVE_MODE, max_iter, tol_shift,
+             cs_augmented ? "augmented" : "kahan", arith_fma ? "fma" : "rebound", engine_program ? "program" : "loop",
+             h[0], h[1], h[2], h[3], h[4], dtlist ? "yes" : "no", (unsigned long long)hs);
+}
+
+static void sched_open(const char *rec, const char *play, const char *key, int quiet){
+    if (rec){
+        if (!(sched_out = fopen(rec, "w"))){ perror(rec); exit(2); }
+        fprintf(sched_out, "# cft-rebound corrector schedule v1\n# run %s\n"
+                "# a line a step attempt, a field a system: the corrector passes it took, c where the cap "
+                "stopped it, - where it was not in the attempt\n", key);
+    }
+    if (play){
+        char *l;
+        if (!(sched_in = fopen(play, "r"))){ perror(play); exit(2); }
+        sched_path = play;
+        l = sched_line(1);
+        if (!l || strcmp(l, "# cft-rebound corrector schedule v1"))
+            die("--replay-iters %s is not a corrector schedule: its first line is not \"# cft-rebound corrector "
+                "schedule v1\"", play);
+        l = sched_line(1);
+        if (!l || strncmp(l, "# run ", 6) || strcmp(l + 6, key))
+            die("--replay-iters %s was recorded from a different run, and a schedule replays only its own.\n"
+                "  it was recorded from: %s\n  this run is:          %s",
+                play, l && !strncmp(l, "# run ", 6) ? l + 6 : "(no run line)", key);
+        if (!quiet) fprintf(stderr, "replaying the corrector schedule %s: no predictor-corrector error and no exit test "
+                            "is computed\n", play);
+    }
+}
+
+/* After the last attempt. A replay that leaves lines unread was given a
+ * schedule for a longer run, and is refused as one that runs short is. */
+static void sched_close(void){
+    if (sched_in){
+        if (sched_line(0))
+            die("--replay-iters %s: this run made %ld step attempts, and the schedule holds more (line %ld). "
+                "A schedule replays only the run it was recorded from.", sched_path, sched_attempts, sched_lineno);
+        fclose(sched_in); sched_in = NULL;
+    }
+    if (sched_out){
+        if (fclose(sched_out)) die("--record-iters: the schedule could not be written");
+        sched_out = NULL;
+    }
+}
+
 int main(int argc, char **argv){
     const char *problem = NULL, *artifact = NULL, *fmtname = "fp64", *dt_file = NULL, *dt_out_path = NULL;
     const char *door_refuse_case = NULL;   /* --door-refuse NAME */
@@ -2731,8 +3323,9 @@ int main(int argc, char **argv){
     const char *soft_txt = NULL;   /* --softening; NULL is +0, which is
                                     * the addend the port always issued */
     const char *dt_txt = "0.01", *eps_txt = "1e-9";
+    const char *iters_out = NULL, *iters_in = NULL;   /* --record-iters, --replay-iters */
     long steps = 1000, sample = 100;
-    int tol_shift = -1, quiet = 0, do_dump = 0, do_probe = 0, do_door = 0;
+    int tol_shift = -1, quiet = 0, do_dump = 0, do_probe = 0, do_door = 0, do_corr = 0;
     for (int i = 1; i < argc; i++){
         if (!strcmp(argv[i], "--format") && i + 1 < argc) fmtname = argv[++i];
         else if (!strcmp(argv[i], "--problem") && i + 1 < argc) problem = argv[++i];
@@ -2763,6 +3356,9 @@ int main(int argc, char **argv){
         else if (!strcmp(argv[i], "--pc-tol-shift") && i + 1 < argc) tol_shift = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--max-iter") && i + 1 < argc) max_iter = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--trace-pc") && i + 1 < argc) trace_pc = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--record-iters") && i + 1 < argc) iters_out = argv[++i];
+        else if (!strcmp(argv[i], "--replay-iters") && i + 1 < argc) iters_in = argv[++i];
+        else if (!strcmp(argv[i], "--corrector-selftest")) do_corr = 1;
         else if (!strcmp(argv[i], "--arith") && i + 1 < argc){ const char *m = argv[++i]; if (!strcmp(m, "rebound")) arith_fma = 0; else if (!strcmp(m, "fma")) arith_fma = 1; else die("--arith rebound|fma"); }
         else if (!strcmp(argv[i], "--engine") && i + 1 < argc){ const char *m = argv[++i]; if (!strcmp(m, "loop")) engine_program = 0; else if (!strcmp(m, "program")) engine_program = 1; else die("--engine loop|program"); }
         else if (!strcmp(argv[i], "--programs") && i + 1 < argc) programs_dir = argv[++i];
@@ -2782,6 +3378,10 @@ int main(int argc, char **argv){
     else if (!strcmp(fmtname, "fp128")){ F = CFT_FP128; FI = 1; if (tol_shift < 0) tol_shift = 113 - 53; }
     else if (!strcmp(fmtname, "fp256")){ F = CFT_FP256; FI = 2; if (tol_shift < 0) tol_shift = 237 - 53; }
     else die("--format fp64|fp128|fp256");
+    if (iters_in && iters_out)
+        die("--record-iters and --replay-iters together: a replay computes no exit test, so it has no schedule of its own to record");
+    if (iters_in && trace_pc)
+        die("--trace-pc and --replay-iters together: a replay computes no predictor-corrector error to trace");
     ESZ = cft_format_size(F);
     /* No --artifact? Let the environment name one, the same rule the
      * registered integrator and cft_rebound_steps() use. This is what
@@ -2801,12 +3401,14 @@ int main(int argc, char **argv){
     engine_identity();
     if (do_door){ int rc = door_selftest(artifact); cft_close(dev); return rc; }
     if (door_refuse_case){ int rc = door_refuse(door_refuse_case); cft_close(dev); return rc; }
+    if (do_corr){ int rc = corrector_selftest(artifact); cft_close(dev); return rc; }
     if (!problem){
         if (do_dump){ NMAX = 8; make_constants(tol_shift, quiet); dump_constants(); return 0; }
         die("usage: ias15_cft --format F --problem FILE [--dt DT] [--epsilon EPS] [--steps N] [--sample K] [--cs kahan|augmented] [--member K] [--dt-file FILE]");
     }
     if (engine_program && !arith_fma) die("--engine program needs --arith fma: a correctly rounded divide is not a sequencer program (cft-fp256 docs/ORBITS.md)");
     if (engine_program && cs_augmented) die("--engine program carries Kahan's add_cs only; --cs augmented is a host operation");
+    if (corrector_open(artifact)) die("%s", eng_err);
     /* The criterion is known by now, so narrow what aborts. INDIVIDUAL
      * divides by at[k] for every coordinate and GLOBAL by |x|^2, and
      * both quantities are legitimately zero - a planar problem, a
@@ -2868,6 +3470,11 @@ int main(int argc, char **argv){
     vzero(SDTLAST, E); vzero(STPLAIN, E); vzero(STHI, E); vzero(STLO, E);
     vzero(gcs, N3);
     for (int m = 0; m < 7; m++){ vzero(g[m], N3); vzero(b[m], N3); vzero(e[m], N3); vzero(csb[m], N3); vzero(er[m], N3); vzero(br[m], N3); }
+    if (iters_out || iters_in){
+        char key[1536];
+        sched_key(key, sizeof key, steps, sample, tol_shift);
+        sched_open(iters_out, iters_in, key, quiet);
+    }
 
     if (E == 1) printf("# cft-rebound ias15 record v1\n");
     else        printf("# cft-rebound ias15 ensemble record v1\n");
@@ -2931,6 +3538,7 @@ int main(int argc, char **argv){
         blocks_done = target;
         k++;
     }
+    sched_close();
     double secs = (double)(clock() - c0) / CLOCKS_PER_SEC;
     long rej_all = 0, mx_all = 0, att_all = 0; unsigned long long pc_all = 0; int pcmax_all = 0;
     for (size_t s = 0; s < E; s++){
@@ -3033,6 +3641,12 @@ int ias15_engine_open(int fmt, const char *artifact){
      * way as an absent format, with its own sentence in
      * ias15_engine_error(). */
     if (engine_routes(artifact)){
+        cft_close(dev); dev = NULL;
+        return -4;
+    }
+    /* and the program the corrector's exit test runs on the device, which
+     * a device that publishes the route's bit may still refuse (pc_error) */
+    if (corrector_open(artifact)){
         cft_close(dev); dev = NULL;
         return -4;
     }
