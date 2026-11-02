@@ -246,8 +246,8 @@ $(B)/cft_rebound_run.o: src/cft_rebound_run.c include/cft_rebound.h src/hexfloat
 $(B)/libcft_rebound.a: $(B)/cft_rebound_run.o $(B)/cft_supported.o
 	ar rcs $@ $^
 
-$(B)/ias15_cft$(EXE): src/ias15_cft.c src/ias15_constants.h src/hexfloat.h src/ias15_limits.h $(CFTLIB)
-	$(CC) $(CSTD) $(CFLAGS) $(WARN) -I$(CFT)/include -o $@ src/ias15_cft.c $(CFTLIB) $(LIBS)
+$(B)/ias15_cft$(EXE): src/ias15_cft.c src/ias15_constants.h src/hexfloat.h src/ias15_limits.h $(B)/normalabs_images.h $(CFTLIB)
+	$(CC) $(CSTD) $(CFLAGS) $(WARN) -Isrc -I$(B) -I$(CFT)/include -o $@ src/ias15_cft.c $(CFTLIB) $(LIBS)
 
 # ---------------------------------------------------------------------
 # The drop-in: the same engine compiled as a library (no main) plus the
@@ -262,9 +262,9 @@ $(B)/ias15_cft$(EXE): src/ias15_cft.c src/ias15_constants.h src/hexfloat.h src/i
 DROPIN_OBJ := $(B)/ias15_cft_lib.o $(B)/reb_integrator_cft.o $(B)/cft_ias15_fields.o \
               $(B)/cft_supported.o
 
-$(B)/ias15_cft_lib.o: src/ias15_cft.c src/ias15_constants.h src/ias15_engine.h src/ias15_limits.h
+$(B)/ias15_cft_lib.o: src/ias15_cft.c src/ias15_constants.h src/ias15_engine.h src/ias15_limits.h $(B)/normalabs_images.h
 	@mkdir -p $(B)
-	$(CC) -c $(CSTD) $(CFLAGS) $(WARN) -DIAS15_CFT_LIBRARY -Isrc -I$(CFT)/include -o $@ src/ias15_cft.c
+	$(CC) -c $(CSTD) $(CFLAGS) $(WARN) -DIAS15_CFT_LIBRARY -Isrc -I$(B) -I$(CFT)/include -o $@ src/ias15_cft.c
 
 $(B)/reb_integrator_cft.o: src/reb_integrator_cft.c src/cft_ias15.h src/ias15_engine.h src/cft_supported.h
 	@mkdir -p $(B)
@@ -317,9 +317,9 @@ PIC_OBJ := $(B)/pic/ias15_cft_lib.o $(B)/pic/reb_integrator_cft.o \
            $(B)/pic/cft_ias15_shared.o $(B)/pic/cft_supported.o
 PICFLAGS := $(CSTD) $(CFLAGS) $(WARN) $(SHPIC) -Isrc -I$(CFT)/include -I$(REB)
 
-$(B)/pic/ias15_cft_lib.o: src/ias15_cft.c src/ias15_constants.h src/ias15_engine.h src/ias15_limits.h
+$(B)/pic/ias15_cft_lib.o: src/ias15_cft.c src/ias15_constants.h src/ias15_engine.h src/ias15_limits.h $(B)/normalabs_images.h
 	@mkdir -p $(B)/pic
-	$(CC) -c $(PICFLAGS) -DIAS15_CFT_LIBRARY -o $@ src/ias15_cft.c
+	$(CC) -c $(PICFLAGS) -DIAS15_CFT_LIBRARY -I$(B) -o $@ src/ias15_cft.c
 
 $(B)/pic/reb_integrator_cft.o: src/reb_integrator_cft.c src/cft_ias15.h src/ias15_engine.h
 	@mkdir -p $(B)/pic
@@ -470,7 +470,7 @@ dropin: $(B)/libcft_ias15.a $(B)/check_dropin$(EXE)
 CASES_SRC := tools/check_dropin.c tools/dropin_common.c \
              tools/cases_core.c tools/cases_wide.c \
              tools/cases_forces.c tools/cases_modes.c \
-             tools/cases_pairs.c tools/cases_seam.c
+             tools/cases_pairs.c tools/cases_seam.c tools/cases_corrector.c
 
 $(B)/check_dropin$(EXE): $(CASES_SRC) tools/dropin_cases.h src/cft_supported.h $(DROPIN_OBJ) $(B)/librebound.a $(CFTLIB)
 	$(CC) $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -Isrc -I$(CFT)/include -I$(REB) \
@@ -541,6 +541,24 @@ programs: $(ASM)
 	@for f in programs/*.cfta; do b=$$(basename $$f .cfta); $(ASM) $$f -o programs/out/$$b.cftp || exit 1; done
 	@echo "assembled $$(ls programs/out/*.cftp | wc -l) programs"
 
+# Program images compiled INTO the engine. The library half loads nothing
+# from disk - load_one() is the standalone program's alone - so a route
+# whose new half is a program run carries its image in the binary, one
+# generated header a family, which both halves compile in
+# (tools/embed_programs.py, src/cft_embedded_image.h).
+#
+# This family is cft-fp256's normalabs-<fmt>, the corrector's exit test on
+# the device (ROUND3.md, P2; pc_error() in src/ias15_cft.c). It is
+# assembled from the PINNED tree by the pinned assembler, so the pin
+# governs it and no copy drifts, and tools/check_corrector.py holds the
+# image the engine actually loads (cft_program_digest) to the SHA-256 the
+# pinned tree's own programs/MANIFEST gives it.
+CFTPROGS      := third_party/cft-fp256/programs
+NORMALABS_SRC := $(foreach f,fp64 fp128 fp256,$(CFTPROGS)/normalabs-$(f).cfta)
+$(B)/normalabs_images.h: tools/embed_programs.py $(NORMALABS_SRC) $(ASM)
+	@mkdir -p $(B)
+	$(PYTHON) tools/embed_programs.py --asm $(ASM) --name normalabs --out $@ $(NORMALABS_SRC)
+
 # ---------------------------------------------------------------------
 # Suite legs go through tools/gate_cache.py. `check` runs them with
 # --mode full: it never skips and it writes the stamps. `check-quick`
@@ -574,6 +592,10 @@ IN_ARCHIVE  := --input $(B)/gate_restart$(EXE) --input $(B)/gate_write$(EXE) \
                --input $(B)/gate_stock$(EXE) --input $(B)/gate_promote$(EXE)
 IN_REAL     := --input $(B)/gate_real$(EXE)
 IN_SUBPROC  := --input $(B)/gate_subprocess$(EXE) --input $(B)/ias15_cft$(EXE)
+# the corrector's gate runs the program on every problem, on the program
+# engine too, generates an ensemble, and reads the pinned MANIFEST
+IN_CORRECTOR := --input tools/check_corrector.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) \
+                --input tools/make_ensemble.py --input $(CFTPROGS)/MANIFEST
 
 # The pins, checked at build time and not only at fetch time: a clone
 # under third_party/ that is not at its MANIFEST commit fails every tier
@@ -591,6 +613,7 @@ check: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_equivalence --mode full --input tools/check_equivalence.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_equivalence.py --build $(B)
 	$(GATE_CACHE) --leg check_program_engine --mode full --input tools/check_program_engine.py --input tools/check_equivalence.py --input tools/make_ensemble.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) -- $(PYTHON) tools/check_program_engine.py --build $(B)
 	$(GATE_CACHE) --leg check_door --mode full --input tools/check_door.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_door.py --build $(B)
+	$(GATE_CACHE) --leg check_corrector --mode full $(IN_CORRECTOR) -- $(PYTHON) tools/check_corrector.py --build $(B)
 	$(GATE_CACHE) --leg check_records --mode full --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B)
 	$(GATE_CACHE) --leg check_ensemble --mode full --input tools/check_ensemble.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_ensemble.py --build $(B)
 	$(GATE_CACHE) --leg check_archive --mode full --input tools/check_archive.py $(IN_ARCHIVE) -- $(PYTHON) tools/check_archive.py --build $(B)
@@ -616,6 +639,7 @@ check-quick: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_equivalence --mode quick --input tools/check_equivalence.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_equivalence.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_program_engine --mode quick --input tools/check_program_engine.py --input tools/check_equivalence.py --input tools/make_ensemble.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) -- $(PYTHON) tools/check_program_engine.py --build $(B) --formats fp64
 	$(GATE_CACHE) --leg check_door --mode quick --input tools/check_door.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_door.py --build $(B) --formats fp64
+	$(GATE_CACHE) --leg check_corrector --mode quick $(IN_CORRECTOR) -- $(PYTHON) tools/check_corrector.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_records --mode quick --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_ensemble --mode quick --input tools/check_ensemble.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_ensemble.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_archive --mode quick --input tools/check_archive.py $(IN_ARCHIVE) -- $(PYTHON) tools/check_archive.py --build $(B)
@@ -644,6 +668,7 @@ check-light: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_equivalence --mode quick --input tools/check_equivalence.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_equivalence.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_program_engine --mode quick --input tools/check_program_engine.py --input tools/check_equivalence.py --input tools/make_ensemble.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) -- $(PYTHON) tools/check_program_engine.py --build $(B) --formats fp64
 	$(GATE_CACHE) --leg check_door --mode quick --input tools/check_door.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_door.py --build $(B) --formats fp64
+	$(GATE_CACHE) --leg check_corrector --mode quick $(IN_CORRECTOR) -- $(PYTHON) tools/check_corrector.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_records --mode quick --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_ensemble --mode quick --input tools/check_ensemble.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_ensemble.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_archive --mode quick --input tools/check_archive.py $(IN_ARCHIVE) -- $(PYTHON) tools/check_archive.py --build $(B)
