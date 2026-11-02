@@ -42,6 +42,8 @@ docs/VALIDATION.md keeps repeating: identical bits prove the backends
 agree, never that the problem posed was the one meant.
 """
 import argparse
+import hashlib
+import json
 import os
 import pathlib
 from fractions import Fraction
@@ -59,6 +61,39 @@ def run_timed(cmd, env=None):
     t0 = time.monotonic()
     p = subprocess.run(cmd, capture_output=True, text=True, env=env)
     return time.monotonic() - t0, p.returncode, p.stdout + p.stderr
+
+
+def door_env():
+    """This process's CFT_REBOUND_ variables, the artifact aside: what
+    chose the routes of a run."""
+    return {k: v for k, v in sorted(os.environ.items())
+            if k.upper().startswith("CFT_REBOUND_") and k.upper() != "CFT_REBOUND_ARTIFACT"}
+
+
+def run_software(cache, name, cmd):
+    """run_timed for a software row, through --software-cache when given.
+
+    The card rows are the expensive ones to schedule, and the software
+    rows are most of a bench's wall clock (four fifths of 2,248 s in round
+    3's first card session). Records do not depend on the route, which is
+    the round's claim. So a build's software rows are computed once, and
+    a later bench of the same build with its routes forced reuses them.
+    That holds each card row to a software row taken on another route,
+    which is the claim held across routes as well as backends. The rows
+    that do so say so. The cache is keyed by the executables' bytes, so
+    another build can never read it.
+    -> (seconds, returncode, stdout, the CFT_REBOUND_ variables it ran
+    under, or None for a row run now)"""
+    if cache is None:
+        return run_timed(cmd) + (None,)
+    f = cache / (name + ".json")
+    if f.exists():
+        d = json.loads(f.read_text())
+        return d["secs"], d["rc"], d["out"], d["env"]
+    secs, rc, out = run_timed(cmd)
+    if rc == 0:
+        f.write_text(json.dumps({"secs": secs, "rc": rc, "out": out, "env": door_env(), "cmd": cmd}))
+    return secs, rc, out, None
 
 
 def data_only(record: str) -> str:
@@ -200,6 +235,9 @@ def main() -> int:
     ap.add_argument("--build", default=str(REPO / "build"))
     ap.add_argument("--quick", action="store_true",
                     help="the small problems only")
+    ap.add_argument("--software-cache", default=None, metavar="DIR",
+                    help="read this build's software rows from DIR when an earlier bench of "
+                         "the same two executables wrote them, and write them there when not")
     a = ap.parse_args()
 
     build = pathlib.Path(a.build)
@@ -209,6 +247,15 @@ def main() -> int:
         if not p.exists():
             print(f"missing {p}; run make first", file=sys.stderr)
             return 2
+    cache = None
+    if a.software_cache:
+        h = hashlib.sha256()
+        for p in (ref, cft):
+            h.update(p.read_bytes())
+        cache = pathlib.Path(a.software_cache) / h.hexdigest()[:16]
+        cache.mkdir(parents=True, exist_ok=True)
+        print(f"software rows: through {cache}, keyed by this build's two executables; "
+              f"this run's door variables: {door_env() or 'none'}")
 
     images = []
     for spec in a.image:
@@ -270,10 +317,20 @@ def main() -> int:
             print(f"{pname}: no such problem file, skipped by name")
             continue
         base = ["--problem", str(ppath), "--steps", str(steps), "--quiet"]
+        # The cache names a row by its problem's bytes as well as its name.
+        # An n-body file is generated beside each bench's CSV, so a name
+        # alone would not say it was the same problem.
+        key = f"{pname}-{steps}-{hashlib.sha256(pathlib.Path(ppath).read_bytes()).hexdigest()[:12]}"
+
+        def note_cached(env):
+            if env is not None and env != door_env():
+                print(f"{'':12} (that software row is from the cache, computed under "
+                      f"{env or 'no door variable'}; the card rows below run under "
+                      f"{door_env() or 'no door variable'})")
 
         # The traditional option: REBOUND, hardware double.
-        secs, rc, out = run_timed([str(ref), "--problem", str(ppath),
-                                   "--steps", str(steps)])
+        secs, rc, out, _ = run_software(cache, key + "-ref", [str(ref), "--problem", str(ppath),
+                                                              "--steps", str(steps)])
         if rc != 0:
             print(f"{pname}: ias15_ref rc={rc}: {out[-160:]}")
             failures += 1
@@ -293,7 +350,9 @@ def main() -> int:
         # REBOUND at round-off (3e-15 at binary64), and holding it to
         # bit-identity with REBOUND reports a failure that is not one.
         # The first run of this table did exactly that.
-        secs, rc, out = run_timed([str(cft), "--format", "fp64"] + base)
+        secs, rc, out, env = run_software(cache, key + "-sw-rebound-form-fp64",
+                                          [str(cft), "--format", "fp64"] + base)
+        note_cached(env)
         if rc == 0:
             same = data_only(out) == data_only(ref_rec)
             rec = "identical" if same else "DIFFERS from REBOUND"
@@ -318,8 +377,10 @@ def main() -> int:
             # --engine program requires --arith fma. This row is the
             # reference the card rows are held to, and it is not held to
             # REBOUND - the row above is.
-            secs, rc, out = run_timed([str(cft), "--format", f, "--engine", "program",
-                                       "--arith", "fma", "--max-iter", "60"] + base)
+            secs, rc, out, env = run_software(cache, f"{key}-sw-{f}",
+                                              [str(cft), "--format", f, "--engine", "program",
+                                               "--arith", "fma", "--max-iter", "60"] + base)
+            note_cached(env)
             if rc != 0:
                 print(f"{pname} sw/{f}: rc={rc}: {out[-160:]}")
                 failures += 1
