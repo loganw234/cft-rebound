@@ -764,7 +764,7 @@ static V KHF[7][7];             /* h_n (j+1)/(j+3), [n-1][lvl], j = 6 - lvl */
 static V KPOSR[8], KVELR[8];    /* 1/((m+2)(m+3)), 1/(m+2); [7] is a0's 1/2 and 1 */
 static V KHALF;
 static int arith_fma = 0;       /* 0: REBOUND's divisions; 1: the FMA form */
-static int engine_program = 0;  /* 1: predictor and corrector as sequencer programs */
+static int engine_program = 0;  /* 1: predictor, corrector and predict_next_step as sequencer programs */
 #ifndef IAS15_CFT_LIBRARY
 static const char *programs_dir = "programs/out";
 #endif
@@ -1361,6 +1361,7 @@ static void pc_error(const V tmp){
 static cft_program *prog_predict, *prog_predict_ens, *prog_correct[8];
 static V prog_bank, prog_sin, prog_sout, prog_dep;
 static int use_ens_predict;   /* E > 1 with per-system steps: dt rides in the scratch block, not the bank */
+static cft_program *prog_nextstep;   /* predict_next_step, once a step (predict_next_step_vec) */
 
 #ifndef IAS15_CFT_LIBRARY
 static void *read_file(const char *path, size_t *len){
@@ -1386,6 +1387,7 @@ static void load_programs(void){
     prog_predict = load_one("predict");
     if (use_ens_predict) prog_predict_ens = load_one("predict-ens");
     for (int n = 1; n < 8; n++){ char stem[16]; snprintf(stem, sizeof stem, "correct%d", n); prog_correct[n] = load_one(stem); }
+    prog_nextstep = load_one("nextstep");
     prog_bank = valloc(16); prog_sin = valloc(N3 * 22); prog_sout = valloc(N3 * 22); prog_dep = valloc(N3);
 }
 #endif /* !IAS15_CFT_LIBRARY */
@@ -1463,8 +1465,48 @@ static void correct_program(int n){
 /* rb holds each lane's own step ratio; the powers q2..q7 are the same
  * six multiplications REBOUND does on its scalar, issued per lane. The
  * ratio > 20 branch (zero the prediction) is applied per system by the
- * caller after the fact - it is unreachable in REBOUND's own flow. */
+ * caller after the fact - it is unreachable in REBOUND's own flow.
+ *
+ * Under --engine program all of it is ONE program run, nextstep-<fmt>
+ * (tools/gen_programs.py): per lane the 69 operations below on the same
+ * operands, so the same bits, at every format. rb is the run's stream
+ * a and never a bank constant. In an ensemble each system keeps its own
+ * step and so its own ratio: a ratio from the bank would be right for
+ * one system, and for systems that happen to share one, and wrong for
+ * every other (tools/check_program_engine.py's ensemble case is the one
+ * that can tell). The scratch block carries _e and _b in and eo and bo
+ * out, in place. The bank is each distinct binomial once, in the order
+ * the loop below first meets it, which is the order nextstep_bank()
+ * declares them in the generator.
+ *
+ * Each run is counted in the trailer's nextstep_calls, so the gate can
+ * hold that the program ran, once per step that predicts: a comparison
+ * of the two engines passes just as well if neither runs it. */
+static unsigned long long ncalls_nextstep;
 static void predict_next_step_vec(const V rb, V *_e, V *_b, V *eo, V *bo){
+    if (engine_program){
+        size_t nk = 0;
+        ncalls_nextstep++;
+        for (int m = 0; m < 7; m++)
+            for (int j = 6; j > m; j--){
+                size_t i = 0;
+                while (i < nk && memcmp(E(prog_bank, i), KBIN[m][j], ESZ)) i++;
+                if (i == nk) memcpy(E(prog_bank, nk++), KBIN[m][j], ESZ);
+            }
+        /* scratch, lane-major: e0..e6 in slots 0..6, b0..b6 in 7..13 */
+        for (size_t k = 0; k < N3; k++)
+            for (int m = 0; m < 7; m++){
+                memcpy(E(prog_sin, 14 * k + m),     E(_e[m], k), ESZ);
+                memcpy(E(prog_sin, 14 * k + 7 + m), E(_b[m], k), ESZ);
+            }
+        run_program(prog_nextstep, rb, NULL, NULL, nk, 14, 14, "nextstep program");
+        for (size_t k = 0; k < N3; k++)
+            for (int m = 0; m < 7; m++){
+                memcpy(E(eo[m], k), E(prog_sout, 14 * k + m),     ESZ);
+                memcpy(E(bo[m], k), E(prog_sout, 14 * k + 7 + m), ESZ);
+            }
+        return;
+    }
     static V q[8], be[7], s, u;
     if (!s){ for (int i = 1; i < 8; i++) q[i] = valloc(N3); for (int m = 0; m < 7; m++) be[m] = valloc(N3); s = valloc(N3); u = valloc(N3); }
     vcopy(q[1], rb, N3);
@@ -2301,6 +2343,7 @@ static const struct { const char *key; const double *dbl; const unsigned long lo
     { "t_g_lib",       &t_g_lib,     NULL },
     { "t_g_divsqrt",   &t_g_divsqrt, NULL },
     { "t_reduce",      &t_reduce,    NULL },
+    { "nextstep_calls", NULL,        &ncalls_nextstep },
 };
 
 /* --door-selftest: each of the door's new routes, and today's route,
