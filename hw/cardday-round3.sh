@@ -143,10 +143,13 @@ if [ $# -gt 0 ]; then RUN=("$@"); else RUN=("${LEGS[@]}"); fi
 for b in build/ias15_cft build/ias15_ref build/gate_real build/check_dropin; do
     [ -x "$b" ] || die "$b missing: run --build first"
 done
-xrt_linked > /dev/null || die "build/ias15_cft does not link XRT: build a fresh clone with --build, XRT sourced"
 for x in "$F128S" "$REV8A" "$REV8Q"; do [ -f "$x" ] || die "no such image: $x"; done
+# XRT first, then the link check. ldd resolves libxrt_coreutil only
+# through XRT's own lib directory, so checking before sourcing refused a
+# good build. The second dry run measured exactly that.
 source /opt/xilinx/xrt/setup.sh >/dev/null 2>&1
 export LD_LIBRARY_PATH=${XILINX_XRT:-/opt/xilinx/xrt}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+xrt_linked > /dev/null || die "build/ias15_cft does not link XRT: build a fresh clone with --build, XRT sourced"
 L=$HOME/r3-logs-$TAG
 mkdir -p "$L"
 LOG=$L/cardday.log
