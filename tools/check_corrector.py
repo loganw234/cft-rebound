@@ -42,16 +42,19 @@
 #   4. The replay drives the run, at every format. A count moved by one
 #      changes no record line on most attempts (P2's ledger entries), so
 #      the controls are: the first attempt cut to one pass must change the
-#      record or be refused by name; a moved count's passes must show in
-#      the replay's own counters; a capped count moved by one is refused by
-#      name; and in a mixed attempt of the ensemble, ONE system that is not
-#      the longest cut to one pass must change its own lines and no other
-#      system's, and those lines must be the same cut of that system run
-#      alone (--member), whose schedule must be the ensemble's column for it
-#      attempt by attempt - or both runs are refused by name. That holds each
-#      system's own exit exactly: a replay that kept every system in the
-#      corrector to the attempt's last count (V2's M2), or froze one a pass
-#      late (M2b), passed everything else.
+#      record; a moved count's passes must show in the replay's own
+#      counters; a capped count moved by one is refused by name; and in a
+#      mixed attempt of the ensemble, ONE system that is not the longest cut
+#      to one pass must change its own lines and no other system's, and
+#      those lines must be the same cut of that system run alone (--member),
+#      whose schedule must be the ensemble's column for it attempt by
+#      attempt. That holds each system's own exit exactly: a replay that
+#      kept every system in the corrector to the attempt's last count (V2's
+#      M2), or froze one a pass late (M2b), passed everything else. Each of
+#      the three cut replays must RUN. On these problems every one does, at
+#      every format, so a refusal by name says the cut desynced the replay,
+#      and fails: when it passed, a replay that refused every count of 1 by
+#      name passed all three (V2's Rboth).
 #   5. Refusals by name: a schedule from another run, one cut short, one
 #      too long, a malformed field, a file that is not a schedule, and
 #      --trace-pc or --record-iters beside --replay-iters.
@@ -366,6 +369,16 @@ def main():
     def schedule_of(i):
         return results[i][3] if published else results[i][4]
 
+    def desync(rc, err, who="the replay"):
+        # A cut replay must RUN: on these problems every one does, at every
+        # format. A refusal by name says the cut desynced the replay from its
+        # schedule, and it fails - accepted, it let a replay that refused
+        # every count of 1 by name pass all three cuts (V2's Rboth).
+        tail = err.strip()[-140:]
+        if rc == 3 and "--replay-iters" in err:
+            return "the cut desynced %s, which refused it by name (rc 3): %s" % (who, tail)
+        return "%s failed (rc %d): %s" % (who, rc, tail)
+
     for fmt in formats:
         k = next(i for i, c in enumerate(configs) if c["fmt"] == fmt and "dt0=1.0" in c["label"])
         c = configs[k]
@@ -392,8 +405,8 @@ def main():
                     "recording's %s), and %d of %d record lines differ"
                     % (first_free, body[first_free][0], d, t.get("mean_pc_iterations"), want, t0.get("mean_pc_iterations"),
                        sum(a != b for a, b in zip(rec, rec0)) + abs(len(rec) - len(rec0)), len(rec0)))
-        # (b) the first attempt cut to one pass: the record changes, or the
-        #     replay is refused by name
+        # (b) the first attempt cut to one pass: the replay runs, and the
+        #     record changes
         mut = [list(f) for f in body]
         mut[0][0] = "1"
         path = os.path.join(work, "%s-first-one.sched" % fmt)
@@ -401,9 +414,9 @@ def main():
         rc, out, err = run(base + ["--replay-iters", path])
         rec, _, _, _ = parse(out, route)
         nd = sum(a != b for a, b in zip(rec, rec0)) + abs(len(rec) - len(rec0))
-        verdict((rc == 0 and nd > 0) or (rc == 3 and "--replay-iters" in err),
+        verdict(rc == 0 and nd > 0,
                 "the first attempt's %s passes cut to 1: %s" % (body[0][0], ("%d of %d record lines differ" % (nd, len(rec0)))
-                                                                  if rc == 0 else "refused: " + err.strip()[-160:]))
+                                                                  if rc == 0 else desync(rc, err)))
         # (c) a count the cap stopped, moved by one, is refused by name: on
         #     the first run of this format that has one
         hit = None
@@ -429,9 +442,9 @@ def main():
                 % (cc["label"], at, b2[at][0], rc))
         # (d) Each system's own exit. In the mixed ensemble's first attempt
         #     whose systems leave at different passes, the system with the
-        #     most passes short of the attempt's longest is cut to ONE. That
-        #     must change its own record lines and no other system's, or be
-        #     refused by name. A replay that kept every system in the
+        #     most passes short of the attempt's longest is cut to ONE. The
+        #     replay must run, and change that system's record lines and no
+        #     other system's. A replay that kept every system in the
         #     corrector until the attempt's last count, while counting each
         #     one's passes exactly, reproduces every recording - the extra
         #     passes land on a fixed point - and leaves this cut converging
@@ -470,11 +483,11 @@ def main():
         ref = by_system(results[ke][0][1] if published else results[ke][1][1])
         new = by_system(out)
         moved = sorted(k for k in set(ref) | set(new) if ref.get(k) != new.get(k))
-        verdict((rc == 0 and moved == [s]) or (rc == 3 and "--replay-iters" in err),
+        verdict(rc == 0 and moved == [s],
                 "%s: attempt %d, system %d's %d passes cut to 1 (the attempt's longest ran %d): %s"
                 % (configs[ke]["label"], a, s, n, longest,
                    ("the systems whose record lines moved are %s, and only %d's may" % (moved, s)) if rc == 0 else
-                   "refused (rc %d): %s" % (rc, err.strip()[-140:])))
+                   desync(rc, err)))
         #     "Only that system moved" cannot see a system frozen a pass late,
         #     because it moves too (V2's M2b). The exact reference can: the
         #     same system run ALONE (--member), whose schedule column must be
@@ -503,9 +516,9 @@ def main():
                 diff = sum(1 for x, y in zip(mine, alone) if x != y) + abs(len(mine) - len(alone))
                 exact = diff == 0 and len(alone) > 0
                 detail = "%d of %d lines differ" % (diff, len(alone))
-            else:      # refused by name, both: rc 3 alone is any die()
-                exact = rc == 3 and "--replay-iters" in err and rrc == 3 and "--replay-iters" in rerr
-                detail = "the ensemble's replay rc %d, the member's rc %d" % (rc, rrc)
+            else:
+                detail = "; ".join(desync(c, e, who) for who, c, e in (("the ensemble's replay", rc, err),
+                                                                      ("the member's replay", rrc, rerr)) if c != 0)
         verdict(exact, "and its cut lines are the same cut of --member %d run alone (its attempt %d): %s" % (s, am, detail))
 
     # 5. Refusals by name, at the first format.
