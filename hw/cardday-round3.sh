@@ -20,6 +20,16 @@
 # runs only those. `touch ~/r3-logs-<tag>/STOP` ends the session before
 # its next leg; nothing is killed.
 #
+# THE WINDOW. UNTIL=HH:MM is when the card must be free again. A leg is
+# skipped, by name, when its estimate in EST below would end past that
+# time. A later, cheaper leg can still run. The guard and STOP act only
+# between legs. A card process killed mid-run can leave the tile
+# unusable until its image is reloaded (cft-fp256's scheduler notes,
+# decision N-5). So a leg is never started that would need killing. The
+# estimates are believed, from entries 27 and 37 and the dry runs, and
+# each leg logs its actual time beside its estimate, which is what
+# corrects them.
+#
 # THE GUARD. The card is shared: cft-fp256's scheduler and nightly runs
 # use it too. Before every leg this script looks for another card user.
 # - It uses the pinned cft-fp256's own definition (hw/card_stress.py,
@@ -106,7 +116,11 @@ F128S=${F128S:-$HOME/cardday-f128s/cft_hw_f128_1x.xclbin}
 REV8A=${REV8A:-$HOME/cardday-rev8a/cft_hw_single.xclbin}
 REV8Q=${REV8Q:-$HOME/cardday-rev8q/cft_hw_quad.xclbin}
 GUARD_WAIT=${GUARD_WAIT:-600}
+UNTIL=${UNTIL:-}
 LEGS=(probe pin-f128s split-f128s door-rev8a door-f128s split-rev8a tiles gates-rev8a mixed)
+# Minutes each leg is believed to take on one tile, on the generous side.
+declare -A EST=([probe]=2 [pin-f128s]=5 [split-f128s]=35 [door-rev8a]=25 [door-f128s]=15
+                [split-rev8a]=35 [tiles]=10 [gates-rev8a]=110 [mixed]=50)
 log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 die() { echo "FATAL: $*" >&2; exit 2; }
 last() { tail -n "${2:-1}" "$1" 2>/dev/null | tr '\n' ' ' | cut -c1-"${3:-300}"; }
@@ -143,6 +157,9 @@ esac
 TAG=$1; shift
 for l in "$@"; do printf '%s\n' "${LEGS[@]}" | grep -qx -- "$l" || die "unknown leg $l (--list names them)"; done
 if [ $# -gt 0 ]; then RUN=("$@"); else RUN=("${LEGS[@]}"); fi
+if [ -n "$UNTIL" ]; then
+    until_s=$(date -d "$UNTIL" +%s 2>/dev/null) || die "UNTIL=$UNTIL is not a time of day (HH:MM)"
+fi
 for b in build/ias15_cft build/ias15_ref build/gate_real build/check_dropin; do
     [ -x "$b" ] || die "$b missing: run --build first"
 done
@@ -300,15 +317,19 @@ leg_mixed() {
 }
 
 {
-    log "=== round 3 card session $TAG: cft-rebound $(git rev-parse --short HEAD), cft-fp256 $(git -C third_party/cft-fp256 rev-parse --short HEAD); legs: ${RUN[*]}; before: $(therm)"
+    log "=== round 3 card session $TAG: cft-rebound $(git rev-parse --short HEAD), cft-fp256 $(git -C third_party/cft-fp256 rev-parse --short HEAD); legs: ${RUN[*]}; ${UNTIL:+the card free again at $UNTIL; }before: $(therm)"
     ran=0
     for leg in "${RUN[@]}"; do
         if [ -e "$L/STOP" ]; then log "STOPPED by $L/STOP, before $leg"; break; fi
         guard || break
+        if [ -n "$UNTIL" ] && [ $(( $(date +%s) + ${EST[$leg]} * 60 )) -gt "$until_s" ]; then
+            log "SKIPPED $leg: its estimate, ${EST[$leg]} min, would end past $UNTIL"
+            continue
+        fi
         d=$L/$leg; mkdir -p "$d"; t0=$(date +%s)
-        log "--- $leg"
+        log "--- $leg (estimate ${EST[$leg]} min)"
         "leg_${leg//-/_}" "$d"
-        log "--- $leg done in $(( $(date +%s) - t0 )) s; $(therm)"
+        log "--- $leg done in $(( $(date +%s) - t0 )) s (estimate ${EST[$leg]} min); $(therm)"
         ran=$((ran + 1))
     done
     if [ "$ran" -eq "${#RUN[@]}" ]; then log "CARDDAY-R3-$TAG-COMPLETE"; else log "CARDDAY-R3-$TAG-ENDED: $ran of ${#RUN[@]} legs ran"; fi
