@@ -436,6 +436,19 @@ static void scrub_shadow(int format, double dt){
     reb_simulation_free(z);
 }
 
+/* --routes: each phase says on stderr which route each of the door's
+ * families took in its process, and what that route carried. A seam
+ * crossed on a route that carried no call passes vacuously, so
+ * tools/check_seams.py reads these lines and asserts them. */
+static int report_routes = 0;
+static void print_routes(void){
+    struct ias15_engine_route ro;
+    if (!report_routes) return;
+    for (int i = 0; ias15_engine_route(i, &ro) == 0; i++)
+        fprintf(stderr, "gate_real: route %s=%s by=%s calls=%llu fallbacks=%llu\n",
+                ro.name, ro.on ? "on" : "off", ro.by, ro.calls, ro.fallbacks);
+}
+
 /* ------------------------------------------------------------------ */
 /* One process of a multi-process checkpoint                           */
 /* ------------------------------------------------------------------ */
@@ -454,12 +467,14 @@ static int phase_straight(int format, double dt, int regrow){
             reb_simulation_steps(r, 1);
             if (n >= dump_from){ printf("at %ld\n", n); dump(r); }
         }
+        print_routes();
         reb_simulation_free(r);
         return 0;
     }else{
         reb_simulation_steps(r, steps_a + steps_b);
     }
     dump(r);
+    print_routes();
     reb_simulation_free(r);
     return 0;
 }
@@ -482,6 +497,7 @@ static int phase_save(int format, double dt, const char *path, int regrow){
         }
         fprintf(stderr, "gate_real: wrote %s1.bin .. %s%ld.bin, one after each step, last at t=%.17g\n",
                 save_each, save_each, steps_a, r->t);
+        print_routes();
         reb_simulation_free(r);
         return 0;
     }
@@ -497,6 +513,7 @@ static int phase_save(int format, double dt, const char *path, int regrow){
     fprintf(stderr, "gate_real: wrote %s at t=%.17g with %zu particles after %ld steps%s\n",
             path, r->t, r->N, regrow ? steps_a + steps_m : steps_a,
             old_fields ? ", with the field list as it was before 2026-11-02" : "");
+    print_routes();
     reb_simulation_free(r);
     return 0;
 }
@@ -522,6 +539,7 @@ static int phase_resume(int format, const char *path, int regrow){
         reb_simulation_steps(r, steps_b);
     }
     dump(r);
+    print_routes();
     reb_simulation_free(r);
     return 0;
 }
@@ -1412,6 +1430,7 @@ int main(int argc, char **argv){
         if (!strcmp(argv[i], "--dump-from") && i + 1 < argc) dump_from = atol(argv[++i]);
         if (!strcmp(argv[i], "--save-each") && i + 1 < argc){ phase = 2; save_each = argv[++i]; }
         if (!strcmp(argv[i], "--old-list")) old_fields = 1;
+        if (!strcmp(argv[i], "--routes"))   report_routes = 1;
     }
     if (only < 0) only = 0;
 

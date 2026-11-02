@@ -623,6 +623,7 @@ check: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg gate_real_fp256 --mode full $(IN_REAL) -- $(B)/gate_real$(EXE) --fp256
 	$(GATE_CACHE) --leg gate_subprocess --mode full $(IN_SUBPROC) -- $(B)/gate_subprocess$(EXE) --build $(B)
 	$(GATE_CACHE) --leg check_checkpoint --mode full --input tools/check_checkpoint.py $(IN_REAL) -- $(PYTHON) tools/check_checkpoint.py --build $(B)
+	$(GATE_CACHE) --leg check_seams --mode full --input tools/check_seams.py --input tools/check_checkpoint.py $(IN_REAL) -- $(PYTHON) tools/check_seams.py --build $(B)
 
 # the same gates at binary64 only, in a few minutes
 .PHONY: check-quick
@@ -649,6 +650,7 @@ check-quick: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg gate_real_fp256 --mode quick $(IN_REAL) -- $(B)/gate_real$(EXE) --fp256
 	$(GATE_CACHE) --leg gate_subprocess --mode quick $(IN_SUBPROC) -- $(B)/gate_subprocess$(EXE) --build $(B)
 	$(GATE_CACHE) --leg check_checkpoint --mode quick --input tools/check_checkpoint.py $(IN_REAL) -- $(PYTHON) tools/check_checkpoint.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_seams --mode quick --input tools/check_seams.py --input tools/check_checkpoint.py $(IN_REAL) -- $(PYTHON) tools/check_seams.py --build $(B) --quick
 	@$(PYTHON) tools/gate_cache.py --report --cache-dir $(B)/.gate-cache
 
 # Every case touched, none of them thoroughly - the step counts are
@@ -678,6 +680,7 @@ check-light: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg gate_real_fp256 --mode quick $(IN_REAL) -- $(B)/gate_real$(EXE) --fp256
 	$(GATE_CACHE) --leg gate_subprocess --mode quick $(IN_SUBPROC) -- $(B)/gate_subprocess$(EXE) --build $(B)
 	$(GATE_CACHE) --leg check_checkpoint --mode quick --input tools/check_checkpoint.py $(IN_REAL) -- $(PYTHON) tools/check_checkpoint.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_seams --mode quick --input tools/check_seams.py --input tools/check_checkpoint.py $(IN_REAL) -- $(PYTHON) tools/check_seams.py --build $(B) --quick
 	@$(PYTHON) tools/gate_cache.py --report --cache-dir $(B)/.gate-cache
 
 # The worked round trip, built in the tree and run against the
