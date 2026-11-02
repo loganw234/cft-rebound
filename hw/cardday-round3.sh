@@ -101,6 +101,9 @@ tally() {
         "$(grep -c -E '^\s*ok\b' "$1")" "$(grep -c -E '\bFAIL\b' "$1")" \
         "$(grep -c -E ' identical( |$)' "$1")" "$(grep -c -E '\bDIFFER' "$1")"
 }
+# The card runtime build/ias15_cft links, printed; nothing, and status 1,
+# when it links none.
+xrt_linked() { ldd build/ias15_cft 2>/dev/null | grep -o -m1 '/[^ ]*libxrt_coreutil[^ ]*'; }
 
 case "${1:-}" in
   ""|-h|--help) sed -n '2,80p' "$0"; exit 0;;
@@ -111,7 +114,11 @@ case "${1:-}" in
     source /opt/xilinx/xrt/setup.sh >/dev/null 2>&1
     [ -n "${XILINX_XRT:-}" ] || die "no XRT: /opt/xilinx/xrt/setup.sh set nothing"
     nice -n 10 make all programs build/gate_real || die "make failed"
-    log "built $(git rev-parse --short HEAD) with XRT at $XILINX_XRT"
+    # make's "up to date" is not "built with XRT": a tree first built
+    # without it stays that way, which the first dry run of this script
+    # showed. So the link is checked, not assumed.
+    xrt_linked || die "build/ias15_cft does not link XRT, so this tree was first built without it. make clean keeps the pinned libcft.a; build a fresh clone with XRT sourced"
+    log "built $(git rev-parse --short HEAD), linked against $(xrt_linked)"
     exit 0;;
   -*) die "unknown option $1";;
 esac
@@ -121,6 +128,7 @@ if [ $# -gt 0 ]; then RUN=("$@"); else RUN=("${LEGS[@]}"); fi
 for b in build/ias15_cft build/ias15_ref build/gate_real build/check_dropin; do
     [ -x "$b" ] || die "$b missing: run --build first"
 done
+xrt_linked > /dev/null || die "build/ias15_cft does not link XRT: build a fresh clone with --build, XRT sourced"
 for x in "$F128S" "$REV8A" "$REV8Q"; do [ -f "$x" ] || die "no such image: $x"; done
 source /opt/xilinx/xrt/setup.sh >/dev/null 2>&1
 export LD_LIBRARY_PATH=${XILINX_XRT:-/opt/xilinx/xrt}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
