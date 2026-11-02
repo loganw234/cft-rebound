@@ -50,21 +50,48 @@
 #     struct's three pointers only), walltime, walltime_last_steps and
 #     rand_seed - the four fields two af2f400 runs differ in too.
 #
-#   An archive this tree writes, loaded by af2f400: 9 of 9 (plain, regrow
-#     and adaptive at each format) load and continue. That build's reader
-#     stops at cft_t, the first field it does not know, and REBOUND says
-#     so on stderr:
+#   An archive this tree writes, used by af2f400. THE STATED LIMIT, which
+#   any field appended to the list costs a build from before it, not only
+#   these six (believed: it follows from how REBOUND reads and diffs, and
+#   it was measured for these):
+#
+#   - Its reader stops each snapshot at cft_t, the first field it does not
+#     know, and REBOUND says so on stderr:
 #         Error! Could not find field descriptor for name.
 #         Warning! Unknown field found in binary file.
-#     Everything it knows comes before cft_t, and its finish_load repairs
-#     cft_n_elem, the one field after, from the file, so it reports
-#     "restored exactly" and continues as it continues its own archives:
-#     identical to its own resume of its own archive, and to its straight
-#     run, on every line it prints. THE STATED LIMIT: such a load prints
-#     that Error and that Warning, and gets only what that build ever
-#     got - the clock and steps rebuilt from binary64, so an adaptive
-#     resume above binary64 diverges there as it always did (measured at
-#     fp128 and fp256; at fp64 it does not).
+#   - A SINGLE SNAPSHOT, with no function pointers set, loads and
+#     continues as that build continues its own archives. 9 of 9 measured:
+#     plain, regrow and adaptive at each format. It reports "restored
+#     exactly", and its finish_load repairs cft_n_elem, the one field it
+#     knows that comes after cft_t. The run is identical to that build's
+#     own resume of its own archive, and to its straight run, on every
+#     line it prints. Like every one of that build's loads, it rebuilds
+#     the clock and steps from binary64, so above binary64 an adaptive
+#     resume diverges there, as it always did (measured at fp128 and
+#     fp256; at fp64 it does not).
+#   - Anything past the first snapshot is NOT safe. Measured by V3 on
+#     2026-11-02. Reproduced here with V3's two builds: the first point at
+#     fp64 and fp128, the other two at fp64.
+#     - af2f400 APPENDING a snapshot to such an archive writes one that
+#       neither build can read. Its diff writes a header and a name but no
+#       data for each field its own state does not have. A load of the
+#       "last" snapshot then returns snapshot 0 and says "restored
+#       exactly" (t = 0.3 where the appending run reached 0.6, at fp64 and
+#       fp128). REBOUND warns "The binary file seems to be corrupted", and
+#       this tree's build is fooled the same way. The file grew from 11202
+#       to 18926 bytes at fp64.
+#     - af2f400 loading a snapshot this tree APPENDED AFTER A PARTICLE
+#       REMOVAL refuses it: "refused: unreadable or inconsistent
+#       archive". The high-water family arrives in that diff's second
+#       pass, after cft_t, where that build's reader has stopped.
+#     - REBOUND's warning that function pointers must be reset is LOST,
+#       because "functionpointers" is written after the integrator's
+#       fields. Measured with additional_forces and with collision_resolve
+#       set: this tree's archive, read by af2f400, gives no warning. Every
+#       other pairing warns.
+#   So: never append to an archive this tree wrote, using a build from
+#   before 2026-11-02. Give such a build a single snapshot only, and reset
+#   its function pointers yourself.
 #
 #   python tools/check_archive.py [--build build] [--keep]
 

@@ -155,9 +155,18 @@
  *     did then, and it says so: CFT_ARCHIVE_EXACT_CLOCK_STEPS64, and
  *     CFT_PROV_EXACT_CLOCK_STEPS64 in the state.
  *   - They come LAST, before cft_n_elem. An older build stops reading a
- *     snapshot at the first name it does not know, so it loses only
- *     cft_n_elem, which its finish_load repairs from the file. Measured,
- *     in both directions, in tools/check_archive.py's docstring.
+ *     snapshot at the first name it does not know, so a SINGLE SNAPSHOT
+ *     it reads loses, of what it knows, only cft_n_elem, which its
+ *     finish_load repairs from the file. Nothing past a single snapshot
+ *     is safe there:
+ *       - an older build's append to such an archive is unreadable by
+ *         any build;
+ *       - a snapshot appended after a removal is refused there;
+ *       - REBOUND's function-pointer warning is lost there.
+ *     Any appended field costs those three. tools/check_archive.py's
+ *     docstring states the limit, measured in both directions, and says
+ *     never to append to these archives with a build from before
+ *     2026-11-02.
  *   - cft_identity differs between builds by design. Anything that
  *     compares whole archives across builds or pins leaves it out.
  */

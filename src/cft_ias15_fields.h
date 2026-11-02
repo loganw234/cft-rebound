@@ -160,9 +160,17 @@
  * WHERE THEY GO. After every field an older build knows and before
  * cft_n_elem, and cft_archive_selftest() holds them there. An older
  * build's reader stops a snapshot at the first name it does not know
- * (binarydata.c's REB_FIELD_NOT_FOUND, `goto finish_fields`), so in this
- * position all it loses is cft_n_elem, which cft_archive_finish_load()
- * has always repaired from the file.
+ * (binarydata.c's REB_FIELD_NOT_FOUND, `goto finish_fields`). So in this
+ * position a SINGLE SNAPSHOT read by such a build loses, of the fields it
+ * knows, only cft_n_elem, which its cft_archive_finish_load() has always
+ * repaired from the file. That is all the position buys. Three things go
+ * wrong regardless, as they would for any field appended to this list:
+ *   - such a build appending to such an archive writes a snapshot that
+ *     no build can read;
+ *   - a snapshot this build appends after a removal is refused there;
+ *   - REBOUND's function-pointer warning is lost there.
+ * tools/check_archive.py states that limit, with the measurements, and
+ * what a user must not do.
  * -------------------------------------------------------------------- */
 #define CFT_FD_B(NAME, MEMBER, LEN) \
     { "", REB_POINTER, "cft_" NAME, CFT_OFF(MEMBER), CFT_OFF(LEN), 1, 0 },
