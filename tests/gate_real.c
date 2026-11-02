@@ -59,10 +59,29 @@
  *    selects it; it runs with max_iter = 1 so that the cap is reached
  *    on every step and the counter is not a matter of luck.
  *
- * Sequences 1 and 2 compare bit for bit, in the particles and in r->t.
- * Anything less than identical is a checkpoint that silently changes
- * the trajectory, which for this repository is the same as a broken
- * one.
+ * 4. Sequence 1 at an ADAPTIVE step, epsilon 1e-9, over a shorter run
+ *    (ADAPT_STEPS_A + ADAPT_STEPS_B). The step control computes dt in
+ *    the run's format, so above binary64 the engine's dt and dt_last
+ *    carry bits that r->dt and r->dt_last_done cannot. Until 2026-11-02
+ *    a load rebuilt both from those binary64 views, and an adaptive
+ *    binary128 checkpoint moved a particle by one binary64 ulp; nothing
+ *    in the suite had ever checkpointed an adaptive run.
+ *
+ * Sequences 1, 2 and 4 compare bit for bit: the particles and r->t, the
+ * wide state's digest, and THE ENGINE'S CLOCK AND STEPS - t, t_hi, t_lo,
+ * dt and dt_last - read as wide bytes through ias15_engine_view(). The
+ * last are there because r->t is t's binary64 view, and comparing the
+ * view is vacuous through the observable: a binary128 resume that lost
+ * t's low bits showed in r->t on 2 of 40 step splits and in t's bytes
+ * on 34 (tools/check_checkpoint.py, which sweeps the 40). Anything less
+ * than identical is a checkpoint that silently changes the run, which
+ * for this repository is the same as a broken one.
+ *
+ * Each in-process sequence also runs an unrelated simulation between
+ * the save and the load (scrub_time(), and scrub_shadow() for sequence
+ * 2), because the engine is one process-wide instance: its clock and
+ * steps outlive the simulation that set them, and the save run leaves
+ * exactly the values the load is meant to restore.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -75,6 +94,7 @@
 #include "cft_archive.h"
 #include "cft_ias15_fields.h"
 #include "ias15_limits.h"    /* CFT_DIGEST_SEED, so the seed is not retyped */
+#include "ias15_engine.h"    /* the engine's view: its wide clock and steps */
 
 /* How many strings REBOUND's r->messages holds. Taken from the symbol
  * rather than written down here: it is a plain const in rebound.c and
@@ -92,6 +112,22 @@ static long steps_b = 120;   /* after it;            --steps-b */
 /* Sequence 2 only: steps at the SHRUNKEN count, run once on each side
  * of the checkpoint so that both sides step a three-body system. */
 static long steps_m = 40;    /* --steps-m */
+/* The three-process phases only. --epsilon makes the step adaptive, as
+ * tools/check_checkpoint.py's adaptive sequence asks; --dump-from K has
+ * --straight dump after every step from K on, each dump preceded by
+ * "at <step>"; --save-each PREFIX has the save phase write PREFIX<n>.bin
+ * after every step n of steps_a. The last two are its 40-split sweep:
+ * one straight run and one saving run serve all forty resumes. */
+static double epsilon_arg = 0.0;
+static long dump_from = 0;
+static const char *save_each = NULL;
+/* Sequence 4, in process: an adaptive checkpoint. Short, because the
+ * difference it looks for appears at the first adaptive step after the
+ * load; measured at binary128 on af2f400, 20 + 20 moved a particle by
+ * one binary64 ulp. */
+#define ADAPT_EPS     1e-9
+#define ADAPT_STEPS_A 20
+#define ADAPT_STEPS_B 20
 #define NBODY      4
 /* Four bodies so the mark is 4, a removal leaves 3, and the one added
  * back lands UNDER the mark - which is the re-reading path rather than
@@ -127,21 +163,21 @@ static void add_extra(struct reb_simulation *r){
     reb_simulation_add(r, p);
 }
 
-static struct reb_simulation *build_cfg(int format, double dt, int max_iter){
+static struct reb_simulation *build_cfg(int format, double dt, int max_iter, double eps){
     struct reb_simulation *r = reb_simulation_create();
     r->G  = 1.0;
     r->dt = dt;
     add_bodies(r);
     struct cft_ias15_state *s = reb_simulation_set_integrator(r, CFT_IAS15_INTEGRATOR_NAME);
     if (!s){ fprintf(stderr, "gate_real: set_integrator failed\n"); exit(2); }
-    s->epsilon = 0.0;        /* fixed dt: the comparison is about state, not step control */
+    s->epsilon = eps;        /* 0, a fixed dt, everywhere but sequence 4 and --epsilon */
     s->format  = format;
     s->max_iter = max_iter;  /* 0 = the default for the format */
     return r;
 }
 
 static struct reb_simulation *build(int format, double dt){
-    return build_cfg(format, dt, 0);
+    return build_cfg(format, dt, 0, 0.0);
 }
 
 /* The particles as raw bytes, plus t and dt. This is what a user sees;
@@ -189,12 +225,75 @@ static uint64_t wide_digest(struct reb_simulation *r){
     return h;
 }
 
+/* THE ENGINE'S CLOCK AND STEPS, as wide bytes: t, t_hi, t_lo, dt and
+ * dt_last, one element each, read through ias15_engine_view() - the
+ * engine's own, not the state's copy of them, so that this reads the
+ * same thing on a tree that archives them and on one that does not.
+ *
+ * Not folded into wide_digest(), deliberately: that digest is the one
+ * docs/VALIDATION.md has carried across rounds (entry 38's six), and a
+ * value that moves when a definition grows cannot be compared with
+ * itself. These are their own line instead.
+ *
+ * The digest above could not see them. The particles do not depend on
+ * the clock at a fixed step, and r->t is only t's binary64 view: a
+ * binary128 resume that dropped t's low bits changed t's bytes on 34 of
+ * tools/check_checkpoint.py's 40 step splits and r->t on 2 of them,
+ * measured on af2f400. */
+#define N_TIME 5
+static const char *const time_name[N_TIME] = { "t", "t_hi", "t_lo", "dt", "dt_last" };
+static size_t time_bytes(unsigned char out[N_TIME * 32]){
+    struct ias15_engine_view w;
+    ias15_engine_view(&w);
+    const unsigned char *p[N_TIME] = { w.t, w.t_hi, w.t_lo, w.dt, w.dt_last };
+    memset(out, 0, N_TIME * 32);
+    if (w.elem_size == 0 || w.elem_size > 32) return 0;
+    for (int k = 0; k < N_TIME; k++)
+        if (p[k]) memcpy(out + (size_t)k * w.elem_size, p[k], w.elem_size);
+    return w.elem_size;
+}
+
+/* One wide element, most significant byte first, so that it reads as a
+ * bit pattern - sign and exponent leading - rather than as memory. */
+static void put_wide(FILE *f, const unsigned char *b, size_t w){
+    for (size_t i = w; i-- > 0;) fprintf(f, "%02x", b[i]);
+}
+
+/* Which of the five differ between two time_bytes() results, as names,
+ * with both values; returns how many. */
+static int time_diff(const char *fname, const unsigned char *a, const unsigned char *b, size_t w){
+    int n = 0;
+    for (int k = 0; k < N_TIME; k++){
+        if (!memcmp(a + (size_t)k * w, b + (size_t)k * w, w)) continue;
+        printf("         %-7s straight ", time_name[k]); put_wide(stdout, a + (size_t)k * w, w);
+        printf("\n         %-7s restarted ", ""); put_wide(stdout, b + (size_t)k * w, w);
+        printf("  (%s)\n", fname);
+        n++;
+    }
+    return n;
+}
+
+/* The in-process sequences' answer to the engine outliving a
+ * simulation: between a save and its load, an unrelated run that leaves
+ * a different clock, a different dt and a different dt_last in the
+ * engine - a fixed step of 2^-7, three steps - so that a load which
+ * restored none of them cannot inherit the saving run's by accident. */
+static void scrub_time(int format){
+    struct reb_simulation *z = build(format, 0.0078125);
+    reb_simulation_steps(z, 3);
+    reb_simulation_free(z);
+}
+
 /* The same values snap() collects, as exact hex floats, one per line
- * and named, plus the wide state's digest. Two processes' dumps are
- * compared with diff, so the comparison is over bits: %a is exact and
- * reversible, and a difference in the last bit shows as a different
- * line rather than rounding to the same 17 digits. */
+ * and named, then the engine's clock and steps as wide bytes, then the
+ * wide state's digest. Two processes' dumps are compared line by line,
+ * so the comparison is over bits: %a is exact and reversible, and a
+ * difference in the last bit shows as a different line rather than
+ * rounding to the same 17 digits. The `clock` and `steps` lines are
+ * what make the `t` and `dt` lines more than a binary64 view. */
 static void dump(struct reb_simulation *r){
+    unsigned char tb[N_TIME * 32];
+    size_t w;
     for (size_t i = 0; i < (size_t)r->N; i++){
         const struct reb_particle *q = &r->particles[i];
         printf("p%lu m  %a\n",  (unsigned long)i, q->m);
@@ -203,6 +302,12 @@ static void dump(struct reb_simulation *r){
     }
     printf("t  %a\n", r->t);
     printf("dt %a\n", r->dt);
+    w = time_bytes(tb);
+    printf("clock");                          /* t, t_hi, t_lo */
+    for (int k = 0; k < 3; k++){ printf(" %s ", time_name[k]); put_wide(stdout, tb + (size_t)k * w, w); }
+    printf("\nsteps");                        /* dt, dt_last */
+    for (int k = 3; k < N_TIME; k++){ printf(" %s ", time_name[k]); put_wide(stdout, tb + (size_t)k * w, w); }
+    printf("\n");
     printf("wide %016llx\n", (unsigned long long)wide_digest(r));
 }
 
@@ -261,9 +366,19 @@ static void scrub_shadow(int format, double dt){
  * is the shell's, because the point is that nothing is shared between
  * the runs. */
 static int phase_straight(int format, double dt, int regrow){
-    struct reb_simulation *r = build(format, dt);
+    struct reb_simulation *r = build_cfg(format, dt, 0, epsilon_arg);
     if (regrow){
+        if (dump_from > 0){ fprintf(stderr, "gate_real: --dump-from is for the plain sequence\n"); return 2; }
         if (shrink_phase1(r) || shrink_phase2(r)){ reb_simulation_free(r); return 2; }
+    }else if (dump_from > 0){
+        /* One step at a time is the same run: reb_simulation_steps()
+         * adds only a synchronize, and this integrator has none. */
+        for (long n = 1; n <= steps_a + steps_b; n++){
+            reb_simulation_steps(r, 1);
+            if (n >= dump_from){ printf("at %ld\n", n); dump(r); }
+        }
+        reb_simulation_free(r);
+        return 0;
     }else{
         reb_simulation_steps(r, steps_a + steps_b);
     }
@@ -273,7 +388,26 @@ static int phase_straight(int format, double dt, int regrow){
 }
 
 static int phase_save(int format, double dt, const char *path, int regrow){
-    struct reb_simulation *r = build(format, dt);
+    struct reb_simulation *r = build_cfg(format, dt, 0, epsilon_arg);
+    if (save_each){
+        /* --save-each: a checkpoint after EVERY step of steps_a, each in
+         * its own file, so one run serves a whole sweep of splits. A save
+         * only serializes (simulationarchive.c, reb_simulation_save_to_file),
+         * so the run it interrupts goes on unchanged. */
+        char p[1024];
+        if (regrow){ fprintf(stderr, "gate_real: --save-each is for the plain sequence\n"); return 2; }
+        if (cft_archive_bind(r)){ fprintf(stderr, "gate_real: bind failed\n"); return 2; }
+        for (long n = 1; n <= steps_a; n++){
+            reb_simulation_steps(r, 1);
+            snprintf(p, sizeof p, "%s%ld.bin", save_each, n);
+            remove(p);
+            reb_simulation_save_to_file(r, p);
+        }
+        fprintf(stderr, "gate_real: wrote %s1.bin .. %s%ld.bin, one after each step, last at t=%.17g\n",
+                save_each, save_each, steps_a, r->t);
+        reb_simulation_free(r);
+        return 0;
+    }
     if (regrow){
         if (shrink_phase1(r)){ reb_simulation_free(r); return 2; }
     }else{
@@ -312,20 +446,24 @@ static int phase_resume(int format, const char *path, int regrow){
 /* ------------------------------------------------------------------ */
 /* Sequence 1, in one process                                          */
 /* ------------------------------------------------------------------ */
-static int one_format(int format, const char *fname, double dt){
+/* Sequence 1 at a fixed step (eps 0, steps_a + steps_b), and sequence 4
+ * at an adaptive one (eps ADAPT_EPS, ADAPT_STEPS_A + ADAPT_STEPS_B). */
+static int one_format(int format, const char *fname, double dt, double eps, long na, long nb){
     int ok = 1;
 
-    /* ---- the reference: steps_a + steps_b in one go ---- */
-    struct reb_simulation *ref = build(format, dt);
-    reb_simulation_steps(ref, steps_a + steps_b);
+    /* ---- the reference: na + nb in one go ---- */
+    struct reb_simulation *ref = build_cfg(format, dt, 0, eps);
+    reb_simulation_steps(ref, na + nb);
     size_t nref; unsigned char *sref = snap(ref, &nref);
     double tref = ref->t;
     uint64_t dref = wide_digest(ref);
+    unsigned char tbref[N_TIME * 32];
+    size_t tw = time_bytes(tbref);     /* before the free: the engine outlives it */
     reb_simulation_free(ref);          /* releases the engine for the next owner */
 
-    /* ---- the checkpoint: steps_a, save, free ---- */
-    struct reb_simulation *a = build(format, dt);
-    reb_simulation_steps(a, steps_a);
+    /* ---- the checkpoint: na, save, free ---- */
+    struct reb_simulation *a = build_cfg(format, dt, 0, eps);
+    reb_simulation_steps(a, na);
     if (cft_archive_bind(a)){ printf("  %-6s FAIL  cft_archive_bind\n", fname); return 0; }
     remove(ARCHIVE);
     reb_simulation_save_to_file(a, ARCHIVE);
@@ -361,6 +499,11 @@ static int one_format(int format, const char *fname, double dt){
         ok = 0;
     }
 
+    /* The engine outlives the saving run and still holds its clock and
+     * steps, which are exactly what the load must restore: overwrite
+     * them, so that only the file can supply them. */
+    scrub_time(format);
+
     /* ---- the restart ---- */
     enum cft_archive_status st;
     struct reb_simulation *b = cft_archive_load(ARCHIVE, 0, format, NULL, &st);
@@ -381,9 +524,11 @@ static int one_format(int format, const char *fname, double dt){
                cft_ias15_provenance_str(bs ? bs->provenance : -1));
         ok = 0;
     }
-    reb_simulation_steps(b, steps_b);
-    size_t nb; unsigned char *sb = snap(b, &nb);
+    reb_simulation_steps(b, nb);
+    size_t nsb; unsigned char *sb = snap(b, &nsb);
     uint64_t db = wide_digest(b);
+    unsigned char tbres[N_TIME * 32];
+    time_bytes(tbres);
 
     /* The particles are the binary64 view; above binary64 they are not
      * sensitive to everything the state carries. See wide_digest(). */
@@ -393,7 +538,16 @@ static int one_format(int format, const char *fname, double dt){
                fname, (unsigned long long)dref, (unsigned long long)db);
         ok = 0;
     }
-    if (nb != nref || memcmp(sb, sref, nb) != 0){
+    /* And the clock and steps, which neither the digest nor the particles
+     * see. Compared as bytes; r->t, the only view of them in snap(), is
+     * vacuous through the observable. */
+    if (!tw || memcmp(tbref, tbres, N_TIME * tw) != 0){
+        printf("  %-6s FAIL  the engine's clock or steps differ across the checkpoint:\n", fname);
+        if (tw) time_diff(fname, tbref, tbres, tw);
+        else printf("         the engine's view gave no element width\n");
+        ok = 0;
+    }
+    if (nsb != nref || memcmp(sb, sref, nsb) != 0){
         printf("  %-6s FAIL  restart differs from the straight run\n", fname);
         printf("         t   straight %.17g   restarted %.17g\n", tref, b->t);
         const double *dr = (const double*)sref, *db = (const double*)sb;
@@ -407,8 +561,8 @@ static int one_format(int format, const char *fname, double dt){
         }
         ok = 0;
     } else if (ok) {
-        printf("  %-6s PASS  %lu values and the wide state (%016llx) identical across "
-               "the checkpoint\n",
+        printf("  %-6s PASS  %lu values, the wide state (%016llx) and the engine's clock "
+               "and steps identical across the checkpoint\n",
                fname, (unsigned long)(nref / sizeof(double)), (unsigned long long)dref);
     }
 
@@ -432,6 +586,8 @@ static int one_format_regrow(int format, const char *fname, double dt){
     size_t nref; unsigned char *sref = snap(ref, &nref);
     double tref = ref->t;
     uint64_t dref = wide_digest(ref);
+    unsigned char tbref[N_TIME * 32];
+    size_t tw = time_bytes(tbref);
     reb_simulation_free(ref);
 
     /* ---- run to the checkpoint and save ---- */
@@ -490,11 +646,22 @@ static int one_format_regrow(int format, const char *fname, double dt){
     }
     size_t nb; unsigned char *sb = snap(b, &nb);
     uint64_t db = wide_digest(b);
+    unsigned char tbres[N_TIME * 32];
+    time_bytes(tbres);
 
     if (db != dref){
         printf("  %-6s FAIL  the WIDE state differs across the regrown checkpoint: "
                "%016llx straight, %016llx restarted\n",
                fname, (unsigned long long)dref, (unsigned long long)db);
+        ok = 0;
+    }
+    /* Held to the same bytes, though here it is a consistency check and
+     * not a sensitive one: the add after the load invalidates the view,
+     * and the next step rebuilds the clock from r->t in BOTH runs
+     * (src/reb_integrator_cft.c, the step's "has it changed" guard). */
+    if (!tw || memcmp(tbref, tbres, N_TIME * tw) != 0){
+        printf("  %-6s FAIL  the engine's clock or steps differ across the regrown checkpoint:\n", fname);
+        if (tw) time_diff(fname, tbref, tbres, tw);
         ok = 0;
     }
     if (nb != nref || memcmp(sb, sref, nb) != 0){
@@ -601,7 +768,7 @@ static int one_format_maxiter(int format, const char *fname, double dt){
      * arithmetic rather than luck and the warning's threshold of ten is
      * crossed inside steps_a. The trajectory is a truncated corrector's
      * and this sequence does not compare it to anything. */
-    struct reb_simulation *a = build_cfg(format, dt, 1);
+    struct reb_simulation *a = build_cfg(format, dt, 1, 0.0);
     a->save_messages = 1;              /* collect rather than print */
     reb_simulation_steps(a, steps_a);
     struct cft_ias15_state *as = (struct cft_ias15_state*)a->integrator.state;
@@ -694,6 +861,9 @@ int main(int argc, char **argv){
         if (!strcmp(argv[i], "--steps-a") && i + 1 < argc) steps_a = atol(argv[++i]);
         if (!strcmp(argv[i], "--steps-b") && i + 1 < argc) steps_b = atol(argv[++i]);
         if (!strcmp(argv[i], "--steps-m") && i + 1 < argc) steps_m = atol(argv[++i]);
+        if (!strcmp(argv[i], "--epsilon") && i + 1 < argc) epsilon_arg = atof(argv[++i]);
+        if (!strcmp(argv[i], "--dump-from") && i + 1 < argc) dump_from = atol(argv[++i]);
+        if (!strcmp(argv[i], "--save-each") && i + 1 < argc){ phase = 2; save_each = argv[++i]; }
     }
     if (only < 0) only = 0;
 
@@ -718,6 +888,10 @@ int main(int argc, char **argv){
            "back under the mark, %ld\n", steps_a, steps_m, steps_m, steps_b);
     printf("           3. max_iter = 1: the corrector's count and REBOUND's warning, "
            "across the same checkpoint\n");
+    printf("           4. 1 at epsilon %g: %d steps, checkpoint, %d more, against %d straight\n",
+           ADAPT_EPS, ADAPT_STEPS_A, ADAPT_STEPS_B, ADAPT_STEPS_A + ADAPT_STEPS_B);
+    printf("           1, 2 and 4 compare the particles, t, the wide digest, and the engine's "
+           "wide clock and steps (t, t_hi, t_lo, dt, dt_last) as bytes\n");
 
     /* One format per process. The engine opens once and sync_config()
      * refuses a format change, so a loop over all three would fail on
@@ -725,8 +899,11 @@ int main(int argc, char **argv){
      * runs this three times - which is also what a checkpoint is. */
     int ok = 1;
     if (!maxiter){
-        ok = one_format(fmts[only], names[only], 0.01) && ok;
+        char alabel[32];
+        snprintf(alabel, sizeof alabel, "%s/adaptive", names[only]);
+        ok = one_format(fmts[only], names[only], 0.01, 0.0, steps_a, steps_b) && ok;
         ok = one_format_regrow(fmts[only], names[only], 0.01) && ok;
+        ok = one_format(fmts[only], alabel, 0.01, ADAPT_EPS, ADAPT_STEPS_A, ADAPT_STEPS_B) && ok;
     }
     ok = one_format_maxiter(fmts[only], names[only], 0.01) && ok;
     printf("gate_real: %s\n", ok ? "PASS" : "FAIL");
