@@ -64,7 +64,8 @@ REFUSALS = {"ix-alias-dense": ("indexed", "once any operand has an index table")
             "ix-alias-source": ("indexed", "indexed source"),
             "ix-table-on-null": ("indexed", "has an index table and no source"),
             "ix-zero-source": ("indexed", "beside a source of zero elements"),
-            "reduce-partial": ("reduce_seg", "are not whole segments")}
+            "reduce-partial": ("reduce_seg", "are not whole segments"),
+            "px-alias-pool": ("indexed", "may write over none of its inputs")}
 DATA = re.compile(r"^door data: (\d+) of (\d+) nonzero values carry bits below binary64's reach$", re.M)
 POSITIONS = re.compile(r"^door data: (\d+) of (\d+) bit positions below binary64's reach are set in some value$", re.M)
 ZEROS = re.compile(r"^door data: zeros (\d+) positive and (\d+) negative$", re.M)

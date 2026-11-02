@@ -84,6 +84,11 @@
 #include "cft.h"
 #include "ias15_constants.h"
 #include "ias15_limits.h"
+/* Gravity's sequencer programs, compiled in (ROUND3.md, P1): the library
+ * half loads nothing from disk, and gravity runs as programs in both
+ * halves. Generated into build/ by tools/embed_programs.py from
+ * programs/gravity-*.cfta; the Makefile puts build/ on the include path. */
+#include "gravity_images.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -174,7 +179,7 @@ static int engine_check_format(const char *artifact){
  * line of the trailer. The trailer is a comment, and no record
  * comparison reads comments. Without the line, a card run that took the
  * fallback would pass every gate looking like one that did not. */
-enum { ROUTE_SCALAR, ROUTE_INDEXED, ROUTE_REDUCE_SEG, N_ROUTES };
+enum { ROUTE_SCALAR, ROUTE_INDEXED, ROUTE_REDUCE_SEG, ROUTE_PAIR_GATHER, N_ROUTES };
 static const struct {
     const char *name, *env;      /* the trailer's name, and its variable */
     uint32_t bit;                /* in cft_caps.seq_features */
@@ -183,6 +188,11 @@ static const struct {
     { "scalar",     "CFT_REBOUND_ROUTE_SCALAR",     CFT_SEQ_FEAT_SCALAR,  "CFT_SEQ_FEAT_SCALAR (CAPS2[7], ABI 0.12)" },
     { "indexed",    "CFT_REBOUND_ROUTE_INDEXED",    CFT_SEQ_FEAT_INDEXED, "CFT_SEQ_FEAT_INDEXED (CAPS2[9], ABI 0.14)" },
     { "reduce_seg", "CFT_REBOUND_ROUTE_REDUCE_SEG", CFT_FEAT_REDUCE_SEG,  "CFT_FEAT_REDUCE_SEG (CAPS2[8], ABI 0.13)" },
+    /* Gravity's second switch (ROUND3.md, P1): who gathers the pair
+     * program's six inputs, the device through a table or the host. The
+     * first is `indexed`, which carries gravity's accumulate fold. The two
+     * share one bit, so hiding either name hides both. */
+    { "pair_gather", "CFT_REBOUND_ROUTE_PAIR_GATHER", CFT_SEQ_FEAT_INDEXED, "CFT_SEQ_FEAT_INDEXED (CAPS2[9], ABI 0.14)" },
 };
 static int route_on[N_ROUTES];           /* this run takes the new route */
 static int route_have[N_ROUTES];         /* the device publishes it, unhidden */
@@ -993,9 +1003,22 @@ static V *snap;                   /* E snapshot blocks of NSLICE * L elements */
 
 /* pairs, in REBOUND's visiting order within each system: i = 1..N-1, j = 0..i-1 */
 static size_t *pair_i, *pair_j;
-static V pxi, pxj, pmi, pmj, pdx, pdy, pdz, pt1, pt2, ps, pr, pr3, ppf, ppfi, ppfj;
-static V pcxi, pcyi, pczi, pcxj, pcyj, pczj;
-static V addend;
+/* Gravity's buffers, one element a pair unless they say otherwise:
+ *   pmi, pmj     the pair's two masses, gathered once (alloc_pairs(),
+ *                ias15_engine_set_masses_f64())
+ *   ps, pr, pr3  the squared distance gravity-pair deposits, cft_sqrt's
+ *                root of it, and gravity-cube's _r^3
+ *   ppf          prefact = G/_r^3, cft_div's
+ *   pdxyz        dx, dy, dz a pair (3P): gravity-pair's scratch out, and
+ *                gravity-force's scratch in
+ *   ppool        what each pair gives its two bodies (6P): gravity-force's
+ *                deposits, the pool every fold run reads
+ *   pzero        +0 a coordinate (N3): the sum the first fold run starts from
+ *   psum         the sum between two fold runs (N3 each) */
+static V pmi, pmj, ps, pr, pr3, ppf, pdxyz, ppool, pzero, psum[2];
+#ifndef IAS15_CFT_LIBRARY
+static V pxi, pxj, pdx, pdy, pdz;          /* energy_all()'s pair gather, and gravity_reference()'s */
+#endif
 
 /* ---- which pairs REBOUND computes, and who receives which of them ----
  *
@@ -1050,6 +1073,8 @@ static size_t  scat_w;                  /* row stride: the capacity's N - 1 */
 static size_t  scat_max;                /* the longest row, so the shortest
                                          * scatter loop that covers them all */
 
+static void build_gravity_tables(void);
+
 static void build_scatter(void){
     const size_t na     = (eng_active == (size_t)-1 || eng_active > N) ? N : eng_active;
     const size_t starti = (eng_ignore == IGN_NONE) ? 1 : 2;
@@ -1078,7 +1103,139 @@ static void build_scatter(void){
     }
     scat_max = 0;
     for (size_t p = 0; p < NB; p++) if (scat_n[p] > scat_max) scat_max = scat_n[p];
+    /* Gravity's index tables are this table and the pair list read
+     * another way, so they are rebuilt here, at every call: wherever a
+     * row or the pair list changes (ROUND3.md, P1). */
+    build_gravity_tables();
 }
+
+/* ---- the tables gravity's program runs read through -----------------
+ *
+ * Built at the end of build_scatter(), which runs wherever the pair list
+ * or a row can change: alloc_state(), ias15_engine_set_bodies() (after it
+ * lists the pairs again) and ias15_engine_set_active(). A table built
+ * for an old N would read the wrong partners, or past its source.
+ *
+ *   pair_tab  six entries a pair, lane-major: x_i, x_j, y_i, y_j, z_i
+ *             and z_j, as indices into x. gravity-pair's six scratch-in
+ *             slots.
+ *   fold_tab  one table a fold run, end to end. Run q covers the entries
+ *             fold_first[q] .. fold_first[q] + fold_width[q] - 1 of every
+ *             row: lane 3p + k, slot t, is the (fold_first[q] + t)-th
+ *             addend of particle p's row, coordinate k, as its index in
+ *             the pool gravity-force deposits - six a pair, what its i
+ *             receives in x, y and z, then what its j receives - or
+ *             CFT_IDX_NONE past the row's end, which reads +0.
+ *
+ * The runs. A row has at most scat_max addends, and one run folds as many
+ * as its program's width. The widths are the ones compiled in
+ * (gravity-fold<K>, tools/gen_programs.py), and a device holds a program
+ * to its own scratch depth (cft_caps.max_scratch), so the widest run is
+ * the widest program the depth admits and the last is the narrowest that
+ * holds what is left. Each run continues the sum the one before it
+ * deposited. So the fold is ONE left fold from +0 in row order, cut into
+ * runs: the order and the zero of REBOUND's `ax = 0; ax += ...`. The +0
+ * past a row's end is exact, as the dense loop's was: the sum starts at
+ * +0 and can never be -0, so x + (+0) is x's bits.
+ *
+ * The tables hold uint32 indices, cft.h's type, with CFT_IDX_NONE
+ * reserved. So a pool of 2^32 - 1 elements or more - six a pair, so
+ * 715,827,883 pairs - is refused by name. An ensemble has no width cap,
+ * and that is where one would meet it. */
+static uint32_t *pair_tab, *fold_tab;
+static size_t    pair_tab_cap, fold_tab_cap;
+static size_t    fold_runs, fold_runs_cap;
+static size_t   *fold_first, *fold_width, *fold_off;
+static int      *fold_wi;                  /* run q's width, as an index into fold_w[] */
+static size_t    fold_w[32];               /* the compiled-in widths this device admits, narrowest first */
+static int       n_fold_w = -1;            /* -1 until found */
+
+/* The fold widths compiled in at this format that the device's scratch
+ * depth admits, read from the compiled-in images themselves rather than
+ * from a list. Found once: the format and the device are the run's. */
+static void find_fold_widths(void){
+    static const char pre[] = "gravity-fold";
+    cft_caps c;
+    if (n_fold_w >= 0) return;
+    memset(&c, 0, sizeof c);
+    c.struct_size = sizeof c;
+    if (cft_get_caps(dev, &c) != CFT_OK) die("gravity: cft_get_caps failed: %s", cft_last_error());
+    n_fold_w = 0;
+    for (size_t i = 0; i < gravity_images_n; i++){
+        const char *s = gravity_images[i].stem;
+        size_t w;
+        int k;
+        if (strncmp(s, pre, sizeof pre - 1) || strcmp(gravity_images[i].format, cft_format_name(F))) continue;
+        w = (size_t)strtoul(s + sizeof pre - 1, NULL, 10);
+        if (!w || (c.max_scratch && w > c.max_scratch)) continue;   /* 0 is an unknown depth, which bounds nothing */
+        if (n_fold_w == (int)(sizeof fold_w / sizeof fold_w[0])) die("gravity: more than %d fold widths compiled in", n_fold_w);
+        for (k = n_fold_w++; k > 0 && fold_w[k - 1] > w; k--) fold_w[k] = fold_w[k - 1];
+        fold_w[k] = w;
+    }
+    if (!n_fold_w)
+        die("gravity: no compiled-in gravity-fold program at %s fits this device's %u scratch slots a lane "
+            "(build/gravity_images.h)", cft_format_name(F), (unsigned)c.max_scratch);
+}
+
+static void *grow_table(void *t, size_t *cap, size_t need, size_t esz){
+    if (need <= *cap) return t;
+    free(t);
+    t = malloc(need * esz);
+    if (!t) die("out of memory");
+    *cap = need;
+    return t;
+}
+
+static void build_gravity_tables(void){
+    size_t need = 0, wmax;
+    find_fold_widths();
+    wmax = fold_w[n_fold_w - 1];
+    if (6 * P >= (size_t)CFT_IDX_NONE || 3 * NB >= (size_t)CFT_IDX_NONE)
+        die("gravity: %zu pairs give a pool of %zu elements, and an index table's uint32 entries (cft.h) "
+            "reach at most %lu", P, 6 * P, (unsigned long)CFT_IDX_NONE - 1);
+    pair_tab = grow_table(pair_tab, &pair_tab_cap, 6 * P, sizeof *pair_tab);
+    for (size_t l = 0; l < P; l++)
+        for (size_t k = 0; k < 3; k++){
+            pair_tab[6 * l + 2 * k]     = (uint32_t)(3 * pair_i[l] + k);
+            pair_tab[6 * l + 2 * k + 1] = (uint32_t)(3 * pair_j[l] + k);
+        }
+    /* the runs: the widest admitted until what is left fits a narrower one */
+    fold_runs = 0;
+    for (size_t e0 = 0; e0 < scat_max; ){
+        size_t left = scat_max - e0;
+        int wi = n_fold_w - 1;
+        if (left < wmax) for (wi = 0; fold_w[wi] < left; wi++) ;
+        if (fold_runs == fold_runs_cap){
+            fold_runs_cap = fold_runs_cap ? 2 * fold_runs_cap : 8;
+            fold_first = realloc(fold_first, fold_runs_cap * sizeof *fold_first);
+            fold_width = realloc(fold_width, fold_runs_cap * sizeof *fold_width);
+            fold_off   = realloc(fold_off,   fold_runs_cap * sizeof *fold_off);
+            fold_wi    = realloc(fold_wi,    fold_runs_cap * sizeof *fold_wi);
+            if (!fold_first || !fold_width || !fold_off || !fold_wi) die("out of memory");
+        }
+        fold_first[fold_runs] = e0; fold_width[fold_runs] = fold_w[wi]; fold_wi[fold_runs] = wi; fold_off[fold_runs] = need;
+        need += N3 * fold_w[wi];
+        e0 += left < fold_w[wi] ? left : fold_w[wi];
+        fold_runs++;
+    }
+    fold_tab = grow_table(fold_tab, &fold_tab_cap, need, sizeof *fold_tab);
+    for (size_t q = 0; q < fold_runs; q++){
+        const size_t w = fold_width[q];
+        uint32_t *t = fold_tab + fold_off[q];
+        for (size_t p = 0; p < NB; p++)
+            for (size_t s = 0; s < w; s++){
+                const size_t e = fold_first[q] + s;
+                if (e >= scat_n[p]){
+                    for (size_t k = 0; k < 3; k++) t[(3 * p + k) * w + s] = CFT_IDX_NONE;
+                    continue;
+                }
+                const size_t enc = scat[p * scat_w + e], l = enc >> 1, side = enc & 1;
+                for (size_t k = 0; k < 3; k++) t[(3 * p + k) * w + s] = (uint32_t)(6 * l + 3 * side + k);
+            }
+    }
+}
+
+static void alloc_pairs(void);
 
 static void alloc_state(void){
     x = valloc(N3); v = valloc(N3); a = valloc(N3);
@@ -1102,15 +1259,24 @@ static void alloc_state(void){
       if (k != NSLICE) die("slice table"); }
     snap = calloc(E, sizeof *snap); if (!snap) die("out of memory");
     for (size_t s = 0; s < E; s++) snap[s] = valloc(NSLICE * L);
+    alloc_pairs();
+}
+
+/* The pair list, gravity's buffers and tables, and the scatter table:
+ * everything gravity() reads but x, the masses, G and SOFT2. Separate
+ * from alloc_state() so that --door-selftest can set up gravity alone. */
+static void alloc_pairs(void){
     pair_i = calloc(P ? P : 1, sizeof *pair_i); pair_j = calloc(P ? P : 1, sizeof *pair_j);
+    if (!pair_i || !pair_j) die("out of memory");
     size_t l = 0;
     for (size_t s = 0; s < E; s++)
         for (size_t i = 1; i < N; i++) for (size_t j = 0; j < i; j++){ pair_i[l] = s * N + i; pair_j[l] = s * N + j; l++; }
-    pxi = valloc(P); pxj = valloc(P); pmi = valloc(P); pmj = valloc(P);
-    pdx = valloc(P); pdy = valloc(P); pdz = valloc(P); pt1 = valloc(P); pt2 = valloc(P); ps = valloc(P);
-    pr = valloc(P); pr3 = valloc(P); ppf = valloc(P); ppfi = valloc(P); ppfj = valloc(P);
-    pcxi = valloc(P); pcyi = valloc(P); pczi = valloc(P); pcxj = valloc(P); pcyj = valloc(P); pczj = valloc(P);
-    addend = valloc(N3);
+#ifndef IAS15_CFT_LIBRARY
+    pxi = valloc(P); pxj = valloc(P); pdx = valloc(P); pdy = valloc(P); pdz = valloc(P);
+#endif
+    pmi = valloc(P); pmj = valloc(P); ps = valloc(P); pr = valloc(P); pr3 = valloc(P); ppf = valloc(P);
+    pdxyz = valloc(3 * P); ppool = valloc(6 * P);
+    pzero = valloc(N3); psum[0] = valloc(N3); psum[1] = valloc(N3);    /* valloc is calloc: pzero is +0 */
     for (l = 0; l < P; l++){ memcpy(E(pmi, l), E(mass, pair_i[l]), ESZ); memcpy(E(pmj, l), E(mass, pair_j[l]), ESZ); }
     /* The scatter table, sized for THIS N and never resized: the engine
      * allocates at its capacity and ias15_engine_set_bodies() only ever
@@ -1145,9 +1311,123 @@ static void zero_sys(V dst, size_t s){ memset(E(dst, L * s), 0, L * ESZ); }
 /* ------------------------------------------------------------------ */
 /* Gravity, as REBOUND's reb_gravity_basic_calculate_acceleration       */
 /* ------------------------------------------------------------------ */
+/* One program run whose inputs may be read through index tables: the
+ * indexed program-run wrapper, defined beside run_program() below. */
+struct prog_io {
+    cft_program *prog;
+    size_t n;                    /* lanes */
+    V in[4];                     /* streams a, b and c, then the scratch-in
+                                  * block: n * n_scratch_in elements, or the
+                                  * pool its table reads. Read, never written */
+    const uint32_t *ix[4];       /* each input's table, or NULL for a dense one:
+                                  * n entries a stream, n * n_scratch_in the block */
+    size_t src[4];               /* the elements a tabled input's source holds */
+    V sout, dep;                 /* n * n_scratch_out, and n * max_deposits */
+};
+static void vprog_ix(int r, const struct prog_io *io, const char *what);
+
+/* Gravity's programs, compiled in (tools/gen_programs.py writes them,
+ * tools/embed_programs.py compiles them into build/gravity_images.h), and
+ * loaded at the first force evaluation. */
+static cft_program *gravity_image(const char *stem){
+    const char *fmt = cft_format_name(F);
+    for (size_t i = 0; i < gravity_images_n; i++){
+        const struct cft_embedded_image *im = &gravity_images[i];
+        cft_program *p;
+        cft_status st;
+        if (strcmp(im->stem, stem) || strcmp(im->format, fmt)) continue;
+        st = cft_program_load(dev, im->bytes, im->length, &p);
+        if (st != CFT_OK)
+            die("cft_program_load(%s-%s, compiled in): %s (%s)", stem, fmt, cft_strerror(st), cft_last_error());
+        return p;
+    }
+    die("%s-%s is not among the gravity programs compiled in (build/gravity_images.h, which `make` "
+        "builds from programs/gravity-*.cfta)", stem, fmt);
+    return NULL;
+}
+static cft_program *g_pair, *g_cube, *g_force, *g_fold[sizeof fold_w / sizeof fold_w[0]];
+static cft_program *fold_program(size_t q){
+    const int i = fold_wi[q];
+    if (!g_fold[i]){
+        char stem[48];
+        snprintf(stem, sizeof stem, "gravity-fold%zu", fold_w[i]);
+        g_fold[i] = gravity_image(stem);
+    }
+    return g_fold[i];
+}
+
+/* REBOUND's gravity as a handful of program runs a force evaluation, in
+ * place of 22 elementwise calls over the pairs and one more over every
+ * coordinate per partner (ROUND3.md, P1). The order of every operation is
+ * still REBOUND's; tools/gen_programs.py, "gravity", says how.
+ *
+ *   gravity-pair   dx, dy, dz and dx*dx + dy*dy + dz*dz + softening2,
+ *                  its six coordinates gathered through pair_tab: by the
+ *                  device, or by the host, as `pair_gather` says
+ *   cft_sqrt       _r
+ *   gravity-cube   _r*_r*_r
+ *   cft_div        prefact = G/(_r*_r*_r)
+ *   gravity-force  prefactj = -prefact*m_j and prefacti = prefact*m_i,
+ *                  and the six products, into the pool
+ *   gravity-fold   ax = 0, then each particle's addends in its row's order,
+ *                  gathered from the pool through fold_tab: by the device,
+ *                  or by the host, as `indexed` says
+ *
+ * On either route of either switch the same programs run on the same
+ * bits; only who gathers differs. So the records, calls= and
+ * program_calls= are the same on all four, and the `# route` lines say
+ * which ran. The divide and the square root stay library calls, as they
+ * were. */
 static void gravity_body(void);
 static void gravity(void){ double _t0 = now_s(); in_gravity = 1; gravity_body(); in_gravity = 0; t_gravity += now_s() - _t0; }
 static void gravity_body(void){
+    if (!g_pair){ g_pair = gravity_image("gravity-pair"); g_cube = gravity_image("gravity-cube"); g_force = gravity_image("gravity-force"); }
+    if (P){
+        const struct prog_io pairs = { g_pair, P, { SOFT2, NULL, NULL, x }, { NULL, NULL, NULL, pair_tab },
+                                       { 0, 0, 0, N3 }, pdxyz, ps };
+        const struct prog_io cube  = { g_cube, P, { pr, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
+                                       { 0, 0, 0, 0 }, NULL, pr3 };
+        const struct prog_io force = { g_force, P, { ppf, pmi, pmj, pdxyz }, { NULL, NULL, NULL, NULL },
+                                       { 0, 0, 0, 0 }, NULL, ppool };
+        vprog_ix(ROUTE_PAIR_GATHER, &pairs, "gravity pair program");   /* SOFT2 rides as stream a: +0 unless a caller set one */
+        vsqrt(pr, ps, P);                                               /* _r */
+        vprog_ix(-1, &cube, "gravity cube program");
+        vdiv(ppf, G, pr3, P);                                           /* prefact = G/(_r*_r*_r) */
+        vprog_ix(-1, &force, "gravity force program");
+    }
+    /* ax = 0, then the rows: run q continues the sum run q - 1 deposited,
+     * the first from pzero, the last into a. No run at all when no row
+     * has an addend - N = 1, or N_active = 0 - and then a is +0, as
+     * REBOUND's is. */
+    double _a0 = now_s();
+    if (!fold_runs) vzero(a, N3);
+    for (size_t q = 0; q < fold_runs; q++){
+        const struct prog_io fold = { fold_program(q), N3, { q ? psum[(q - 1) & 1] : pzero, NULL, NULL, ppool },
+                                      { NULL, NULL, NULL, fold_tab + fold_off[q] }, { 0, 0, 0, 6 * P },
+                                      NULL, q + 1 < fold_runs ? psum[q & 1] : a };
+        vprog_ix(ROUTE_INDEXED, &fold, "gravity fold program");
+    }
+    t_g_accum += now_s() - _a0;
+}
+
+#ifndef IAS15_CFT_LIBRARY
+/* The gravity this port issued until P1, verbatim: 22 elementwise calls
+ * over the pairs, the host's gather before each subtraction, and one add
+ * over the coordinates per partner, the host's scatter before each.
+ * Nothing in the integration calls it now. --door-selftest holds every
+ * route of gravity_body() against it, one force evaluation at a time and
+ * at every format, so that the programs are held to the arithmetic every
+ * record before P1 was made with, and not only to each other. Its
+ * temporaries are its own, grown with P. */
+static void gravity_reference(void){
+    static V pt1, pt2, ppfi, ppfj, pcxi, pcyi, pczi, pcxj, pcyj, pczj, addend;
+    static size_t cap_p, cap_n3;
+    if (!pt1 || cap_p < P){
+        V *t[] = { &pt1, &pt2, &ppfi, &ppfj, &pcxi, &pcyi, &pczi, &pcxj, &pcyj, &pczj };
+        for (size_t k = 0; k < sizeof t / sizeof t[0]; k++){ free(*t[k]); *t[k] = valloc(P); }
+        cap_p = P;
+    }
+    if (!addend || cap_n3 < N3){ free(addend); addend = valloc(N3); cap_n3 = N3; }
     if (P){
         /* per pair, in the order of REBOUND's loop, vectorised over pairs */
         { double _c0 = now_s(); for (size_t l = 0; l < P; l++){ memcpy(E(pxi, l), E(x, 3 * pair_i[l]), ESZ); memcpy(E(pxj, l), E(x, 3 * pair_j[l]), ESZ); } t_g_copy += now_s() - _c0; }
@@ -1201,6 +1481,7 @@ static void gravity_body(void){
     }
     t_g_accum += now_s() - _a0;
 }
+#endif /* !IAS15_CFT_LIBRARY */
 
 /* ------------------------------------------------------------------ */
 /* Compensated summation: REBOUND's add_cs, or the exact 9.5 primitive  */
@@ -1405,6 +1686,147 @@ static void run_program(cft_program *prog, const V a_, const V bb, const V c, si
     double _t0 = now_s();
     cft_status st = cft_program_run_ex(prog, &ra);
     t_program += now_s() - _t0;
+    if (st == CFT_OK && (bus & CFT_STATUS_DEPOSIT_OVERFLOW)) die("%s: deposit overflow", what);
+    note(st, fl, what);
+}
+
+/* The indexed program-run wrapper (ROUND3.md, P1). One run of io->prog
+ * over io->n lanes, each of whose four inputs - the streams a, b and c,
+ * and the scratch-in block - may be read through an index table
+ * (cft_run_args.idx_*, ABI 0.14): with a table, input k's e-th element is
+ * its source's [table[e]], and CFT_IDX_NONE reads +0. A stream's table has
+ * n entries; the block's has n * n_scratch_in, lane-major as the block is.
+ *
+ * Route r decides, as the door decides every family (engine_routes()):
+ *   - on: cft_program_run_ex with the tables, and the device gathers;
+ *   - off, today's route: the host gathers every tabled input into
+ *     scratch, and the same program runs dense. That is the indexed run's
+ *     definition (cft.h, cft_run_args; the software backend's
+ *     seq_load_in() reads one element through the table, or +0, where a
+ *     dense run reads it at its own index), so the two give the same bits.
+ * A run with no table has nothing to route. It is a plain run and counts
+ * in neither of r's counters, and r is not read.
+ *
+ * ONE call in calls= and in program_calls= on either route, as every door
+ * wrapper's, so that both compare equal across routes (check_door.py,
+ * part 4). The run is timed in t_program, and inside gravity in t_g_lib
+ * too. Today's route's gather is t_g_copy inside gravity, where the host
+ * gathers it replaces were counted.
+ *
+ * The door's rules for a table, enforced here by name on BOTH routes, so
+ * that today's route never computes what the new one refuses:
+ *   - stream a may not be NULL: a run reads it into r0 in every lane;
+ *   - a table on a NULL input, a table beside a source of zero elements,
+ *     and a table on the block of a program that declares none are
+ *     refused;
+ *   - once any input has a table, neither the deposits nor the
+ *     scratch-out block may overlap any input, dense or tabled;
+ *   - an index at or past its source is refused, by libcft on the new
+ *     route and by die() here on today's, so neither reads past a source.
+ * The shape - slots in and out a lane, deposits a lane - is the program's
+ * own, from cft_program_get_info(), never a number a caller wrote down. */
+static V px_buf[4];
+static size_t px_cap[4];
+static V px_scratch(int k, size_t n){
+    if (px_cap[k] < n){
+        free(px_buf[k]);
+        px_buf[k] = calloc(n ? n : 1, ESZ);
+        if (!px_buf[k]) die("out of memory");
+        px_cap[k] = n;
+    }
+    return px_buf[k];
+}
+
+static void vprog_ix(int r, const struct prog_io *io, const char *what){
+    static const char *const inm[4] = { "stream a", "stream b", "stream c", "the scratch-in block" };
+    static const char *const onm[2] = { "the deposits", "the scratch-out block" };
+    cft_program_info pi;
+    cft_run_args ra;
+    cft_status st;
+    uint32_t fl = 0, bus = 0;
+    int tables = 0;
+    double t0 = now_s(), tg = 0;
+    memset(&pi, 0, sizeof pi);
+    pi.struct_size = sizeof pi;
+    if (cft_program_get_info(io->prog, &pi) != CFT_OK) die("%s: cft_program_get_info failed: %s", what, cft_last_error());
+    const size_t n = io->n, nsin = pi.n_scratch_in, nsout = pi.n_scratch_out, ndep = pi.max_deposits;
+    const size_t ent[4] = { n, n, n, n * nsin };                 /* a table's entries, a dense input's elements */
+    unsigned long long bytes = (unsigned long long)ESZ * n * (ndep + nsout);     /* the outputs */
+    if (!io->in[0]) die("%s: stream a is NULL, and a program run reads it into r0 in every lane (cft.h, cft_run_args)", what);
+    for (int k = 0; k < 4; k++){
+        if (!io->ix[k]) continue;
+        if (!io->in[k])
+            die("%s: %s has an index table and no source, which cft_program_run_ex refuses (cft.h, cft_run_args)", what, inm[k]);
+        if (!io->src[k])
+            die("%s: %s's index table is beside a source of zero elements, which cft_program_run_ex refuses "
+                "(cft.h, cft_run_args)", what, inm[k]);
+        if (k == 3 && !nsin)
+            die("%s: the scratch-in block has an index table and the program declares no scratch input, "
+                "which cft_program_run_ex refuses (cft.h, cft_run_args)", what);
+        tables = 1;
+    }
+    for (int o = 0; o < 2 && tables; o++){
+        const V out = o ? io->sout : io->dep;
+        const size_t outn = o ? n * nsout : n * ndep;
+        if (!out || !outn) continue;
+        for (int k = 0; k < 4; k++){
+            const size_t span = io->ix[k] ? io->src[k] : ent[k];
+            if (!io->in[k] || !span) continue;
+            if (out + outn * ESZ > io->in[k] && io->in[k] + span * ESZ > out)
+                die("%s: %s overlap %s%s, and a run with an index table may write over none of its inputs "
+                    "(cft.h, cft_run_args)", what, onm[o], inm[k], io->ix[k] ? "'s indexed source" : "");
+        }
+    }
+    memset(&ra, 0, sizeof ra);
+    ra.struct_size = sizeof ra;
+    ra.n = n;
+    ra.deposits = io->dep;
+    ra.scratch_out = nsout ? io->sout : NULL; ra.scratch_out_bytes = n * nsout * ESZ;
+    ra.flags_out = &fl; ra.bus_out = &bus;
+    if (tables && route_on[r]){
+        ra.a = io->in[0]; ra.b = io->in[1]; ra.c = io->in[2];
+        ra.idx_a = io->ix[0]; ra.idx_b = io->ix[1]; ra.idx_c = io->ix[2];
+        ra.idx_a_src = io->ix[0] ? io->src[0] : 0;
+        ra.idx_b_src = io->ix[1] ? io->src[1] : 0;
+        ra.idx_c_src = io->ix[2] ? io->src[2] : 0;
+        ra.scratch_in = nsin ? io->in[3] : NULL;
+        ra.scratch_in_bytes = io->ix[3] ? io->src[3] * ESZ : n * nsin * ESZ;
+        ra.idx_scratch_in = io->ix[3];
+        ra.idx_scratch_src = io->ix[3] ? io->src[3] : 0;
+        for (int k = 0; k < 4; k++)
+            if (io->in[k] && ent[k])
+                bytes += io->ix[k] ? (unsigned long long)io->src[k] * ESZ + 4ull * ent[k] : (unsigned long long)ent[k] * ESZ;
+        nbytes_staged += bytes;
+        st = cft_program_run_ex(io->prog, &ra);
+        route_calls[r]++;
+    }else{
+        V v[4];
+        double g0 = now_s();
+        for (int k = 0; k < 4; k++){
+            v[k] = io->in[k];
+            if (!io->in[k] || !ent[k]) continue;
+            bytes += (unsigned long long)ent[k] * ESZ;
+            if (!io->ix[k]) continue;
+            v[k] = px_scratch(k, ent[k]);
+            for (size_t e = 0; e < ent[k]; e++){
+                const uint32_t t = io->ix[k][e];
+                if (t == CFT_IDX_NONE) memset(E(v[k], e), 0, ESZ);     /* +0, all bits clear */
+                else if (t >= io->src[k]) die("%s: %s's index %lu at entry %zu is past its source of %zu",
+                                              what, inm[k], (unsigned long)t, e, io->src[k]);
+                else memcpy(E(v[k], e), E(io->in[k], t), ESZ);
+            }
+        }
+        tg = now_s() - g0;
+        ra.a = v[0]; ra.b = v[1]; ra.c = v[2];
+        ra.scratch_in = nsin ? v[3] : NULL; ra.scratch_in_bytes = n * nsin * ESZ;
+        nbytes_staged += bytes;
+        st = cft_program_run_ex(io->prog, &ra);
+        if (tables) route_fallbacks[r]++;
+    }
+    ncalls_program++;
+    {   double d = now_s() - t0 - tg;
+        t_program += d;
+        if (in_gravity){ t_g_lib += d; t_g_copy += tg; } else t_program += tg; }
     if (st == CFT_OK && (bus & CFT_STATUS_DEPOSIT_OVERFLOW)) die("%s: deposit overflow", what);
     note(st, fl, what);
 }
@@ -2505,6 +2927,234 @@ static uint32_t door_rs(int on, cft_op op, V d, const V a, const V b, size_t n, 
     return flags_union;
 }
 
+/* ---- the indexed program-run wrapper's cases (ROUND3.md, P1) ---- */
+/* A program-run case's reference: every tabled input gathered HERE,
+ * outside vprog_ix(), CFT_IDX_NONE as +0, and one dense run straight from
+ * libcft. Its outputs land in dep and sout. */
+static uint32_t door_px_ref(const struct prog_io *io, V dep, V sout){
+    cft_program_info pi;
+    cft_run_args ra;
+    uint32_t fl = 0, bus = 0;
+    V v[4];
+    memset(&pi, 0, sizeof pi);
+    pi.struct_size = sizeof pi;
+    if (cft_program_get_info(io->prog, &pi) != CFT_OK) die("door: cft_program_get_info failed: %s", cft_last_error());
+    const size_t ent[4] = { io->n, io->n, io->n, io->n * pi.n_scratch_in };
+    for (int k = 0; k < 4; k++){
+        v[k] = io->in[k];
+        if (!io->ix[k]) continue;
+        v[k] = valloc(ent[k]);
+        for (size_t e = 0; e < ent[k]; e++)
+            if (io->ix[k][e] != CFT_IDX_NONE) memcpy(E(v[k], e), E(io->in[k], io->ix[k][e]), ESZ);
+    }
+    memset(&ra, 0, sizeof ra);
+    ra.struct_size = sizeof ra;
+    ra.a = v[0]; ra.b = v[1]; ra.c = v[2]; ra.n = io->n;
+    ra.scratch_in = pi.n_scratch_in ? v[3] : NULL; ra.scratch_in_bytes = ent[3] * ESZ;
+    ra.scratch_out = pi.n_scratch_out ? sout : NULL; ra.scratch_out_bytes = io->n * pi.n_scratch_out * ESZ;
+    ra.deposits = dep; ra.flags_out = &fl; ra.bus_out = &bus;
+    if (cft_program_run_ex(io->prog, &ra) != CFT_OK) die("door: the reference program run failed: %s", cft_last_error());
+    for (int k = 0; k < 4; k++) if (io->ix[k]) free(v[k]);
+    return fl;
+}
+/* One wrapper call on one route, held to its accounting by door_after(). */
+static uint32_t door_px(int on, int r, const struct prog_io *io, const char *label){
+    route_on[r] = on; flags_union = 0; door_before(r);
+    vprog_ix(r, io, "door program");
+    door_after(r, on, label);
+    return flags_union;
+}
+/* A copy of io whose outputs are dep and sout. */
+static struct prog_io door_px_to(const struct prog_io *io, V dep, V sout){
+    struct prog_io o = { io->prog, io->n, { io->in[0], io->in[1], io->in[2], io->in[3] },
+                         { io->ix[0], io->ix[1], io->ix[2], io->ix[3] },
+                         { io->src[0], io->src[1], io->src[2], io->src[3] }, sout, dep };
+    return o;
+}
+/* One case: the wrapper on both routes against the reference, the
+ * deposits and the scratch-out block compared as one buffer. */
+static void door_px_case(int r, const struct prog_io *io, size_t ndep, size_t nsout, const char *label){
+    const size_t n = io->n, tot = n * (ndep + nsout);
+    V ref = valloc(tot), d1 = valloc(tot), d0 = valloc(tot);
+    uint32_t fr, f1, f0;
+    struct prog_io o;
+    fr = door_px_ref(io, ref, E(ref, n * ndep));
+    o = door_px_to(io, d1, E(d1, n * ndep)); f1 = door_px(1, r, &o, label);
+    o = door_px_to(io, d0, E(d0, n * ndep)); f0 = door_px(0, r, &o, label);
+    door_case(label, ref, fr, d1, f1, d0, f0, tot);
+    free(ref); free(d1); free(d0);
+}
+
+/* ---- gravity, every route against the elementwise reference ---- */
+/* Gravity's data: n values of ONE binade, [1, 2), at dst, dst + stride,
+ * and so on. Signed unless `positive`; a zero of either sign one time in
+ * `zero_one_in` (0: never); with `distinct`, element i carries i in its
+ * LOW twenty mantissa bits, so that no two are equal while the high bits
+ * still spread them over the binade. At binary128 and binary256 every bit
+ * below binary64's reach is then filled, as door_fill() fills it.
+ *
+ * One binade, and not door_fill()'s 2^-20 to 2^20, because a sum's order
+ * shows in its rounding only when its addends are of one size. Over forty
+ * binades one addend of each sum dominates. Measured 2026-11-02, by the
+ * order12 sabotage (a fold table with body 0's second and third addends
+ * swapped): every gravity case passed it on door_fill()'s data, and again
+ * with i in the TOP mantissa bits - which put every x of one sign within
+ * 2^-20 N of the others, so that dx, and every x addend, was tiny. */
+static void door_binade(V dst, size_t n, size_t stride, int positive, unsigned zero_one_in, int distinct){
+    uint64_t *bits = malloc((n ? n : 1) * sizeof *bits);
+    V w = valloc(n ? n : 1);
+    size_t low = door_low_bits();
+    if (!bits) die("out of memory");
+    for (size_t i = 0; i < n; i++){
+        uint64_t r = door_next();
+        uint64_t sign = positive ? 0 : (r & 1ull << 63);
+        if (zero_one_in && (r >> 56) % zero_one_in == 0){ bits[i] = sign; continue; }
+        bits[i] = sign | 1023ull << 52 |
+                  (distinct ? (r & 0xffffffffull) << 20 | (uint64_t)(i & 0xfffffu) : (r & 0xfffffffffffffull));
+    }
+    if (F == CFT_FP64) memcpy(w, bits, n * ESZ);
+    else{
+        uint32_t fl = 0;
+        if (cft_convert(dev, CFT_FP64, F, CFT_RNE, bits, w, n, &fl) != CFT_OK) die("door: widening failed");
+        for (size_t i = 0; i < n; i++){
+            if (!(bits[i] << 1)) continue;                       /* a zero stays a zero */
+            for (size_t j = 0; j < low / 8; j++) w[i * ESZ + j] = (unsigned char)(door_next() >> 56);
+            if (low % 8) w[i * ESZ + low / 8] |= (unsigned char)((door_next() >> 56) & ((1u << (low % 8)) - 1u));
+        }
+    }
+    for (size_t i = 0; i < n; i++) memcpy(E(dst, i * stride), E(w, i), ESZ);
+    free(bits); free(w);
+}
+/* Whether an element is -0: the sign and nothing else. */
+static int door_is_negzero(const unsigned char *v){
+    for (size_t j = 0; j + 1 < ESZ; j++) if (v[j]) return 0;
+    return v[ESZ - 1] == 0x80;
+}
+static int door_is_zero(const unsigned char *v){
+    for (size_t j = 0; j + 1 < ESZ; j++) if (v[j]) return 0;
+    return (v[ESZ - 1] & 0x7f) == 0;
+}
+/* One force evaluation through gravity(), on one combination of the two
+ * switches, held to its accounting: calls= moves by the five pair calls
+ * and one a fold run, program_calls= by the three pair programs and the
+ * fold runs, and each switch's counter by the runs it carried. */
+static uint32_t door_gravity_once(int fold_on, int gather_on, V out, const char *label){
+    const unsigned long long c0 = ncalls, p0 = ncalls_program,
+        ic = route_calls[ROUTE_INDEXED], ifb = route_fallbacks[ROUTE_INDEXED],
+        gc = route_calls[ROUTE_PAIR_GATHER], gfb = route_fallbacks[ROUTE_PAIR_GATHER];
+    const unsigned long long pr_ = P ? 1 : 0, fr_ = fold_runs;
+    route_on[ROUTE_INDEXED] = fold_on; route_on[ROUTE_PAIR_GATHER] = gather_on;
+    flags_union = 0;
+    gravity();
+    memcpy(out, a, N3 * ESZ);
+    if (ncalls - c0 != 5 * pr_ + fr_ || ncalls_program - p0 != 3 * pr_ + fr_ ||
+        route_calls[ROUTE_INDEXED] - ic != (fold_on ? fr_ : 0) || route_fallbacks[ROUTE_INDEXED] - ifb != (fold_on ? 0 : fr_) ||
+        route_calls[ROUTE_PAIR_GATHER] - gc != (gather_on ? pr_ : 0) || route_fallbacks[ROUTE_PAIR_GATHER] - gfb != (gather_on ? 0 : pr_)){
+        door_counts_bad++;
+        printf("COUNT %s, indexed %s and pair_gather %s: calls= moved %llu, program_calls= %llu, indexed %llu/%llu, "
+               "pair_gather %llu/%llu (wanted %llu, %llu, %llu/%llu, %llu/%llu)\n", label, fold_on ? "on" : "off",
+               gather_on ? "on" : "off", ncalls - c0, ncalls_program - p0, route_calls[ROUTE_INDEXED] - ic,
+               route_fallbacks[ROUTE_INDEXED] - ifb, route_calls[ROUTE_PAIR_GATHER] - gc,
+               route_fallbacks[ROUTE_PAIR_GATHER] - gfb, 5 * pr_ + fr_, 3 * pr_ + fr_, fold_on ? fr_ : 0,
+               fold_on ? 0 : fr_, gather_on ? pr_ : 0, gather_on ? 0 : pr_);
+    }
+    return flags_union;
+}
+/* One configuration: E systems of N bodies, its N_active, testparticle
+ * type and ignore_terms, and softening or none. The four combinations of
+ * the two switches are two cases, each against the reference: both on
+ * against both off, then each on alone. Beside them, the physics this
+ * evaluation had to have, ASSERTED (CLAUDE.md, "Bit-identity is not
+ * validity"):
+ *   - the accelerations are all zero exactly when no row has an addend;
+ *   - none is -0, since the sum starts at +0 and cannot become -0;
+ *   - the fold took one run per widest width a row needed, which past a
+ *     width is more than one, so the runs' chaining is what was tested.
+ *
+ * The data is of one binade (door_binade(), which says why). The masses
+ * are nonzero but for every eighth body from the eighth on, which is
+ * massless with alternating signs: so -0 addends occur, as test particles
+ * make them, and are rare enough that most of a row's order still shows.
+ *
+ * `negzero_row` builds the configuration the brief's first trap needs, and
+ * checks that it got it: body 0 massive, and every other body massless
+ * with the sign that makes each of body 0's x addends -0. REBOUND's
+ * `ax = 0; ax += -0 ...` is +0. A fold that started from its first addend
+ * would give -0, and only a configuration like this can show it - and only
+ * if body 0's row FILLS its run. Past a row's end the run adds +0, and
+ * -0 + +0 is +0, so padding repairs exactly this defect (measured: the
+ * zero_first sabotage passed this case at N = 6, a row of 5 in a run of 8).
+ * So the case also asserts that the row has no padding. */
+static void door_gravity_case(const char *what, size_t nb, size_t ns, size_t n_active, int tp, int ign,
+                              int soft, int negzero_row, int all_four){
+    char act[32], label[240], l2[300];
+    if (n_active == (size_t)-1) snprintf(act, sizeof act, "all");
+    else snprintf(act, sizeof act, "%zu", n_active);
+    snprintf(label, sizeof label, "gravity %s: N=%zu E=%zu N_active=%s tp=%d ignore=%d softening=%s",
+             what, nb, ns, act, tp, ign, soft ? "on" : "+0");
+    if (!route_have[ROUTE_INDEXED] || !route_have[ROUTE_PAIR_GATHER]){
+        door_skipped += all_four ? 2 : 1;
+        printf("skip %s, both on against both off: the routes are %s and %s\n", label, route_by[ROUTE_INDEXED], route_by[ROUTE_PAIR_GATHER]);
+        if (all_four)
+            printf("skip %s, each on alone: the routes are %s and %s\n", label, route_by[ROUTE_INDEXED], route_by[ROUTE_PAIR_GATHER]);
+        return;
+    }
+    E = ns; N = nb; NB = E * N; N3 = 3 * NB; L = 3 * N; PS = N * (N - 1) / 2; P = E * PS;
+    NMAX = N3 > P ? N3 : P; if (NMAX < 8) NMAX = 8;
+    mass = valloc(NB); x = valloc(N3); a = valloc(N3); G = valloc(NMAX); SOFT2 = valloc(NMAX);
+    door_binade(x, NB, 3, 0, 0, 1);                    /* x: distinct, so no pair is at distance zero */
+    door_binade(E(x, 1), NB, 3, 0, 16, 0);             /* y and z: zeros of both signs among them */
+    door_binade(E(x, 2), NB, 3, 0, 16, 0);
+    door_binade(mass, NB, 1, 1, 0, 0);
+    for (size_t i = 0; i < NB; i++)
+        if (i % N >= 7 && i % 8 == 7) door_zero(E(mass, i), (int)(i / 8 % 2));
+    if (negzero_row)
+        for (size_t i = 1; i < N; i++)        /* x_i > x_0: dx > 0, so m_i = -0; else m_i = +0 */
+            door_zero(E(mass, i), s_lt(E(x, 0), E(x, 3 * i)));
+    {   V g = valloc(1); door_binade(g, 1, 1, 1, 0, 0); vbcast(G, g, NMAX); free(g); }
+    if (soft){ V s = valloc(1); door_binade(s, 1, 1, 1, 0, 0); vbcast(SOFT2, s, NMAX); free(s); }
+    eng_active = n_active; eng_tptype = tp; eng_ignore = ign;
+    alloc_pairs();
+    {
+        static const int combo[4][2] = { { 1, 1 }, { 0, 0 }, { 1, 0 }, { 0, 1 } };
+        const size_t wmax = fold_w[n_fold_w - 1], want_runs = (scat_max + wmax - 1) / wmax;
+        V ref = valloc(N3), d[4];
+        uint32_t fr, f[4];
+        size_t nonzero = 0, negzero = 0, pool_negzero = 0, row0_negzero = 0;
+        const int ncombo = all_four ? 4 : 2;
+        flags_union = 0;
+        gravity_reference();
+        fr = flags_union;
+        memcpy(ref, a, N3 * ESZ);
+        for (int c = 0; c < ncombo; c++){ d[c] = valloc(N3); f[c] = door_gravity_once(combo[c][0], combo[c][1], d[c], label); }
+        for (size_t i = 0; i < N3; i++){ nonzero += !door_is_zero(E(ref, i)); negzero += door_is_negzero(E(ref, i)); }
+        for (size_t i = 0; i < 6 * P; i++) pool_negzero += door_is_negzero(E(ppool, i));
+        for (size_t e = 0; e < scat_n[0]; e++){            /* body 0's x addends, as its row names them */
+            const size_t enc = scat[e];
+            row0_negzero += door_is_negzero(E(ppool, 6 * (enc >> 1) + 3 * (enc & 1)));
+        }
+        snprintf(l2, sizeof l2, "%s, both on against both off", label);
+        door_case(l2, ref, fr, d[0], f[0], d[1], f[1], N3);
+        if (all_four){
+            snprintf(l2, sizeof l2, "%s, each on alone", label);
+            door_case(l2, ref, fr, d[2], f[2], d[3], f[3], N3);
+        }
+        printf("door %s: %zu pairs, rows of at most %zu, %zu fold runs of at most %zu; %zu of %zu accelerations "
+               "nonzero, %zu are -0; %zu of the pool's %zu addends are -0, %zu of body 0's %zu x addends\n", label, P,
+               scat_max, fold_runs, wmax, nonzero, N3, negzero, pool_negzero, 6 * P, row0_negzero, scat_n[0]);
+        if ((nonzero == 0) != (scat_max == 0) || negzero || fold_runs != want_runs ||
+            (negzero_row && (row0_negzero != scat_n[0] || scat_n[0] < 2 || !door_is_zero(E(ref, 0)) ||
+                             fold_runs != 1 || fold_width[0] != scat_n[0]))){
+            door_differ++;
+            printf("DIFF %s: not the physics this configuration must have - %zu nonzero accelerations with rows of at "
+                   "most %zu, %zu of them -0, %zu fold runs where %zu were wanted%s\n", label, nonzero, scat_max, negzero,
+                   fold_runs, want_runs, negzero_row ? ", or body 0's x row is not every addend -0, in one run it fills" : "");
+        }
+        free(ref); for (int c = 0; c < ncombo; c++) free(d[c]);
+    }
+    eng_active = (size_t)-1; eng_tptype = 0; eng_ignore = IGN_NONE;
+}
+
 static int door_selftest(const char *artifact){
     const size_t nel[] = { 1, 7, 3 * (size_t)CFT_MAX_BODIES, 24576, 24577, 49153 };
     const size_t npair[] = { 1, 7, (size_t)CFT_MAX_BODIES * (CFT_MAX_BODIES - 1) / 2, 524272, 524273 };
@@ -2521,6 +3171,20 @@ static int door_selftest(const char *artifact){
     for (int r = 0; r < N_ROUTES; r++)
         printf("door route %s=%s by=%s env=%s bit=%.*s\n", route_def[r].name, route_on[r] ? "on" : "off",
                route_by[r], route_def[r].env, (int)strcspn(route_def[r].bit_name, " "), route_def[r].bit_name);
+    /* What this binary carries of gravity's programs at this format, as
+     * libcft names a loaded image (cft_program_digest, no bank), so that
+     * tools/check_gravity.py can hold it to programs/out/. A binary built
+     * before `make programs` regenerated them is then caught by name. */
+    for (size_t i = 0; i < gravity_images_n; i++){
+        uint8_t h[32];
+        if (strcmp(gravity_images[i].format, cft_format_name(F))) continue;
+        cft_program *p = gravity_image(gravity_images[i].stem);
+        if (cft_program_digest(p, NULL, 0, h) != CFT_OK) die("door: cft_program_digest failed: %s", cft_last_error());
+        printf("door image %s-%s bytes=%zu sha256=", gravity_images[i].stem, gravity_images[i].format, gravity_images[i].length);
+        for (int k = 0; k < 32; k++) printf("%02x", h[k]);
+        printf("\n");
+        cft_program_free(p);
+    }
 
     /* The scalar family. Every way an operand of mul, add, sub or fma
      * can be the one-element one, with at least one operand left a
@@ -2681,6 +3345,132 @@ static int door_selftest(const char *artifact){
             }
     }
 
+    /* The indexed program-run wrapper (ROUND3.md, P1), on gravity's own
+     * programs, each route against a reference gathered here:
+     *   - the fold: the running sum as a dense stream, its addends
+     *     through a table into a pool, at widths from 1 to the widest
+     *     compiled in, past the 1,024-body run's 3,072 lanes;
+     *   - the pair program: six coordinates a lane through a table, at 1,
+     *     7 and 4,096 lanes, its deposits and its scratch-out block both
+     *     compared (the 1,024-body triangle runs through gravity() below);
+     *   - the force program with a table on all four inputs, and the cube
+     *     program with one on its stream, which gravity never puts there:
+     *     the wrapper takes them, so they are held too.
+     * Each family's label starts with the route that carries it, so a
+     * route the device does not publish reports its cases not compared. */
+    {
+        const size_t PXSRC = 131072;
+        static const struct { size_t n, w; } fshapes[] = { { 1, 1 }, { 7, 2 }, { 3 * (size_t)CFT_MAX_BODIES, 0 }, { 24577, 16 } };
+        V pool = valloc(PXSRC), sa = valloc(PXSRC), sb = valloc(PXSRC), sc = valloc(PXSRC);
+        find_fold_widths();
+        for (size_t s = 0; s < sizeof fshapes / sizeof fshapes[0]; s++){
+            const size_t n = fshapes[s].n, w = fshapes[s].w ? fshapes[s].w : fold_w[n_fold_w - 1];
+            char stem[48];
+            int have = 0;
+            for (int i = 0; i < n_fold_w; i++) have |= fold_w[i] == w;
+            snprintf(label, sizeof label, "indexed program fold width=%zu n=%zu src=%zu", w, n, PXSRC);
+            if (!route_have[ROUTE_INDEXED]){ door_skipped++; printf("skip %s: the route is %s\n", label, route_by[ROUTE_INDEXED]); continue; }
+            if (!have){ door_skipped++; printf("skip %s: no fold of that width fits this device\n", label); continue; }
+            snprintf(stem, sizeof stem, "gravity-fold%zu", w);
+            uint32_t *t = door_table(n * w, PXSRC);
+            door_fill(sa, n); door_fill(pool, PXSRC);
+            {
+                const struct prog_io io = { gravity_image(stem), n, { sa, NULL, NULL, pool }, { NULL, NULL, NULL, t },
+                                            { 0, 0, 0, PXSRC }, NULL, NULL };
+                door_px_case(ROUTE_INDEXED, &io, 1, 0, label);
+                if (s == 2){
+                    /* The control: every index moved on by one partner. */
+                    V c0 = valloc(n), c1 = valloc(n);
+                    struct prog_io o = door_px_to(&io, c0, NULL);
+                    door_px(1, ROUTE_INDEXED, &o, "indexed program control");
+                    for (size_t e = 0; e < n * w; e++) if (t[e] != CFT_IDX_NONE) t[e] = (uint32_t)((t[e] + 1u) % PXSRC);
+                    o = door_px_to(&io, c1, NULL);
+                    door_px(1, ROUTE_INDEXED, &o, "indexed program control");
+                    door_control("indexed program fold, every index moved on by one partner", c0, c1, n);
+                    free(c0); free(c1);
+                }
+            }
+            free(t);
+        }
+        /* the 1,024-body triangle's 523,776 pairs run below, through
+         * gravity() itself */
+        static const size_t pshapes[] = { 1, 7, 4096 };
+        for (size_t s = 0; s < sizeof pshapes / sizeof pshapes[0]; s++){
+            const size_t n = pshapes[s], xs = 3 * (size_t)CFT_MAX_BODIES;
+            snprintf(label, sizeof label, "pair_gather program pair n=%zu src=%zu", n, xs);
+            if (!route_have[ROUTE_PAIR_GATHER]){ door_skipped++; printf("skip %s: the route is %s\n", label, route_by[ROUTE_PAIR_GATHER]); continue; }
+            uint32_t *t = door_table(6 * n, xs);
+            V st = valloc(n);
+            door_fill(st, n); door_fill(pool, xs);
+            {
+                const struct prog_io io = { gravity_image("gravity-pair"), n, { st, NULL, NULL, pool }, { NULL, NULL, NULL, t },
+                                            { 0, 0, 0, xs }, NULL, NULL };
+                door_px_case(ROUTE_PAIR_GATHER, &io, 1, 3, label);
+                if (s == 2){
+                    V c0 = valloc(4 * n), c1 = valloc(4 * n);
+                    struct prog_io o = door_px_to(&io, c0, E(c0, n));
+                    door_px(1, ROUTE_PAIR_GATHER, &o, "pair_gather program control");
+                    for (size_t e = 0; e < 6 * n; e++) if (t[e] != CFT_IDX_NONE) t[e] = (uint32_t)((t[e] + 1u) % xs);
+                    o = door_px_to(&io, c1, E(c1, n));
+                    door_px(1, ROUTE_PAIR_GATHER, &o, "pair_gather program control");
+                    door_control("pair_gather program pair, every index moved on by one partner", c0, c1, 4 * n);
+                    free(c0); free(c1);
+                }
+            }
+            free(t); free(st);
+        }
+        static const size_t xshapes[] = { 7, 4096 };
+        for (size_t s = 0; s < sizeof xshapes / sizeof xshapes[0]; s++){
+            const size_t n = xshapes[s];
+            snprintf(label, sizeof label, "pair_gather program force, a table on every input n=%zu src=%zu", n, PXSRC);
+            if (!route_have[ROUTE_PAIR_GATHER]){ door_skipped++; printf("skip %s: the route is %s\n", label, route_by[ROUTE_PAIR_GATHER]); continue; }
+            uint32_t *ta = door_table(n, PXSRC), *tb = door_table(n, PXSRC), *tc = door_table(n, PXSRC), *tk = door_table(3 * n, PXSRC);
+            door_fill(sa, PXSRC); door_fill(sb, PXSRC); door_fill(sc, PXSRC); door_fill(pool, PXSRC);
+            {
+                const struct prog_io io = { gravity_image("gravity-force"), n, { sa, sb, sc, pool }, { ta, tb, tc, tk },
+                                            { PXSRC, PXSRC, PXSRC, PXSRC }, NULL, NULL };
+                door_px_case(ROUTE_PAIR_GATHER, &io, 6, 0, label);
+            }
+            free(ta); free(tb); free(tc); free(tk);
+        }
+        {
+            const size_t n = 7;
+            snprintf(label, sizeof label, "indexed program cube, a table on its stream n=%zu src=%zu", n, PXSRC);
+            if (!route_have[ROUTE_INDEXED]){ door_skipped++; printf("skip %s: the route is %s\n", label, route_by[ROUTE_INDEXED]); }
+            else{
+                uint32_t *ta = door_table(n, PXSRC);
+                door_fill(sa, PXSRC);
+                const struct prog_io io = { gravity_image("gravity-cube"), n, { sa, NULL, NULL, NULL }, { ta, NULL, NULL, NULL },
+                                            { PXSRC, 0, 0, 0 }, NULL, NULL };
+                door_px_case(ROUTE_INDEXED, &io, 1, 0, label);
+                free(ta);
+            }
+        }
+        free(pool); free(sa); free(sb); free(sc);
+    }
+
+    /* Gravity itself, one force evaluation through gravity() on all four
+     * combinations of its two switches, against gravity_reference(): the
+     * elementwise gravity every record before P1 was made with. The
+     * configurations are the ones whose rows differ: test particles, both
+     * testparticle types, all three ignore_terms, an ensemble, no source
+     * at all, one body, the trap's signed zero, the widest fold's width
+     * exactly and one past it, and the body cap. */
+    door_gravity_case("two bodies", 2, 1, (size_t)-1, 0, IGN_NONE, 0, 0, 1);
+    door_gravity_case("an ensemble", 5, 3, (size_t)-1, 0, IGN_NONE, 0, 0, 1);
+    door_gravity_case("softened", 16, 1, (size_t)-1, 0, IGN_NONE, 1, 0, 1);
+    door_gravity_case("test particles", 64, 1, 40, 0, IGN_NONE, 0, 0, 1);
+    door_gravity_case("test particles that pull back, INVOLVING_0", 64, 1, 40, 1, IGN_INVOLVING_0, 0, 0, 1);
+    door_gravity_case("BETWEEN_0_AND_1", 8, 1, (size_t)-1, 0, IGN_BETWEEN_0_AND_1, 0, 0, 1);
+    door_gravity_case("nothing a source", 8, 1, 0, 0, IGN_NONE, 0, 0, 1);
+    door_gravity_case("one body", 1, 1, (size_t)-1, 0, IGN_NONE, 0, 0, 1);
+    door_gravity_case("every x addend of body 0 is -0, in a row that fills its run", 5, 1, (size_t)-1, 0, IGN_NONE, 0, 1, 1);
+    door_gravity_case("rows exactly the widest fold", 257, 1, (size_t)-1, 0, IGN_NONE, 0, 0, 1);
+    door_gravity_case("rows one past the widest fold", 258, 1, (size_t)-1, 0, IGN_NONE, 0, 0, 1);
+    /* the body cap's one force evaluation, both switches on against both
+     * off: the cases above take each alone */
+    door_gravity_case("the body cap", (size_t)CFT_MAX_BODIES, 1, (size_t)-1, 0, IGN_NONE, 0, 0, 0);
+
     for (int r = 0; r < N_ROUTES; r++)
         printf("door route %s calls=%llu fallbacks=%llu\n", route_def[r].name, route_calls[r], route_fallbacks[r]);
     printf("door data: %llu of %llu nonzero values carry bits below binary64's reach\n", door_values_beyond, door_values);
@@ -2715,8 +3505,13 @@ static int door_refuse(const char *name){
         vrun_ix(CFT_MUL, d, a, t, 0, b, NULL, 0, NULL, NULL, 0, n, "door refuse");
     else if (!strcmp(name, "reduce-partial"))      /* not whole segments */
         vreduce_seg(CFT_SUM, d, a, NULL, n + 1, 8, "door refuse");
+    else if (!strcmp(name, "px-alias-pool")){      /* a fold run depositing into the pool its table reads */
+        const struct prog_io io = { gravity_image("gravity-fold1"), n, { a, NULL, NULL, b }, { NULL, NULL, NULL, t },
+                                    { 0, 0, 0, src }, NULL, b };
+        vprog_ix(ROUTE_INDEXED, &io, "door refuse");
+    }
     else die("--door-refuse %s: the cases are ix-alias-dense, ix-alias-source, ix-table-on-null, "
-             "ix-zero-source and reduce-partial", name);
+             "ix-zero-source, reduce-partial and px-alias-pool", name);
     printf("door refuse %s: NOT refused\n", name);
     free(a); free(b); free(d); free(t);
     return 1;

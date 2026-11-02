@@ -192,6 +192,163 @@ def correct(fmt, n):
     return "\n".join(L) + "\n"
 
 
+# ---- gravity (ROUND3.md, P1) ------------------------------------------
+#
+# REBOUND's reb_gravity_basic_calculate_acceleration() as a handful of
+# program runs a force evaluation, where it was 22 elementwise calls over
+# the P pairs and one more over the 3N coordinates per partner. Gravity
+# couples lanes, so two of the runs read their inputs through an index
+# table (cft_run_args.idx_scratch_in, ABI 0.14) - or, on the route that
+# takes the host's gather instead, through a block the host filled from
+# the same table. The programs are the same either way, which is what
+# makes the two routes the same bits (src/ias15_cft.c, vprog_ix()).
+#
+#   gravity-pair-<fmt>   one lane a pair: dx, dy, dz and
+#                        dx*dx + dy*dy + dz*dz + softening2
+#                        stream a: softening2, broadcast
+#                        scratch in: x_i, x_j, y_i, y_j, z_i, z_j (6 slots)
+#                        scratch out: dx, dy, dz (3 slots)
+#                        deposit: the squared distance
+#   gravity-cube-<fmt>   one lane a pair: _r*_r*_r, left to right
+#                        stream a: _r, from cft_sqrt
+#                        deposit: _r^3, which cft_div divides G by
+#   gravity-force-<fmt>  one lane a pair: what each of its bodies receives
+#                        streams: a = G/_r^3, b = m_i, c = m_j
+#                        scratch in: dx, dy, dz (gravity-pair's out block)
+#                        deposits: prefactj*dx, *dy, *dz, then
+#                        prefacti*dx, *dy, *dz (6) - the fold's pool
+#   gravity-fold<K>-<fmt>  one lane a coordinate: the running sum
+#                        (stream a) plus K slots, in slot order
+#                        scratch in: the next K addends of the lane's
+#                        row, through the fold table into the pool,
+#                        CFT_IDX_NONE (+0) past the row's end
+#                        deposit: the running sum
+#
+# The square root and the divide stay library calls: a correctly rounded
+# divide is not a sequencer program (cft-fp256 docs/ORBITS.md, obstacle
+# 2), which is also why --engine program needs --arith fma. Nothing else
+# here needs either, so these programs carry REBOUND's own roundings and
+# run at --arith rebound, in every engine mode, and in both halves.
+#
+# The order is the gate: every expression below is the elementwise code's
+# (and so REBOUND's) operation for operation, and the fold adds a row's
+# addends one at a time from the sum it was given, which starts at +0 -
+# REBOUND's `ax = 0; ax += ...`. Registers stay below r16 and there is no
+# constant bank, so each image needs SCRATCH and SCRATCH_IO and nothing
+# else (cft-asm -i).
+#
+# The fold comes in every power-of-two width up to 256 slots, the
+# assembler's default scratch depth (docs/PROGRAMS.md of the pinned tree,
+# `.scratch N`): a run takes the narrowest that holds what is left of the
+# rows, so a short row costs at most twice its own length in +0 adds, and
+# a longer one takes several runs, each continuing the last one's sum.
+GRAVITY_FOLD_WIDTHS = [1 << i for i in range(9)]
+
+
+def gravity_pair(fmt):
+    L = [HEADER % ("gravity-pair-" + fmt, "gravity's pair arithmetic up to the square root; see tools/gen_programs.py")]
+    L.append(".format   %s" % fmt)
+    L.append(".deposits 1")
+    L.append(".scratch  in 6")
+    L.append(".scratch  out 3")
+    # Slot names share the register namespace and ignore case
+    # (docs/PROGRAMS.md), hence S_ for every slot.
+    for i, name in enumerate(("S_XI", "S_XJ", "S_YI", "S_YJ", "S_ZI", "S_ZJ")):
+        L.append(".slot     %s = %d" % (name, i))
+    for i, name in enumerate(("S_DX", "S_DY", "S_DZ")):
+        L.append(".slot     %s = %d" % (name, i))
+    for k, v in (("soft2", "r0"), ("pi", "r3"), ("pj", "r4"), ("dx", "r5"), ("dy", "r6"), ("dz", "r7"),
+                 ("s", "r8"), ("t", "r9")):
+        L.append(".reg      %s = %s" % (k, v))
+    L.append("")
+    for d, (i, j) in zip(("dx", "dy", "dz"), (("S_XI", "S_XJ"), ("S_YI", "S_YJ"), ("S_ZI", "S_ZJ"))):
+        L.append("ldl  pi, %s" % i)
+        L.append("ldl  pj, %s" % j)
+        L.append("sub  %s, pi, pj" % d)              # d = x_i - x_j (the ghost box's +0 is not added)
+    L.append("mul  s, dx, dx")                      # dx*dx + dy*dy + dz*dz + softening2, left to right
+    L.append("mul  t, dy, dy")
+    L.append("add  s, s, t")
+    L.append("mul  t, dz, dz")
+    L.append("add  s, s, t")
+    L.append("add  s, s, soft2")
+    L.append("stl  dx, S_DX")
+    L.append("stl  dy, S_DY")
+    L.append("stl  dz, S_DZ")
+    L.append("deposit s")
+    L.append("halt")
+    return "\n".join(L) + "\n"
+
+
+def gravity_cube(fmt):
+    L = [HEADER % ("gravity-cube-" + fmt, "gravity's _r*_r*_r; see tools/gen_programs.py")]
+    L.append(".format   %s" % fmt)
+    L.append(".deposits 1")
+    L.append(".reg      rad = r0")
+    L.append(".reg      t = r3")
+    L.append("")
+    L.append("mul  t, rad, rad")                    # _r*_r*_r, left to right
+    L.append("mul  t, t, rad")
+    L.append("deposit t")
+    L.append("halt")
+    return "\n".join(L) + "\n"
+
+
+def gravity_force(fmt):
+    L = [HEADER % ("gravity-force-" + fmt, "gravity's prefactors and the six contributions of a pair; see tools/gen_programs.py")]
+    L.append(".format   %s" % fmt)
+    L.append(".deposits 6")
+    L.append(".scratch  in 3")
+    for i, name in enumerate(("S_DX", "S_DY", "S_DZ")):
+        L.append(".slot     %s = %d" % (name, i))
+    for k, v in (("prefact", "r0"), ("mi", "r1"), ("mj", "r2"), ("negp", "r3"), ("pfj", "r4"), ("pfi", "r5"),
+                 ("dx", "r6"), ("dy", "r7"), ("dz", "r8"), ("c", "r9")):
+        L.append(".reg      %s = %s" % (k, v))
+    L.append("")
+    L.append("neg  negp, prefact")                  # prefactj = -prefact*m_j
+    L.append("mul  pfj, negp, mj")
+    L.append("mul  pfi, prefact, mi")               # prefacti = prefact*m_i
+    L.append("ldl  dx, S_DX")
+    L.append("ldl  dy, S_DY")
+    L.append("ldl  dz, S_DZ")
+    for pf in ("pfj", "pfi"):                       # what i receives, then what j receives
+        for d in ("dx", "dy", "dz"):
+            L.append("mul  c, %s, %s" % (pf, d))
+            L.append("deposit c")
+    L.append("halt")
+    return "\n".join(L) + "\n"
+
+
+def gravity_fold(fmt, k):
+    L = [HEADER % ("gravity-fold%d-%s" % (k, fmt), "gravity's accumulate, %d addends a run; see tools/gen_programs.py" % k)]
+    L.append(".format   %s" % fmt)
+    L.append(".deposits 1")
+    L.append(".scratch  in %d" % k)
+    L.append(".reg      sum = r0")
+    L.append(".reg      acc = r3")
+    L.append(".reg      t = r4")
+    L.append("")
+    for s in range(k):
+        L.append("ldl  t, %d" % s)
+        L.append("add  acc, %s, t" % ("sum" if s == 0 else "acc"))   # the sum so far, plus the next addend
+    L.append("deposit acc")
+    L.append("halt")
+    return "\n".join(L) + "\n"
+
+
+def write_gravity(fmt):
+    """Write one format's gravity programs; return their file names."""
+    progs = [("gravity-pair", gravity_pair(fmt)), ("gravity-cube", gravity_cube(fmt)),
+             ("gravity-force", gravity_force(fmt))]
+    progs += [("gravity-fold%d" % k, gravity_fold(fmt, k)) for k in GRAVITY_FOLD_WIDTHS]
+    names = []
+    for stem, text in progs:
+        name = "%s-%s.cfta" % (stem, fmt)
+        with open(os.path.join(outdir, name), "w", newline="\n") as f:
+            f.write(text)
+        names.append(name)
+    return names
+
+
 def main():
     os.makedirs(outdir, exist_ok=True)
     names = []
@@ -209,6 +366,7 @@ def main():
             with open(os.path.join(outdir, name), "w", newline="\n") as f:
                 f.write(correct(fmt, n))
             names.append(name)
+        names += write_gravity(fmt)
     print("wrote %d programs under %s" % (len(names), outdir))
     return 0
 

@@ -107,5 +107,7 @@ void cases_seam(void);   /* tools/cases_seam.c - combinations no single parcel
 void cases_pairs(void);  /* tools/cases_pairs.c - which pairs gravity computes:
                           * r->N_active, r->testparticle_type and
                           * r->gravity_ignore_terms */
+void cases_gravity(void); /* tools/cases_gravity.c - gravity's two routes in the
+                           * library half, and its tables rebuilt mid-run */
 
 #endif /* DROPIN_CASES_H */
