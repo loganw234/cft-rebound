@@ -80,7 +80,9 @@
 #   CFT_REBOUND_NO_CLOCK   it adopts everything but the wide clock, which
 #                          it rebuilds from r->t - the world before
 #                          2026-11-02. The sweep's control: with it, the
-#                          2-of-40 case must fail again
+#                          2-of-40 case must fail again, and at binary128
+#                          and binary256 move r->t on exactly the 2 of 40
+#                          splits the case is named for (NAMED_VIEW_SPLITS)
 #   CFT_REBOUND_NO_STEP    it adopts everything but the wide dt and
 #                          dt_last, which it rebuilds from r->dt and
 #                          r->dt_last_done
@@ -125,6 +127,13 @@ SEQUENCES = [
 SPLITS = 40
 AFTER = 40
 SWEEP_CONTROL = "CFT_REBOUND_NO_CLOCK"
+# THE COUNT THE CASE IS NAMED FOR. ROADMAP.md recorded the lost clock as
+# "1 ulp in t on 2 of 40 step splits", at binary128 and at binary256. With
+# the clock's load removed this sweep must give exactly that again, in
+# r->t: a control that merely makes something differ would pass with any
+# setup, the case's or not (V3, 2026-11-02).
+NAMED_VIEW_SPLITS = 2
+NAMED_FORMATS = ("fp128", "fp256")
 
 
 def run(exe, args, want_stdout, extra_env=None):
@@ -330,10 +339,17 @@ def splits_sweep(exe, fmt, workdir):
     if not cbad:
         return False, ("NOT SENSITIVE to %s - forty resumes with the clock's load removed "
                        "all match, so this sweep proves nothing" % SWEEP_CONTROL)
-    return True, ("%d of %d resumes identical (%s); with %s, %d of %d differ: r->t on %d %s, "
+    if fmt in NAMED_FORMATS and len(cby["view"]) != NAMED_VIEW_SPLITS:
+        return False, ("NOT THE 2-OF-40 CASE - with %s, r->t differs on %d of %d splits %s, "
+                       "not the %d the case is named for, so this is a different setup's "
+                       "sweep" % (SWEEP_CONTROL, len(cby["view"]), SPLITS, cby["view"],
+                                  NAMED_VIEW_SPLITS))
+    return True, ("%d of %d resumes identical (%s); with %s, %d of %d differ: r->t on %d %s%s, "
                   "the clock or steps on %d" % (
                       SPLITS, SPLITS, counts, SWEEP_CONTROL, len(cbad), SPLITS,
-                      len(cby["view"]), cby["view"], len(cby["time"])))
+                      len(cby["view"]), cby["view"],
+                      " (the case's %d, asserted)" % NAMED_VIEW_SPLITS if fmt in NAMED_FORMATS else "",
+                      len(cby["time"])))
 
 
 def main():
