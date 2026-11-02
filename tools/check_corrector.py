@@ -46,16 +46,25 @@
 #      the replay's own counters; a capped count moved by one is refused by
 #      name; and in a mixed attempt of the ensemble, ONE system that is not
 #      the longest cut to one pass must change its own lines and no other
-#      system's, or be refused by name. That last holds each system's own
-#      exit: a replay that kept every system in the corrector to the
-#      attempt's last count passed everything else (V2's M2).
+#      system's, and those lines must be the same cut of that system run
+#      alone (--member), whose schedule must be the ensemble's column for it
+#      attempt by attempt - or both runs are refused by name. That holds each
+#      system's own exit exactly: a replay that kept every system in the
+#      corrector to the attempt's last count (V2's M2), or froze one a pass
+#      late (M2b), passed everything else.
 #   5. Refusals by name: a schedule from another run, one cut short, one
 #      too long, a malformed field, a file that is not a schedule, and
 #      --trace-pc or --record-iters beside --replay-iters.
 #   6. The run key holds every field. A schedule replayed under a run that
-#      differs in one thing - epsilon, the initial state, and every other
-#      field the key carries, read from the key - is refused by name, and
-#      a field that no case moves fails by name (V2's M3 and M3s).
+#      differs in one thing - epsilon, each of the four things the state's
+#      hash covers (a position, a velocity, a mass, a dt-file step), and
+#      every other field the key carries, read from the key - is refused by
+#      name, and a field that no case moves fails by name (V2's M3, M3s,
+#      M3v, M3m and M3dt).
+#
+# Each run works in <build>/corrector/<pid>, so two runs sharing a --build
+# directory do not clobber each other; a passing run removes it, a failing
+# one keeps it.
 #
 # The route's name and variable are read from the program, never typed.
 
@@ -144,14 +153,19 @@ def main():
     ap.add_argument("--exe", default="ias15_cft")
     ap.add_argument("--formats", default="fp64,fp128,fp256")
     ap.add_argument("--quick", action="store_true", help="binary64 only, shorter runs")
-    ap.add_argument("--keep", default=None, help="directory for schedules and ensembles (default build/corrector)")
+    ap.add_argument("--keep", default=None, help="directory for schedules and ensembles, kept "
+                    "(default <build>/corrector/<pid>, removed after a pass)")
     args = ap.parse_args()
     exe = ".exe" if os.name == "nt" else ""
     cft = os.path.join(args.build, args.exe + exe)
     formats = ["fp64"] if args.quick else args.formats.split(",")
-    work = args.keep or os.path.join(args.build, "corrector")
+    # A directory of this process's own, so two runs sharing one --build
+    # cannot clobber each other's schedules (V2, 2026-11-02: one read the
+    # other's fp256 schedules as fp64 ones). Removed after a pass, kept after
+    # a failure for what it holds.
+    work = args.keep or os.path.join(args.build, "corrector", str(os.getpid()))
     if not args.keep:
-        shutil.rmtree(work, ignore_errors=True)      # only the gate's own directory is ever removed
+        shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work, exist_ok=True)
     software = not os.environ.get("CFT_REBOUND_ARTIFACT")
     progs = os.path.join(root, "programs", "out")
@@ -461,6 +475,38 @@ def main():
                 % (configs[ke]["label"], a, s, n, longest,
                    ("the systems whose record lines moved are %s, and only %d's may" % (moved, s)) if rc == 0 else
                    "refused (rc %d): %s" % (rc, err.strip()[-140:])))
+        #     "Only that system moved" cannot see a system frozen a pass late,
+        #     because it moves too (V2's M2b). The exact reference can: the
+        #     same system run ALONE (--member), whose schedule column must be
+        #     the ensemble's attempt by attempt, with the same cut at its own
+        #     attempt. An ensemble's system is its member alone, bit for bit
+        #     (tools/check_ensemble.py), so the cut lines must be the same.
+        margs = configs[ke]["args"] + ["--member", str(s)]
+        msched = os.path.join(work, "%s-member.sched" % fmt)
+        mrc, mout, merr = run([cft] + margs + ["--record-iters", msched])
+        mh, mb = schedule(msched) if mrc == 0 else ([], [])
+        own = [f[s] for f in be if f[s] != "-"]
+        verdict(mrc == 0 and [f[0] for f in mb] == own,
+                "system %d's passes in the ensemble's schedule are its own run alone (--member %d), attempt by attempt: "
+                "%d of %d attempts" % (s, s, sum(1 for x, y in zip(mb, own) if x[0] == y), len(own)))
+        am = sum(1 for f in be[:a] if f[s] != "-")      # the cut attempt, counted in the member's own attempts
+        exact, detail = False, "the member's schedule has no attempt %d" % am
+        if am < len(mb):
+            mcut = [list(f) for f in mb]
+            mcut[am][0] = "1"
+            mpath = os.path.join(work, "%s-member-cut.sched" % fmt)
+            write(mpath, mh, mcut)
+            rrc, rout, rerr = run([cft] + margs + ["--replay-iters", mpath])
+            alone = [l for l in rout.splitlines() if l.startswith("sample ")]
+            mine = [l.split(" ", 2)[2] for l in new.get(s, [])]      # its lines, "system <s> " taken off
+            if rc == 0 and rrc == 0:
+                diff = sum(1 for x, y in zip(mine, alone) if x != y) + abs(len(mine) - len(alone))
+                exact = diff == 0 and len(alone) > 0
+                detail = "%d of %d lines differ" % (diff, len(alone))
+            else:      # refused by name, both: rc 3 alone is any die()
+                exact = rc == 3 and "--replay-iters" in err and rrc == 3 and "--replay-iters" in rerr
+                detail = "the ensemble's replay rc %d, the member's rc %d" % (rc, rrc)
+        verdict(exact, "and its cut lines are the same cut of --member %d run alone (its attempt %d): %s" % (s, am, detail))
 
     # 5. Refusals by name, at the first format.
     fmt0 = formats[0]
@@ -516,57 +562,79 @@ def main():
             f.write(edit(ktext))
         return p
 
-    def last_x(text):
-        # the last body's x, its final hex digit moved: one coordinate, one ulp's worth of change
-        lines = text.splitlines()
-        i = max(k for k, l in enumerate(lines) if l.startswith("body "))
-        t = lines[i].split()
-        m, e = t[3].split("p")
-        t[3] = m[:-1] + ("0" if m[-1] != "0" else "1") + "p" + e
-        lines[i] = " ".join(t)
-        return "\n".join(lines) + "\n"
+    def nudge(tok):
+        # the last body's field tok (2 its mass, 3 its x, 7 its vy), its final
+        # hex digit moved: one value, about one ulp's worth of change
+        def edit(text):
+            lines = text.splitlines()
+            i = max(k for k, l in enumerate(lines) if l.startswith("body "))
+            t = lines[i].split()
+            m, e = t[tok].split("p")
+            t[tok] = m[:-1] + ("0" if m[-1] != "0" else "1") + "p" + e
+            lines[i] = " ".join(t)
+            return "\n".join(lines) + "\n"
+        return edit
 
-    dtf = os.path.join(work, "key-dt.txt")
+    # The state field is ONE hash, of the masses, the positions, the
+    # velocities and a dt-file's steps (src/ias15_cft.c, sched_key()), so
+    # each of the four is moved by a case of its own (V2's M3v, M3m, M3dt: a
+    # hash without any one of them passed a gate that moved a position only).
+    dtf, dtf2 = os.path.join(work, "key-dt.txt"), os.path.join(work, "key-dt2.txt")
     with open(dtf, "w", encoding="utf-8", newline="\n") as f:
         f.write("0x1.47ae147ae147bp-7\n" * 5)
-    replace = lambda a, b: [b if x == a else x for x in kbase]
+    with open(dtf2, "w", encoding="utf-8", newline="\n") as f:
+        f.write("0x1.47ae147ae147bp-7\n" * 2 + "0x1.47ae147ae147ap-7\n" + "0x1.47ae147ae147bp-7\n" * 2)
+    replace = lambda a, b, over=kbase: [b if x == a else x for x in over]
+    kbase_dt = replace("1e-9", "0") + ["--dt-file", dtf]
+    ksched_dt = os.path.join(work, "key-dt.sched")
+    rc, out, err = run([cft, "--problem", kep] + kbase_dt + ["--record-iters", ksched_dt])
+    # (what the case is, the field it must move, the problem, the run, the
+    #  only fields it may move or None, the schedule it replays)
     cases = [
-        ("epsilon", kep, replace("1e-9", "1e-8"), {"epsilon"}),
-        ("dt0", kep, replace("0.01", "0.02"), {"dt0"}),
-        ("steps", kep, replace("4", "5"), {"steps"}),
-        ("sample", kep, replace("2", "1"), {"sample"}),
-        ("adaptive_mode", kep, kbase + ["--adaptive-mode", "3"], {"adaptive_mode"}),
-        ("max_iter", kep, kbase + ["--max-iter", "11"], {"max_iter"}),
-        ("pc_tol_shift", kep, kbase + ["--pc-tol-shift", "1"], {"pc_tol_shift"}),
-        ("cs", kep, kbase + ["--cs", "augmented"], {"cs"}),
-        ("arith", kep, kbase + ["--arith", "fma"], {"arith"}),
-        ("engine", kep, kbase + ["--arith", "fma", "--engine", "program", "--programs", progs], None),
-        ("softening2", kep, kbase + ["--softening", "0.001"], {"softening2"}),
-        ("min_dt", kep, kbase + ["--min-dt", "0.001"], {"min_dt"}),
-        ("format", kep, replace(fmt0, "fp128" if fmt0 != "fp128" else "fp64"), None),
-        ("state", variant("state", last_x), kbase, {"state"}),
-        ("G", variant("G", lambda t: re.sub(r"(?m)^G \S+$", "G 0x1.0000000000001p+0", t)), kbase, {"G"}),
-        ("problem", variant("name", lambda t: re.sub(r"(?m)^name \S+$", "name kepler_renamed", t)), kbase, {"problem"}),
-        ("N", os.path.join(pdir, "outer.txt"), kbase, None),
-        ("E", ens, kbase, None),
-        ("member", ens, kbase + ["--member", "0"], None),
-        ("dt_file", kep, replace("1e-9", "0") + ["--dt-file", dtf], None),
+        ("epsilon", "epsilon", kep, replace("1e-9", "1e-8"), {"epsilon"}, ksched),
+        ("dt0", "dt0", kep, replace("0.01", "0.02"), {"dt0"}, ksched),
+        ("steps", "steps", kep, replace("4", "5"), {"steps"}, ksched),
+        ("sample", "sample", kep, replace("2", "1"), {"sample"}, ksched),
+        ("adaptive_mode", "adaptive_mode", kep, kbase + ["--adaptive-mode", "3"], {"adaptive_mode"}, ksched),
+        ("max_iter", "max_iter", kep, kbase + ["--max-iter", "11"], {"max_iter"}, ksched),
+        ("pc_tol_shift", "pc_tol_shift", kep, kbase + ["--pc-tol-shift", "1"], {"pc_tol_shift"}, ksched),
+        ("cs", "cs", kep, kbase + ["--cs", "augmented"], {"cs"}, ksched),
+        ("arith", "arith", kep, kbase + ["--arith", "fma"], {"arith"}, ksched),
+        ("engine", "engine", kep, kbase + ["--arith", "fma", "--engine", "program", "--programs", progs], None, ksched),
+        ("softening2", "softening2", kep, kbase + ["--softening", "0.001"], {"softening2"}, ksched),
+        ("min_dt", "min_dt", kep, kbase + ["--min-dt", "0.001"], {"min_dt"}, ksched),
+        ("format", "format", kep, replace(fmt0, "fp128" if fmt0 != "fp128" else "fp64"), None, ksched),
+        ("state: a position", "state", variant("x", nudge(3)), kbase, {"state"}, ksched),
+        ("state: a velocity", "state", variant("v", nudge(7)), kbase, {"state"}, ksched),
+        ("state: a mass", "state", variant("m", nudge(2)), kbase, {"state"}, ksched),
+        ("state: a dt-file step", "state", kep, replace(dtf, dtf2, kbase_dt), {"state"}, ksched_dt),
+        ("G", "G", variant("G", lambda t: re.sub(r"(?m)^G \S+$", "G 0x1.0000000000001p+0", t)), kbase, {"G"}, ksched),
+        ("problem", "problem", variant("name", lambda t: re.sub(r"(?m)^name \S+$", "name kepler_renamed", t)), kbase,
+         {"problem"}, ksched),
+        ("N", "N", os.path.join(pdir, "outer.txt"), kbase, None, ksched),
+        ("E", "E", ens, kbase, None, ksched),
+        ("member", "member", ens, kbase + ["--member", "0"], None, ksched),
+        ("dt_file", "dt_file", kep, kbase_dt, None, ksched),
     ]
     moved_all = set()
-    for name, prob, a, only in cases:
-        rc, out, err = run([cft, "--problem", prob] + a + ["--replay-iters", ksched])
+    for label, field, prob, a, only, sched in cases:
+        rc, out, err = run([cft, "--problem", prob] + a + ["--replay-iters", sched])
         m = re.search(r"it was recorded from: (.*)\n\s*this run is:\s+(.*)", err)
         moved = sorted(k for k in set(kv(m.group(1))) | set(kv(m.group(2)))
                        if kv(m.group(1)).get(k) != kv(m.group(2)).get(k)) if m else []
         moved_all |= set(moved)
-        verdict(rc == 3 and "was recorded from a different run" in err and name in moved
+        verdict(rc == 3 and "was recorded from a different run" in err and field in moved
                 and (only is None or set(moved) == only),
                 "a schedule replayed under another %s is refused by name (rc %d); the keys differ in %s%s"
-                % (name, rc, ", ".join(moved) or "nothing", "" if only is None else ", and in nothing else"))
+                % (label, rc, ", ".join(moved) or "nothing", "" if only is None else ", and in nothing else"))
     missing = sorted(fields - moved_all)
     verdict(fields and not missing, "every field of the run key is held by a case: %d of %d%s"
             % (len(fields) - len(missing), len(fields), " (UNHELD: %s)" % ", ".join(missing) if missing else ""))
 
+    if ok_all and not args.keep:
+        shutil.rmtree(work, ignore_errors=True)
+    elif not ok_all:
+        print("the schedules and files of this run are kept in %s" % work)
     print("RESULT: %s" % ("PASS" if ok_all else "FAIL"))
     return 0 if ok_all else 1
 
