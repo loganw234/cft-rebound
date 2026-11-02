@@ -98,6 +98,14 @@ int main(int argc, char **argv){
                cs->hiwater_n_elem);
         fail = 1;
     }
+    /* And it carries no wide clock, steps or identity: REBOUND's archive
+     * has only the binary64 t, dt and dt_last_done, which the shim
+     * promotes at the first step, and no producer statement of ours. */
+    if (cs->clock_bytes || cs->t || cs->dt || cs->identity){
+        printf("gate 3: FAIL  a promoted state carries a wide clock (%zu bytes) or an "
+               "identity\n", cs->clock_bytes);
+        fail = 1;
+    }
 
     /* Promotion must be EXACT: binary64 is a subset of binary128, so
      * rounding the wide bytes back must give the very same doubles. */
@@ -173,12 +181,16 @@ int main(int argc, char **argv){
         printf("  refused with %s and a NULL simulation, as it should be\n",
                cft_archive_status_str(st2));
     }
-    /* and the same file, loaded at the format it was written with */
+    /* and the same file, loaded at the format it was written with. The
+     * stub keeps no wide clock, so its archive has no clock family, and
+     * the load says so - as a load of any archive from before 2026-11-02
+     * does. */
     enum cft_archive_status st3;
     struct reb_simulation *good_r = cft_archive_load(path("gate3_fp256.bin"), 0, CFT_FP256, NULL, &st3);
-    if (!good_r || st3 != CFT_ARCHIVE_EXACT){
+    if (!good_r || st3 != CFT_ARCHIVE_EXACT_CLOCK_STEPS64){
         printf("gate 3: FAIL  the same archive at its own format: %s\n", cft_archive_status_str(st3));
         fail = 1;
+        if (good_r) reb_simulation_free(good_r);
     }else{
         printf("  the same file at binary256: %s\n", cft_archive_status_str(st3));
         reb_simulation_free(good_r);

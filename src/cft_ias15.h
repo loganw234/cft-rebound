@@ -183,7 +183,9 @@ struct cft_ias15_state {
     size_t   n_elem;           /* 3N, or 3NE for an ensemble */
     size_t   E;                /* ensemble members, 1 for a plain sim */
 
-    /* provenance, so a reader knows what produced the wide bytes */
+    /* what produced the wide bytes: the libcft ABI and the Gauss-Radau
+     * constants. The library BUILD and the device image came later and
+     * are `identity`, appended 2026-11-02 below. */
     char     cft_abi[16];      /* e.g. "0.11" */
     uint64_t constants_digest; /* the Gauss-Radau set the run used */
 
@@ -265,11 +267,19 @@ struct cft_ias15_state {
     unsigned char *alias_csx, *alias_csv;
     size_t   hiwater_n_elem;      /* 3*N_allocated, or 0 - see above */
 
-    /* How the wide bytes in this state arrived: one of the
-     * cft_ias15_provenance values below. Until this existed only the
-     * return value of cft_archive_finish_load() said whether a state
-     * had been restored exactly or promoted from binary64, and a
+    /* How this state was RESTORED - how the wide bytes in it arrived:
+     * one of the cft_ias15_provenance values below. Until this existed
+     * only the return value of cft_archive_finish_load() said whether a
+     * state had been restored exactly or promoted from binary64, and a
      * caller may discard a return value (ROADMAP.md line 404).
+     *
+     * NOT cft-fp256's certificate Provenance. There, provenance is a
+     * certificate's reported lines - who issued it, when, on what host,
+     * on which device (its docs/CERTIFICATES.md, "Provenance"). This
+     * records one fact about a load, and the nearest thing here to the
+     * certificate's device lines is `identity`, below. The name predates
+     * the collision and is on disk as cft_provenance in every archive
+     * written since 2026-09-11, so it stays.
      *
      * It describes the state IN MEMORY, and cft_archive_finish_load()
      * writes it last on every load, so it is always about THIS load
@@ -277,16 +287,92 @@ struct cft_ias15_state {
      * therefore how the WRITING run's state had arrived, which is the
      * one thing a probe of the file could not otherwise know. */
     int      provenance;
+
+    /* ---- appended 2026-11-02 (round 3, P3) --------------------------
+     * APPEND ONLY, for the reason the 2026-09-11 block gives. An archive
+     * written before 2026-11-02 carries none of what follows;
+     * CFT_OFF_APPENDED_2026_11_02 in src/cft_ias15_fields.h is where it
+     * starts, and cft_archive_selftest() holds every field from it to
+     * the end of each list, before cft_n_elem.
+     *
+     * THE WIDE CLOCK AND STEPS. The engine carries five scalars from one
+     * step to the next in the run's format, and nothing archived them:
+     *   t        the clock the step advances;
+     *   t_hi     with t_lo, the exact-time pair beside it, which the
+     *   t_lo     standalone record prints;
+     *   dt       the step the next attempt takes, which an adaptive step
+     *            control computes in the run's format;
+     *   dt_last  the step last taken.
+     * REBOUND's own fields carry only their binary64 views - r->t, r->dt
+     * and r->dt_last_done - and until these existed a load rebuilt all
+     * five from those (src/ias15_engine.h, put_t_f64, put_dt_f64 and
+     * put_dt_last_f64). Measured on af2f400, a resumed run differed from
+     * the straight one at binary128: at a fixed step in t's bytes on 34
+     * of 40 step splits, and in r->t on 2 of them (ROADMAP.md, "What
+     * round 2 leaves open: the wide clock"); at an adaptive step in a
+     * particle coordinate. At every format t_lo restarted from zero.
+     *
+     * One element each, and their LENGTH IS IN BYTES, not elements.
+     * REBOUND's reader writes size_data/element_size into the length
+     * member, and every load reads through the binary64 list (NOTE 3 in
+     * src/cft_archive.c), so a count of W-byte elements would come back
+     * 2 or 4 where it should be 1. With element_size 1 the count comes
+     * back exact at every format. All five share clock_bytes.
+     *
+     * Published like the blobs: borrowed from the engine once it is
+     * bound, NULL with clock_bytes 0 before. A loaded state owns what
+     * REBOUND's loader allocated until adopt_loaded_state() copies it
+     * in. A load of an archive that carries none of them says so:
+     * CFT_PROV_EXACT_CLOCK_STEPS64 below. */
+    unsigned char *t, *t_hi, *t_lo, *dt, *dt_last;
+    size_t   clock_bytes;      /* the format's width while carried, 0 while not */
+
+    /* IDENTITY: what the producer says it ran on - the archive's copy of
+     * the standalone record's `# identity` line, in the same words:
+     *     libcft_build=<cft_build_id(), spaces as commas> image=none
+     * or, where the device named its image,
+     *     ... image_sha256=<64 hex> image_bytes=<n> image_version=0x<v>
+     * The software backend and a remote handle always refuse to name an
+     * image, so an archive they write says image=none.
+     *
+     * STATED, NOT CHECKED: every conforming build computes the same
+     * bits, so the bits cannot say which build made them (cft-fp256
+     * docs/CERTIFICATES.md, "Identity"). It is therefore the one member
+     * that differs between two builds that agree on every other byte,
+     * and anything that compares whole archives across builds or pins
+     * must leave it out, by its name: cft_identity.
+     *
+     * It describes the run that produced the state's current bytes. A
+     * load hands the writer's to the state, and the first step of the
+     * run that adopted it replaces it with its own; cft_archive_probe()
+     * is where to read the writer's. NUL-terminated, the terminator
+     * counted in identity_bytes, on clock_bytes' terms. */
+    char    *identity;
+    size_t   identity_bytes;   /* strlen(identity) + 1 while carried, 0 while not */
 };
 
-/* What cft_ias15_state.provenance holds. */
+/* How a state was restored: what cft_ias15_state.provenance holds. The
+ * name is not cft-fp256's Provenance; see the member. */
 enum cft_ias15_provenance {
     CFT_PROV_NONE     = 0,  /* created here: the run is its own origin */
     CFT_PROV_EXACT    = 1,  /* an archive carried the wide bytes and they were restored */
-    CFT_PROV_PROMOTED = 2   /* no cft_ fields: REBOUND's binary64 state was promoted */
+    CFT_PROV_PROMOTED = 2,  /* no cft_ fields: REBOUND's binary64 state was promoted */
+    CFT_PROV_EXACT_CLOCK_STEPS64 = 3
+                            /* an archive carried the wide state but not its wide
+                             * clock and steps - every archive written before
+                             * 2026-11-02 - so the state was restored exactly and
+                             * t, t_hi, t_lo, dt and dt_last were rebuilt from
+                             * r->t, r->dt and r->dt_last_done, as every load did
+                             * before then. Above binary64 the run continues from
+                             * a clock and steps rounded to binary64, and an
+                             * adaptive run's trajectory with them. At binary64 t,
+                             * dt and dt_last ARE binary64 values, so only the
+                             * exact-time pair can lose anything, and nothing in
+                             * the library half reads the pair */
 };
 
-/* "created here", "restored exactly", "promoted from binary64", or "?".
+/* "created here", "restored exactly", "promoted from binary64",
+ * "restored exactly, its clock and steps from binary64", or "?".
  * Defined in src/cft_ias15_fields.c, which every target holding a state
  * links; src/cft_archive.c is not one of them. */
 const char *cft_ias15_provenance_str(int provenance);

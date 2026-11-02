@@ -4010,6 +4010,8 @@ void ias15_engine_put_dt_f64(double dt){ eng_promote(SDT, &dt, 1); bcast_sys(DTB
 void ias15_engine_put_dt_last_f64(double dtl){ eng_promote(SDTLAST, &dtl, 1); }
 double ias15_engine_get_dt_f64(void){ double d; eng_round(&d, SDT, 1); return d; }
 double ias15_engine_get_dt_last_f64(void){ double d; eng_round(&d, SDTLAST, 1); return d; }
+void ias15_engine_put_dt_wide(const unsigned char *dt){ memcpy(SDT, dt, ESZ); bcast_sys(DTB, SDT); }
+void ias15_engine_put_dt_last_wide(const unsigned char *dtl){ memcpy(SDTLAST, dtl, ESZ); }
 void ias15_engine_put_t_f64(double t){ eng_promote(STPLAIN, &t, 1); vcopy(STHI, STPLAIN, 1); vzero(STLO, 1); }
 double ias15_engine_get_t_f64(void){ double d; eng_round(&d, STPLAIN, 1); return d; }
 
@@ -4039,5 +4041,6 @@ void ias15_engine_view(struct ias15_engine_view *o){
     o->elem_size = ESZ;
     o->n_bodies = N;
     o->t = STPLAIN; o->t_hi = STHI; o->t_lo = STLO;
+    o->dt = SDT; o->dt_last = SDTLAST;
 }
 #endif /* IAS15_CFT_LIBRARY */

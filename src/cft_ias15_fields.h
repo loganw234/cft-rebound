@@ -12,11 +12,13 @@
  * single cft_ field on read. tests/gate_real.c is the gate that caught
  * it.
  *
- * Adding a blob means adding one line to CFT_FD_BLOBS and raising
- * CFT_N_BLOBS; both halves are checked by cft_archive_selftest(). The
- * same goes for CFT_FD_ALIAS and CFT_N_ALIAS_BLOBS, and for
- * CFT_FD_SCALARS and CFT_N_SCALARS. Nothing outside this file may
- * write any of those three numbers down.
+ * Adding a blob means adding one line to CFT_FD_BLOBS, and the same for
+ * every other family. The counts are DERIVED from the lists - each is
+ * the number of initialisers its macro expands to, CFT_FD_COUNT below -
+ * so no count is written down anywhere, here included. Until 2026-11-02
+ * they were literals beside the lists, declared once and checked by
+ * cft_archive_selftest(), which still walks every list and holds each
+ * family to its count, so a field put in the wrong family is caught.
  */
 #ifndef CFT_IAS15_FIELDS_H
 #define CFT_IAS15_FIELDS_H
@@ -104,7 +106,8 @@
 #define CFT_FD_S(NAME, TYPE, MEMBER) \
     { "", TYPE, "cft_" NAME, CFT_OFF(MEMBER), 0, 0, 0 },
 
-/* Configuration and provenance. cft_abi is a char[16] inside the
+/* Configuration, what produced the wide bytes, and how the state was
+ * restored (cft_provenance; see the member). cft_abi is a char[16] inside the
  * struct, not a char*: REB_STRING dereferences the field as a pointer
  * and REB_POINTER does the same, and no simple dtype is 16 bytes wide,
  * so the two halves go out as uint64 words at their own offsets. The
@@ -123,7 +126,8 @@
     CFT_FD_S("constants_digest", REB_UINT64, constants_digest) \
     CFT_FD_S("iterations_max_exceeded", REB_UINT64, iterations_max_exceeded) \
     CFT_FD_S("provenance",       REB_INT,    provenance) \
-    CFT_FD_S("hiwater_n_elem",   REB_SIZE_T, hiwater_n_elem) \
+    CFT_FD_S("hiwater_n_elem",   REB_SIZE_T, hiwater_n_elem)
+#define CFT_FD_LAST \
     CFT_FD_S("n_elem",           REB_SIZE_T, n_elem)      /* LAST: see NOTE 3 */
 /* cft_hiwater_n_elem sits among the scalars, i.e. AFTER the alias
  * blobs, for the reason cft_n_elem is after the others: each alias
@@ -133,20 +137,83 @@
  * because an APPENDED snapshot is a diff and may omit an unchanged
  * scalar. NOTE 3 in src/cft_archive.c is the whole argument. */
 
-#define CFT_FD_LIST(W) { CFT_FD_BLOBS(W) CFT_FD_ALIAS(W) CFT_FD_SCALARS { 0 } }
+/* --------------------------------------------------------------------
+ * The byte fields, appended 2026-11-02: members whose length member
+ * counts BYTES.
+ *
+ * A REB_POINTER field's length member receives size_data/element_size on
+ * every read, and every load reads through the binary64 list (the WIDTH
+ * note in src/cft_ias15_fields.c), so a member counting W-byte elements
+ * comes back wrong at binary128 and binary256 - which is why n_elem has
+ * to be repaired from the file. These count bytes, element_size 1, so
+ * REBOUND's reader leaves the right number behind at every format and
+ * nothing needs repairing. They are not blobs: cft_archive_state_blob()
+ * never reaches them, and nothing about them is sized by n_elem.
+ *
+ * THE CLOCK FAMILY is the engine's wide clock and steps, one element of
+ * the format's width each, all five sized by clock_bytes. Its ORDER is
+ * cft_archive_state_clock()'s, and cft_archive_selftest() checks that
+ * the two agree, as it does for the alias family. THE IDENTITY is the
+ * producer's statement of what it ran on. The state struct says what
+ * each member means.
+ *
+ * WHERE THEY GO. After every field an older build knows and before
+ * cft_n_elem, and cft_archive_selftest() holds them there. An older
+ * build's reader stops a snapshot at the first name it does not know
+ * (binarydata.c's REB_FIELD_NOT_FOUND, `goto finish_fields`). So in this
+ * position a SINGLE SNAPSHOT read by such a build loses, of the fields it
+ * knows, only cft_n_elem, which its cft_archive_finish_load() has always
+ * repaired from the file. That is all the position buys. Three things go
+ * wrong regardless, as they would for any field appended to this list:
+ *   - such a build appending to such an archive writes a snapshot that
+ *     no build can read;
+ *   - a snapshot this build appends after a removal is refused there;
+ *   - REBOUND's function-pointer warning is lost there.
+ * tools/check_archive.py states that limit, with the measurements, and
+ * what a user must not do.
+ * -------------------------------------------------------------------- */
+#define CFT_FD_B(NAME, MEMBER, LEN) \
+    { "", REB_POINTER, "cft_" NAME, CFT_OFF(MEMBER), CFT_OFF(LEN), 1, 0 },
+
+#define CFT_FD_CLOCK \
+    CFT_FD_B("t",       t,       clock_bytes) \
+    CFT_FD_B("t_hi",    t_hi,    clock_bytes) \
+    CFT_FD_B("t_lo",    t_lo,    clock_bytes) \
+    CFT_FD_B("dt",      dt,      clock_bytes) \
+    CFT_FD_B("dt_last", dt_last, clock_bytes)
+
+#define CFT_FD_IDENTITY \
+    CFT_FD_B("identity", identity, identity_bytes)
+
+/* The first member appended on 2026-11-02. Every field whose member is
+ * at or past it is one an archive written before that day does not
+ * carry: what cft_archive_selftest() holds to the end of each list, and
+ * what tests/gate_real.c leaves out to write such an archive itself. */
+#define CFT_OFF_APPENDED_2026_11_02 CFT_OFF(t)
+
+#define CFT_FD_LIST(W) { CFT_FD_BLOBS(W) CFT_FD_ALIAS(W) CFT_FD_SCALARS \
+                         CFT_FD_CLOCK CFT_FD_IDENTITY CFT_FD_LAST { 0 } }
+
+/* The counts, each derived from its own list: the number of initialisers
+ * the macro expands to. An integer constant expression - the compound
+ * literal is the operand of sizeof and is never evaluated - so it can
+ * size an array. */
+#define CFT_FD_COUNT(...) \
+    ((int)(sizeof((const struct reb_binarydata_field_descriptor[]){ __VA_ARGS__ }) \
+           / sizeof(struct reb_binarydata_field_descriptor)))
 
 /* Blobs of n_elem elements - CFT_FD_BLOBS, and what
  * cft_archive_state_blob() walks. */
-#define CFT_N_BLOBS 50
+#define CFT_N_BLOBS       CFT_FD_COUNT(CFT_FD_BLOBS(8))
 /* Blobs of hiwater_n_elem elements - CFT_FD_ALIAS: six families of
  * seven levels, plus csx and csv. A separate count because it is a
  * separate length; see the comment above CFT_FD_A. */
-#define CFT_N_ALIAS_BLOBS 44
-/* And the scalars CFT_FD_SCALARS adds after them. Here rather than
- * written out in cft_archive_selftest(), for the reason the blob
- * count is here: a number kept anywhere but beside the list it counts
- * is a number that will disagree with it. */
-#define CFT_N_SCALARS 15
+#define CFT_N_ALIAS_BLOBS CFT_FD_COUNT(CFT_FD_ALIAS(8))
+/* The plain scalars, cft_n_elem included. */
+#define CFT_N_SCALARS     CFT_FD_COUNT(CFT_FD_SCALARS CFT_FD_LAST)
+/* The clock family, and the identity's one field. */
+#define CFT_N_CLOCK_BLOBS CFT_FD_COUNT(CFT_FD_CLOCK)
+#define CFT_N_IDENTITY    CFT_FD_COUNT(CFT_FD_IDENTITY)
 
 /* One definition of each, in src/cft_ias15_fields.c. cft_archive.c
  * selects among them by format; the integrator registers the first,

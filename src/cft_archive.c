@@ -138,6 +138,37 @@
  * position and velocity to binary64 while every gate passed; that is
  * what took the blob count from 48 to 50. docs/VALIDATION.md entry 25
  * has the measurements.
+ *
+ * NOTE 6. cft_t, cft_t_hi, cft_t_lo, cft_dt and cft_dt_last are the
+ * engine's wide clock and steps, and cft_identity is what the producer
+ * says it ran on. All six were added on 2026-11-02 and have no
+ * counterpart in REBOUND's list, whose t, dt and dt_last_done are the
+ * binary64 views of the first, fourth and fifth (and are simulation
+ * fields, not integrator ones).
+ *
+ *   - Their length members count BYTES (element_size 1), so they come
+ *     back right through the binary64 list and need none of NOTE 3's
+ *     repair. src/cft_ias15_fields.h, CFT_FD_B.
+ *   - They are OPTIONAL on read, like NOTE 5's family. Every archive
+ *     written before 2026-11-02 lacks them. Its load restores the wide
+ *     state exactly and rebuilds the five from binary64, as every load
+ *     did then, and it says so: CFT_ARCHIVE_EXACT_CLOCK_STEPS64, and
+ *     CFT_PROV_EXACT_CLOCK_STEPS64 in the state.
+ *   - They come LAST, before cft_n_elem. An older build stops reading a
+ *     snapshot at the first name it does not know, so a SINGLE SNAPSHOT
+ *     it reads loses, of what it knows, only cft_n_elem, which its
+ *     finish_load repairs from the file. Nothing past a single snapshot
+ *     is safe there:
+ *       - an older build's append to such an archive is unreadable by
+ *         any build;
+ *       - a snapshot appended after a removal is refused there;
+ *       - REBOUND's function-pointer warning is lost there.
+ *     Any appended field costs those three. tools/check_archive.py's
+ *     docstring states the limit, measured in both directions, and says
+ *     never to append to these archives with a build from before
+ *     2026-11-02.
+ *   - cft_identity differs between builds by design. Anything that
+ *     compares whole archives across builds or pins leaves it out.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -179,13 +210,15 @@ const struct reb_binarydata_field_descriptor *cft_archive_descriptor_list(int fo
 
 /* A list that has drifted writes the wrong bytes silently, so check its
  * shape rather than trusting it: CFT_N_BLOBS blobs of n_elem,
- * CFT_N_ALIAS_BLOBS of hiwater_n_elem, then CFT_N_SCALARS scalars,
- * every name cft_-prefixed and unique, every blob's element_size the
- * format's width and its offset_N one of the two length members the
- * read path is allowed to scribble on, the alias descriptors landing in
- * cft_archive_state_alias()'s order, and cft_n_elem last (NOTE 3).
- * Returns 0 if all three lists are sound, otherwise the number of
- * complaints, each printed. */
+ * CFT_N_ALIAS_BLOBS of hiwater_n_elem, the clock family and the
+ * identity as byte fields (element_size 1, each its own length member),
+ * and CFT_N_SCALARS scalars; every name cft_-prefixed and unique, every
+ * blob's element_size the format's width and its offset_N one of the
+ * length members the read path is allowed to scribble on, the alias and
+ * clock descriptors landing in their walkers' order, every field
+ * appended on 2026-11-02 after every older one (NOTE 6), and cft_n_elem
+ * last (NOTE 3). Returns 0 if all three lists are sound, otherwise the
+ * number of complaints, each printed. */
 int cft_archive_selftest(void){
     int bad = 0;
     const int fmts[3] = { CFT_FP64, CFT_FP128, CFT_FP256 };
@@ -197,7 +230,8 @@ int cft_archive_selftest(void){
     for (int fi = 0; fi < 3; fi++){
         const struct reb_binarydata_field_descriptor *l = cft_archive_descriptor_list(fmts[fi]);
         size_t w = cft_format_size((cft_format)fmts[fi]);
-        int n = 0, blobs = 0, alias = 0, scalars = 0;
+        int n = 0, blobs = 0, alias = 0, clock = 0, ident = 0, scalars = 0;
+        int first_new = -1;          /* the first field appended on 2026-11-02 */
         for (; l[n].name[0]; n++){
             const struct reb_binarydata_field_descriptor *f = &l[n];
             int is_alias_name = !strncmp(f->name, CFT_ALIAS_PREFIX, apfx);
@@ -208,7 +242,50 @@ int cft_archive_selftest(void){
                 if (!strcmp(l[m].name, f->name)){
                     fprintf(stderr, "cft_archive_selftest: duplicate name \"%s\"\n", f->name); bad++;
                 }
-            if (f->dtype == REB_POINTER){
+            /* An older build's reader abandons a snapshot at the first
+             * name it does not know, so a field it does know must never
+             * follow one it does not - cft_n_elem, which every build
+             * repairs from the file, the one exception (NOTE 6). */
+            if (f->offset >= CFT_OFF_APPENDED_2026_11_02){
+                if (first_new < 0) first_new = n;
+            }else if (first_new >= 0 && strcmp(f->name, "cft_n_elem")){
+                fprintf(stderr, "cft_archive_selftest: %s predates 2026-11-02 and follows %s, "
+                                "which does not; a build from before then would stop "
+                                "reading at %s and never see %s\n",
+                        f->name, l[first_new].name, l[first_new].name, f->name);
+                bad++;
+            }
+            if (f->dtype == REB_POINTER
+                    && (f->offset_N == CFT_OFF(clock_bytes) || f->offset_N == CFT_OFF(identity_bytes))){
+                /* The byte fields: their length is counted in bytes, so
+                 * element_size is 1 at every format (CFT_FD_B). */
+                if (f->element_size != 1){
+                    fprintf(stderr, "cft_archive_selftest: %s is a byte field and its "
+                                    "element_size is %zu, not 1\n", f->name, f->element_size);
+                    bad++;
+                }
+                if (f->offset_N == CFT_OFF(clock_bytes)){
+                    /* In cft_archive_state_clock()'s order, for the reason
+                     * the alias family is held to its walker's. */
+                    unsigned char **m = cft_archive_state_clock(&probe, clock);
+                    size_t want = m ? (size_t)((char*)m - (char*)&probe) : (size_t)-1;
+                    if (f->offset != want){
+                        fprintf(stderr, "cft_archive_selftest: clock field %d (%s) is at offset "
+                                        "%zu, want %zu; CFT_FD_CLOCK and "
+                                        "cft_archive_state_clock() are out of step\n",
+                                clock, f->name, f->offset, want);
+                        bad++;
+                    }
+                    clock++;
+                }else{
+                    if (f->offset != CFT_OFF(identity)){
+                        fprintf(stderr, "cft_archive_selftest: %s is sized by identity_bytes "
+                                        "and is not the identity\n", f->name);
+                        bad++;
+                    }
+                    ident++;
+                }
+            }else if (f->dtype == REB_POINTER){
                 if (f->element_size != w){
                     fprintf(stderr, "cft_archive_selftest: %s element_size %zu, want %zu\n",
                             f->name, f->element_size, w); bad++;
@@ -241,8 +318,9 @@ int cft_archive_selftest(void){
                     }
                     alias++;
                 }else{
-                    fprintf(stderr, "cft_archive_selftest: %s offset_N names neither n_elem "
-                                    "nor hiwater_n_elem\n", f->name); bad++;
+                    fprintf(stderr, "cft_archive_selftest: %s offset_N names none of n_elem, "
+                                    "hiwater_n_elem, clock_bytes and identity_bytes\n", f->name);
+                    bad++;
                 }
             }else scalars++;
         }
@@ -253,6 +331,12 @@ int cft_archive_selftest(void){
         if (alias != CFT_N_ALIAS_BLOBS){
             fprintf(stderr, "cft_archive_selftest: %d alias blobs at %s, want %d\n",
                     alias, cft_format_name((cft_format)fmts[fi]), CFT_N_ALIAS_BLOBS); bad++;
+        }
+        if (clock != CFT_N_CLOCK_BLOBS || ident != CFT_N_IDENTITY){
+            fprintf(stderr, "cft_archive_selftest: %d clock fields and %d identity at %s, "
+                            "want %d and %d\n", clock, ident,
+                    cft_format_name((cft_format)fmts[fi]), CFT_N_CLOCK_BLOBS, CFT_N_IDENTITY);
+            bad++;
         }
         if (scalars != CFT_N_SCALARS){
             fprintf(stderr, "cft_archive_selftest: %d scalars, want %d\n",
@@ -270,20 +354,25 @@ int cft_archive_selftest(void){
      * without a matching case would return NULL here - which is how a
      * stale copy of this walker took three gates down with an access
      * violation rather than a message. The same for the alias family
-     * and cft_archive_state_alias(). */
+     * and cft_archive_state_alias(), and for the clock family and
+     * cft_archive_state_clock(). */
     {
-        unsigned char **seen[CFT_N_BLOBS + CFT_N_ALIAS_BLOBS];
+        enum { NWALK = CFT_N_BLOBS + CFT_N_ALIAS_BLOBS + CFT_N_CLOCK_BLOBS };
+        unsigned char **seen[NWALK];
         int k = 0;
-        for (int i = 0; i < CFT_N_BLOBS + CFT_N_ALIAS_BLOBS; i++){
-            int in_alias = i >= CFT_N_BLOBS;
-            int idx = in_alias ? i - CFT_N_BLOBS : i;
-            unsigned char **b = in_alias ? cft_archive_state_alias(&probe, idx)
+        for (int i = 0; i < NWALK; i++){
+            int in_alias = i >= CFT_N_BLOBS && i < CFT_N_BLOBS + CFT_N_ALIAS_BLOBS;
+            int in_clock = i >= CFT_N_BLOBS + CFT_N_ALIAS_BLOBS;
+            int idx = in_clock ? i - CFT_N_BLOBS - CFT_N_ALIAS_BLOBS
+                    : in_alias ? i - CFT_N_BLOBS : i;
+            unsigned char **b = in_clock ? cft_archive_state_clock(&probe, idx)
+                              : in_alias ? cft_archive_state_alias(&probe, idx)
                                          : cft_archive_state_blob(&probe, idx);
             if (!b){
                 fprintf(stderr, "cft_archive_selftest: %s blob %d of %d has no member; "
                                 "the macro list and the walker disagree\n",
-                        in_alias ? "alias" : "state", idx,
-                        in_alias ? CFT_N_ALIAS_BLOBS : CFT_N_BLOBS);
+                        in_clock ? "clock" : in_alias ? "alias" : "state", idx,
+                        in_clock ? CFT_N_CLOCK_BLOBS : in_alias ? CFT_N_ALIAS_BLOBS : CFT_N_BLOBS);
                 bad++; seen[k++] = NULL; continue;
             }
             for (int j = 0; j < k; j++){
@@ -305,6 +394,12 @@ int cft_archive_selftest(void){
                     CFT_N_ALIAS_BLOBS);
             bad++;
         }
+        if (cft_archive_state_clock(&probe, CFT_N_CLOCK_BLOBS)){
+            fprintf(stderr, "cft_archive_selftest: clock index %d is past the end and "
+                            "still returns a member; CFT_FD_CLOCK is too short\n",
+                    CFT_N_CLOCK_BLOBS);
+            bad++;
+        }
     }
     return bad;
 }
@@ -313,6 +408,8 @@ const char *cft_archive_status_str(enum cft_archive_status s){
     switch (s){
         case CFT_ARCHIVE_EXACT:           return "restored exactly";
         case CFT_ARCHIVE_PROMOTED:        return "promoted from binary64";
+        case CFT_ARCHIVE_EXACT_CLOCK_STEPS64:
+            return "restored exactly, its clock and steps from binary64";
         case CFT_ARCHIVE_FORMAT_MISMATCH: return "refused: format mismatch";
         case CFT_ARCHIVE_COUNT_MISMATCH:  return "refused: element count mismatch";
         case CFT_ARCHIVE_NO_FILE:         return "no such archive";
@@ -343,13 +440,18 @@ int cft_archive_bind(struct reb_simulation *r){
 #define CFT_BLOB_NONE  0
 #define CFT_BLOB_STATE 1    /* n_elem elements: CFT_FD_BLOBS */
 #define CFT_BLOB_ALIAS 2    /* hiwater_n_elem elements: CFT_FD_ALIAS */
+#define CFT_BLOB_CLOCK 3    /* clock_bytes bytes: CFT_FD_CLOCK (NOTE 6) */
+#define CFT_BLOB_IDENT 4    /* identity_bytes bytes: CFT_FD_IDENTITY (NOTE 6) */
 static int blob_class(const char *tag){
     char want[64];
     const struct reb_binarydata_field_descriptor *f;
     if (snprintf(want, sizeof want, "cft_%s", tag) >= (int)sizeof want) return CFT_BLOB_NONE;
     for (f = cft_fd_fp64; f->name[0]; f++){
         if (f->dtype != REB_POINTER || strcmp(f->name, want)) continue;
-        return f->offset_N == CFT_OFF(hiwater_n_elem) ? CFT_BLOB_ALIAS : CFT_BLOB_STATE;
+        if (f->offset_N == CFT_OFF(hiwater_n_elem)) return CFT_BLOB_ALIAS;
+        if (f->offset_N == CFT_OFF(clock_bytes))    return CFT_BLOB_CLOCK;
+        if (f->offset_N == CFT_OFF(identity_bytes)) return CFT_BLOB_IDENT;
+        return CFT_BLOB_STATE;
     }
     return CFT_BLOB_NONE;
 }
@@ -401,6 +503,19 @@ unsigned char **cft_archive_state_alias(struct cft_ias15_state *s, int i){
     return NULL;
 }
 
+unsigned char **cft_archive_state_clock(struct cft_ias15_state *s, int i){
+    /* the same order as CFT_FD_CLOCK, which cft_archive_selftest() holds
+     * this to */
+    switch (i){
+        case 0: return &s->t;
+        case 1: return &s->t_hi;
+        case 2: return &s->t_lo;
+        case 3: return &s->dt;
+        case 4: return &s->dt_last;
+    }
+    return NULL;
+}
+
 int cft_archive_state_alloc(struct cft_ias15_state *s, size_t n_elem){
     size_t w = cft_ias15_state_width(s);
     if (!w) return -1;
@@ -432,6 +547,16 @@ void cft_archive_state_free(struct cft_ias15_state *s){
         unsigned char **p = cft_archive_state_alias(s, f);
         if (p){ free(*p); *p = NULL; }
     }
+    /* And NOTE 6's members, which a state this function is used on owns
+     * whenever it has them: a loaded one's are the loader's. */
+    for (int c = 0; c < CFT_N_CLOCK_BLOBS; c++){
+        unsigned char **p = cft_archive_state_clock(s, c);
+        if (p){ free(*p); *p = NULL; }
+    }
+    s->clock_bytes = 0;
+    free(s->identity);
+    s->identity = NULL;
+    s->identity_bytes = 0;
     s->hiwater_n_elem = 0;
     s->n_elem = 0;
 }
@@ -557,9 +682,9 @@ static int cft_probe_one(FILE *f, uint64_t offset, struct cft_archive_info *out)
                 out->constants_digest = v;
                 continue;
             }
-            /* a wide blob: only its length matters here. The two
-             * families are counted apart because their lengths are two
-             * different members - CFT_FD_A in src/cft_ias15_fields.h. */
+            /* a wide blob: only its length matters here. The families
+             * are counted apart because their lengths are different
+             * members - CFT_FD_A and CFT_FD_B in src/cft_ias15_fields.h. */
             switch (blob_class(tag)){
                 case CFT_BLOB_STATE:
                     if (out->blob_bytes == 0) out->blob_bytes = (uint64_t)field.size_data;
@@ -571,6 +696,26 @@ static int cft_probe_one(FILE *f, uint64_t offset, struct cft_archive_info *out)
                     else if (out->alias_blob_bytes != (uint64_t)field.size_data) out->alias_lengths_agree = 0;
                     out->n_alias_blobs_seen++;
                     break;
+                case CFT_BLOB_CLOCK:
+                    if (out->clock_bytes == 0) out->clock_bytes = (uint64_t)field.size_data;
+                    else if (out->clock_bytes != (uint64_t)field.size_data) out->clock_lengths_agree = 0;
+                    out->n_clock_seen++;
+                    break;
+                case CFT_BLOB_IDENT: {
+                    /* The one field whose contents the probe reports: what
+                     * the writing run said it ran on. Read whole when it
+                     * fits, which everything this project writes does. */
+                    uint64_t n = field.size_data;
+                    size_t take = n < (uint64_t)sizeof out->identity ? (size_t)n
+                                                                      : sizeof out->identity - 1;
+                    memset(out->identity, 0, sizeof out->identity);
+                    if (take && fread(out->identity, take, 1, f) != 1) return -1;
+                    out->identity[sizeof out->identity - 1] = '\0';
+                    out->identity_bytes = n;
+                    out->identity_cut = n > (uint64_t)take;
+                    if (fseek(f, (long)(n - (uint64_t)take), SEEK_CUR)) return -1;
+                    continue;                  /* consumed: skip the seek below */
+                }
                 default: break;
             }
         }
@@ -585,6 +730,7 @@ int cft_archive_probe(const char *filename, int64_t snapshot,
     out->provenance = -1;              /* no cft_provenance field at all */
     out->blob_lengths_agree = 1;
     out->alias_lengths_agree = 1;
+    out->clock_lengths_agree = 1;
 
     struct reb_simulationarchive *sa = reb_simulationarchive_create_from_file(filename);
     if (!sa) return -1;
@@ -606,6 +752,7 @@ int cft_archive_probe(const char *filename, int64_t snapshot,
         over.provenance = -1;
         over.blob_lengths_agree = 1;
         over.alias_lengths_agree = 1;
+        over.clock_lengths_agree = 1;
         memcpy(over.integrator, out->integrator, sizeof over.integrator);
         err = cft_probe_one(f, sa->offset[snapshot], &over);
         if (!err){
@@ -657,6 +804,24 @@ int cft_archive_probe(const char *filename, int64_t snapshot,
             }
             if (over.n_alias_blobs_seen > out->n_alias_blobs_seen)
                 out->n_alias_blobs_seen = over.n_alias_blobs_seen;
+            /* The clock family (NOTE 6). A diff carries only the members
+             * that changed - t moves every step, t_lo may not - and the
+             * shim publishes all five together and never withdraws them,
+             * so the snapshot holds the larger of the two counts, and
+             * every length either side carries must agree. A file that
+             * breaks that is refused in finish_load, which counts. */
+            if (over.n_clock_seen){
+                if (out->clock_bytes && out->clock_bytes != over.clock_bytes)
+                    out->clock_lengths_agree = 0;
+                out->clock_bytes = over.clock_bytes;
+                if (!over.clock_lengths_agree) out->clock_lengths_agree = 0;
+                if (over.n_clock_seen > out->n_clock_seen) out->n_clock_seen = over.n_clock_seen;
+            }
+            if (over.identity_bytes){
+                memcpy(out->identity, over.identity, sizeof out->identity);
+                out->identity_bytes = over.identity_bytes;
+                out->identity_cut = over.identity_cut;
+            }
             out->has_cft |= over.has_cft;
             out->n_cft_fields += over.n_cft_fields;
         }
@@ -840,6 +1005,16 @@ enum cft_archive_status cft_archive_finish_load(struct reb_simulation *r,
         s->hiwater_n_elem = 0;
     }
 
+    /* The clock family, NOTE 6: OPTIONAL, like the alias family, because
+     * every archive written before 2026-11-02 lacks it - but whole when
+     * present, and one element of this format's width each. */
+    const int has_clock = info->n_clock_seen != 0;
+    if (has_clock){
+        if (info->n_clock_seen != CFT_N_CLOCK_BLOBS) return CFT_ARCHIVE_COUNT_MISMATCH;
+        if (!info->clock_lengths_agree)              return CFT_ARCHIVE_COUNT_MISMATCH;
+        if (info->clock_bytes != (uint64_t)w)        return CFT_ARCHIVE_COUNT_MISMATCH;
+    }
+
     /* Did the load actually happen? Everything above was read out of
      * the file by cft_archive_probe() and says nothing about what
      * reached memory. REBOUND allocates a REB_POINTER field's buffer
@@ -879,13 +1054,50 @@ enum cft_archive_status cft_archive_finish_load(struct reb_simulation *r,
                 }
             }
         }
+        /* And the clock family. REBOUND's reader leaves each member's
+         * byte count in clock_bytes, so that must be the width too. */
+        if (has_clock){
+            for (i = 0; i < CFT_N_CLOCK_BLOBS; i++){
+                unsigned char **b = cft_archive_state_clock(s, i);
+                if (!b || !*b || s->clock_bytes != w){
+                    fprintf(stderr,
+                            "cft-rebound: the archive names %d wide clock and step fields "
+                            "and field %d did not reach memory at %zu bytes. The integrator "
+                            "was registered with a field descriptor list that does not "
+                            "match this file, so the state was not restored; refusing "
+                            "rather than continuing from a binary64 clock.\n",
+                            info->n_clock_seen, i, w);
+                    return CFT_ARCHIVE_BAD;
+                }
+            }
+        }else{
+            for (i = 0; i < CFT_N_CLOCK_BLOBS; i++){
+                unsigned char **b = cft_archive_state_clock(s, i);
+                if (b){ free(*b); *b = NULL; }
+            }
+            s->clock_bytes = 0;
+        }
     }
+
+    /* The identity is the writer's, stated and not checked, and nothing
+     * is refused over it. It must still be a string: REBOUND allocated
+     * exactly its size_data, and a file is not trusted to have ended it
+     * with a NUL. */
+    if (s->identity && s->identity_bytes) s->identity[s->identity_bytes - 1] = '\0';
+    else{ free(s->identity); s->identity = NULL; s->identity_bytes = 0; }
 
     if (cft_archive_bind(r)) return CFT_ARCHIVE_BAD;
     /* Last, so that it is about THIS load and not about the run that
      * wrote the file - whose own provenance arrived in the cft_ field
      * and has just been overwritten. cft_archive_probe() is where to
-     * read the writer's. */
+     * read the writer's. An archive with no clock family restores the
+     * wide state exactly and rebuilds the clock and steps from binary64
+     * (adopt_loaded_state() in src/reb_integrator_cft.c), as every load
+     * did before 2026-11-02, and says so rather than "restored exactly". */
+    if (!has_clock){
+        s->provenance = CFT_PROV_EXACT_CLOCK_STEPS64;
+        return CFT_ARCHIVE_EXACT_CLOCK_STEPS64;
+    }
     s->provenance = CFT_PROV_EXACT;
     return CFT_ARCHIVE_EXACT;
 }
@@ -936,13 +1148,15 @@ struct reb_simulation *cft_archive_load(const char *filename, int64_t snapshot,
                 snprintf(detail, sizeof detail,
                     "cft_n_elem is %" PRIu64 " and cft_E is %" PRIu64 ", but the archive holds "
                     "%d of %d wide blobs and each is %" PRIu64 " bytes, against %zu N particles "
-                    "at %zu bytes an element; and cft_hiwater_n_elem is %" PRIu64 " against "
-                    "%d of %d high-water blobs of %" PRIu64 " bytes.",
+                    "at %zu bytes an element; cft_hiwater_n_elem is %" PRIu64 " against "
+                    "%d of %d high-water blobs of %" PRIu64 " bytes; and it holds %d of %d "
+                    "clock and step fields of %" PRIu64 " bytes.",
                     info.n_elem, info.E ? info.E : 1, info.n_blobs_seen, CFT_N_BLOBS,
                     info.blob_bytes, r->N,
                     cft_format_size((cft_format)info.format),
                     info.hiwater_n_elem, info.n_alias_blobs_seen, CFT_N_ALIAS_BLOBS,
-                    info.alias_blob_bytes);
+                    info.alias_blob_bytes, info.n_clock_seen, CFT_N_CLOCK_BLOBS,
+                    info.clock_bytes);
                 refuse(filename, snapshot, "its element count does not add up", detail);
                 break;
             case CFT_ARCHIVE_FORMAT_MISMATCH:
