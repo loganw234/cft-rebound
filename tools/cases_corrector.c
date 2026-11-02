@@ -17,25 +17,65 @@
  * is held to REBOUND's own as well, as every case here is.
  *
  * The engine opens once a process, so the route is whatever the
- * environment chose at the first bind: on in the suite, which runs on the
- * software backend; off under CFT_REBOUND_ROUTE_REDUCE_SEG=off, or on a
- * card without the bit. The case asserts whichever it finds, and says
- * which. tools/check_corrector.py runs both routes explicitly, and
+ * environment chose at the first bind. The case DERIVES which state that
+ * must be from the environment, as the door's policy defines it
+ * (src/ias15_cft.c, engine_routes()), and holds the engine to it, by= and
+ * all:
+ *   - CFT_REBOUND_ROUTE_REDUCE_SEG=on or =off: that state, by=forced;
+ *   - otherwise CFT_REBOUND_HIDE_FEATURES naming reduce_seg: off,
+ *     by=hidden;
+ *   - otherwise the software backend: on, by=device. It publishes every
+ *     bit, so off there - whatever its by= - is a door that fell back
+ *     without saying so (V2's M4, 2026-11-02);
+ *   - otherwise a card: on by=device, or off by=absent.
+ * Accepting whichever route opened would pass a library half silently on
+ * today's route. tools/check_corrector.py runs both routes explicitly, and
  * derives each count, through the program's `# route` lines.
  *
  * Its steps are a count, scaled under --light: the property needs one
  * corrector pass and holds at any count.
  */
+#include <ctype.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "dropin_cases.h"
 #include "ias15_engine.h"
 
+static const char *const route = "reduce_seg";
+
 static int reduce_seg_route(struct ias15_engine_route *out){
     for (int r = 0; ias15_engine_route(r, out) == 0; r++)
-        if (!strcmp(out->name, "reduce_seg")) return 0;
+        if (!strcmp(out->name, route)) return 0;
     return -1;
+}
+
+/* Whether a comma-separated list names the route, item for item. */
+static int list_names(const char *list, const char *name){
+    size_t n = strlen(name);
+    for (const char *p = list; p && *p; ){
+        size_t l = strcspn(p, ",");
+        if (l == n && !strncmp(p, name, n)) return 1;
+        p += l;
+        if (*p == ',') p++;
+    }
+    return 0;
+}
+
+/* The state the door must have opened in, from the environment: 1 on or 0
+ * off, and the by= that alone can say so. A card may say either of two. */
+static void expected(int *on, const char **by, const char **by_card_off){
+    char var[64] = "CFT_REBOUND_ROUTE_";
+    size_t l = strlen(var);
+    for (const char *p = route; *p && l + 1 < sizeof var; p++) var[l++] = (char)toupper((unsigned char)*p);
+    var[l] = 0;
+    const char *want = getenv(var), *hide = getenv("CFT_REBOUND_HIDE_FEATURES"), *art = getenv("CFT_REBOUND_ARTIFACT");
+    *by_card_off = NULL;
+    if (want && (!strcmp(want, "on") || !strcmp(want, "off"))){ *on = !strcmp(want, "on"); *by = "forced"; }
+    else if (hide && list_names(hide, route)){ *on = 0; *by = "hidden"; }
+    else if (!art || !art[0]){ *on = 1; *by = "device"; }
+    else { *on = 1; *by = "device"; *by_card_off = "absent"; }
 }
 
 static void case_route(const char *label, const struct body *bs, size_t n, double dt, double epsilon,
@@ -60,13 +100,20 @@ static void case_route(const char *label, const struct body *bs, size_t n, doubl
         reduce_seg_route(&after);
         dc = after.calls - before.calls;
         df = after.fallbacks - before.fallbacks;
-        if (after.on ? (dc > 0 && df == 0) : (df > 0 && dc == 0))
-            printf("  ok   %s: reduce_seg=%s by=%s carried this case's %llu maxima %s\n", label,
-                   after.on ? "on" : "off", after.by, after.on ? dc : df,
+        int want_on;
+        const char *want_by, *card_off;
+        expected(&want_on, &want_by, &card_off);
+        const int state = (after.on == want_on && !strcmp(after.by, want_by)) ||
+                          (card_off && !after.on && !strcmp(after.by, card_off));
+        const int counts = after.on ? (dc > 0 && df == 0) : (df > 0 && dc == 0);
+        if (state && counts)
+            printf("  ok   %s: %s=%s by=%s, as this environment requires, carried this case's %llu maxima %s\n", label,
+                   route, after.on ? "on" : "off", after.by, after.on ? dc : df,
                    after.on ? "on the device route, and no fallback" : "on today's route, and no device call");
         else{
-            printf("  FAIL %s: reduce_seg=%s by=%s, and this case moved its calls by %llu and its fallbacks by %llu\n",
-                   label, after.on ? "on" : "off", after.by, dc, df);
+            printf("  FAIL %s: %s=%s by=%s, where this environment requires %s by=%s%s%s; the case moved its calls "
+                   "by %llu and its fallbacks by %llu\n", label, route, after.on ? "on" : "off", after.by,
+                   want_on ? "on" : "off", want_by, card_off ? " or off by=" : "", card_off ? card_off : "", dc, df);
             failures++;
         }
     }
