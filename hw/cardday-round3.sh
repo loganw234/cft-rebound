@@ -23,9 +23,12 @@
 # THE GUARD. The card is shared: cft-fp256's scheduler and nightly runs
 # use it too. Before every leg this script looks for another card user.
 # - It uses the pinned cft-fp256's own definition (hw/card_stress.py,
-#   card_user), widened by two of this port's: any process with an
-#   .xclbin argument, and any with CFT_REBOUND_ARTIFACT in its
-#   environment.
+#   card_user). It widens it to this port's own programs and scripts
+#   (ias15_cft, the gates, the check and bench scripts), counted when
+#   they have an .xclbin argument or CFT_REBOUND_ARTIFACT in their
+#   environment. As card_stress has it, a cp or an editor naming an
+#   image does not hold the card, and neither does an idle shell with
+#   the variable exported.
 # - Its own process tree is not "another".
 # - It waits up to GUARD_WAIT seconds (default 600) for the card, then
 #   stops, naming who holds it. GUARD_IGNORE is a regex of command lines
@@ -159,9 +162,14 @@ LOG=$L/cardday.log
 # card.
 foreign() {
     "$PY" - "$REPO/third_party/cft-fp256/hw" <<'EOF'
-import os, sys
+import os, re, sys
 sys.path.insert(0, sys.argv[1])
 import card_stress as CS
+# This port's programs and scripts. As card_stress has it for its own
+# tools, an image named by a cp, a sha256sum or an editor does not hold
+# the card, and neither does an idle shell with the variable exported.
+PORT = re.compile(r"^(ias15_cft|ias15_ref|gate_[a-z_]+|check_[a-z_]+(\.py)?|bench-[a-z]+\.(py|sh)"
+                  r"|cardtest-[a-z0-9]+\.sh|compare-images\.sh)$")
 procs = CS.list_processes()
 skip = CS.descendants_of(os.getpid(), procs)
 by_pid = {p["pid"]: p for p in procs}
@@ -175,10 +183,12 @@ for p in procs:
     if p["pid"] in skip:
         continue
     why = CS.card_user(p)
-    if not why and any(a.lower().endswith(".xclbin") for a in p["args"]):
-        why = "an .xclbin argument"
-    if not why and "CFT_REBOUND_ARTIFACT" in CS.proc_environ(p["pid"]):
-        why = "CFT_REBOUND_ARTIFACT in its environment"
+    names = [os.path.basename(a) for a in p["args"]]
+    ours = any(PORT.match(n[:-4] if n.endswith(".exe") else n) for n in names)
+    if not why and ours and any(a.lower().endswith(".xclbin") for a in p["args"]):
+        why = "this port's program, with an .xclbin argument"
+    if not why and ours and "CFT_REBOUND_ARTIFACT" in CS.proc_environ(p["pid"]):
+        why = "this port's program, with CFT_REBOUND_ARTIFACT in its environment"
     if why:
         print(p["pid"], why + ":", " ".join(p["args"])[:200])
 print("#ok")
@@ -236,19 +246,23 @@ leg_pin_f128s() {
 leg_split() {  # <dir> <label> <xclbin> [bench-workload option ...]
     local d=$1 label=$2 x=$3
     shift 3
-    local rc ran ident verdict
+    local rc
     "$PY" hw/bench-workload.py --image "$label=$x" --formats fp64,fp128 --csv "$d/workload.csv" "$@" \
         > "$d/bench-workload.txt" 2>&1; rc=$?
-    # An image that does not open reads as one that carries no format.
-    # The bench then prints "no rung" rows, writes no card row, and exits
-    # 0, as the third dry run measured. So the card rows are counted from
-    # the CSV, never taken from the exit status.
-    ran=$(awk -F, -v m="$label" '$3 == m' "$d/workload.csv" 2>/dev/null | wc -l)
-    ident=$(awk -F, -v m="$label" '$3 == m && $9 == "identical"' "$d/workload.csv" 2>/dev/null | wc -l)
-    if [ "$ran" -eq 0 ]; then verdict="FAIL no card row ran: the image did not open, or carries no format asked for"
-    elif [ "$ident" -ne "$ran" ]; then verdict="FAIL $((ran - ident)) of $ran card rows are not identical to software"
-    else verdict="$ran card rows, every one identical to software"; fi
-    log "bench-workload $label (rc=$rc): $verdict; $(grep -c 'no rung' "$d/bench-workload.txt") no-rung rows; decompose.csv $(wc -l < "$d/decompose.csv" 2>/dev/null || echo no) lines"
+    log "bench-workload $label (rc=$rc): $(card_rows "$d/workload.csv" "$label" 9); $(grep -c 'no rung' "$d/bench-workload.txt") no-rung rows; decompose.csv $(wc -l < "$d/decompose.csv" 2>/dev/null || echo no) lines"
+}
+# A bench's card rows, counted from its CSV: <csv> <label> <record column>.
+# An image that does not open reads to the benches as one that carries
+# no format. They print "no rung" rows, write no card row, and exit 0,
+# as the third dry run measured. So a card row that never ran is a FAIL
+# here, never a silence.
+card_rows() {
+    local ran ident
+    ran=$(awk -F, -v m="$2" '$3 == m' "$1" 2>/dev/null | wc -l)
+    ident=$(awk -F, -v m="$2" -v c="$3" '$3 == m && $c == "identical"' "$1" 2>/dev/null | wc -l)
+    if [ "$ran" -eq 0 ]; then echo "FAIL no card row ran: the image did not open, or carries no format asked for"
+    elif [ "$ident" -ne "$ran" ]; then echo "FAIL $((ran - ident)) of $ran card rows are not identical to software"
+    else echo "$ran card rows, every one identical to software"; fi
 }
 leg_split_f128s() { leg_split "$1" 1t-f128 "$F128S"; }
 leg_split_rev8a() { leg_split "$1" 1t-rev8a "$REV8A"; }
@@ -279,10 +293,10 @@ leg_gates_rev8a() {
 leg_mixed() {
     hw/bench-ensemble.sh --image "1t-rev8a=$REV8A" --formats "fp128 fp256" --members "64 512" \
         --out "$1/together" > "$1/together.txt" 2>&1
-    log "bench-ensemble, members together (rc=$?): $(tally "$1/together.txt"); $(last "$1/together.txt" 2)"
+    log "bench-ensemble, members together (rc=$?): $(card_rows "$1/together/ensemble.csv" 1t-rev8a 8)"
     hw/bench-ensemble.sh --image "1t-rev8a=$REV8A" --formats "fp128 fp256" --members "64 512" \
         --perturb "--vscale planet 0.0005" --out "$1/apart" > "$1/apart.txt" 2>&1
-    log "bench-ensemble, members apart (rc=$?): $(tally "$1/apart.txt"); $(last "$1/apart.txt" 2)"
+    log "bench-ensemble, members apart (rc=$?): $(card_rows "$1/apart/ensemble.csv" 1t-rev8a 8)"
 }
 
 {
