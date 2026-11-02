@@ -620,6 +620,10 @@ IN_CORRECTOR := --input tools/check_corrector.py $(IN_PROGRAM) $(IN_PROB) $(IN_P
 # the body cap from; --library adds the drop-in gate it runs.
 IN_GRAVITY  := --input tools/check_gravity.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) \
                --input tools/make_nbody.py --input tools/make_ensemble.py --input src/ias15_limits.h
+# tools/check_seams.py: gate_real through check_checkpoint's runner, and
+# the program on the problems, the program images and an ensemble
+IN_SEAMS    := --input tools/check_seams.py --input tools/check_checkpoint.py $(IN_REAL) \
+               $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) --input tools/make_ensemble.py
 
 # The pins, checked at build time and not only at fetch time: a clone
 # under third_party/ that is not at its MANIFEST commit fails every tier
@@ -648,7 +652,7 @@ check: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg gate_real_fp256 --mode full $(IN_REAL) -- $(B)/gate_real$(EXE) --fp256
 	$(GATE_CACHE) --leg gate_subprocess --mode full $(IN_SUBPROC) -- $(B)/gate_subprocess$(EXE) --build $(B)
 	$(GATE_CACHE) --leg check_checkpoint --mode full --input tools/check_checkpoint.py $(IN_REAL) -- $(PYTHON) tools/check_checkpoint.py --build $(B)
-	$(GATE_CACHE) --leg check_seams --mode full --input tools/check_seams.py --input tools/check_checkpoint.py $(IN_REAL) -- $(PYTHON) tools/check_seams.py --build $(B)
+	$(GATE_CACHE) --leg check_seams --mode full $(IN_SEAMS) -- $(PYTHON) tools/check_seams.py --build $(B)
 
 # the same gates at binary64 only, in a few minutes
 .PHONY: check-quick
@@ -676,7 +680,7 @@ check-quick: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg gate_real_fp256 --mode quick $(IN_REAL) -- $(B)/gate_real$(EXE) --fp256
 	$(GATE_CACHE) --leg gate_subprocess --mode quick $(IN_SUBPROC) -- $(B)/gate_subprocess$(EXE) --build $(B)
 	$(GATE_CACHE) --leg check_checkpoint --mode quick --input tools/check_checkpoint.py $(IN_REAL) -- $(PYTHON) tools/check_checkpoint.py --build $(B) --quick
-	$(GATE_CACHE) --leg check_seams --mode quick --input tools/check_seams.py --input tools/check_checkpoint.py $(IN_REAL) -- $(PYTHON) tools/check_seams.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_seams --mode quick $(IN_SEAMS) -- $(PYTHON) tools/check_seams.py --build $(B) --quick
 	@$(PYTHON) tools/gate_cache.py --report --cache-dir $(B)/.gate-cache
 
 # Every case touched, none of them thoroughly - the step counts are
@@ -707,7 +711,7 @@ check-light: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg gate_real_fp256 --mode quick $(IN_REAL) -- $(B)/gate_real$(EXE) --fp256
 	$(GATE_CACHE) --leg gate_subprocess --mode quick $(IN_SUBPROC) -- $(B)/gate_subprocess$(EXE) --build $(B)
 	$(GATE_CACHE) --leg check_checkpoint --mode quick --input tools/check_checkpoint.py $(IN_REAL) -- $(PYTHON) tools/check_checkpoint.py --build $(B) --quick
-	$(GATE_CACHE) --leg check_seams --mode quick --input tools/check_seams.py --input tools/check_checkpoint.py $(IN_REAL) -- $(PYTHON) tools/check_seams.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_seams --mode quick $(IN_SEAMS) -- $(PYTHON) tools/check_seams.py --build $(B) --quick
 	@$(PYTHON) tools/gate_cache.py --report --cache-dir $(B)/.gate-cache
 
 # The worked round trip, built in the tree and run against the
