@@ -157,18 +157,23 @@
  * producer's statement of what it ran on. The state struct says what
  * each member means.
  *
- * WHERE THEY GO. After every field an older build knows and before
- * cft_n_elem, and cft_archive_selftest() holds them there. An older
- * build's reader stops a snapshot at the first name it does not know
- * (binarydata.c's REB_FIELD_NOT_FOUND, `goto finish_fields`). So in this
- * position a SINGLE SNAPSHOT read by such a build loses, of the fields it
- * knows, only cft_n_elem, which its cft_archive_finish_load() has always
- * repaired from the file. That is all the position buys. Three things go
- * wrong regardless, as they would for any field appended to this list:
+ * WHERE THEY GO. Just before cft_n_elem, which stays last, and after all
+ * the other fields of this list that an older build knows;
+ * cft_archive_selftest() holds them there. An older build's reader stops
+ * a snapshot at the first name it does not know (binarydata.c's
+ * REB_FIELD_NOT_FOUND, `goto finish_fields`). So in this position, when
+ * such a build reads a SINGLE SNAPSHOT with no function pointers set, it
+ * loses, of the fields it knows, only cft_n_elem, which its
+ * cft_archive_finish_load() has always repaired from the file. (REBOUND's
+ * function-pointer flag, written after this list, goes unread too; with
+ * none set it is 0 and says nothing.) That is all the position buys.
+ * Three things go wrong regardless, as they would for any field appended
+ * to this list:
+ *   - on ANY snapshot, a single one included, REBOUND's function-pointer
+ *     warning is lost there;
  *   - such a build appending to such an archive writes a snapshot that
  *     no build can read;
- *   - a snapshot this build appends after a removal is refused there;
- *   - REBOUND's function-pointer warning is lost there.
+ *   - a snapshot this build appends after a removal is refused there.
  * tools/check_archive.py states that limit, with the measurements, and
  * what a user must not do.
  * -------------------------------------------------------------------- */

@@ -902,10 +902,14 @@ static int edits_case(int format, const char *fname, const char *what, int adapt
  * also compared with REBOUND's own ias15 across REBOUND's own checkpoint,
  * which says what the answer is without the port.
  *
- * The physics counter: in (b), the step taken first after asking for
- * REJ_DT must be shorter than REJ_DT, which is what a rejected first
- * attempt does. Both continuations start from the same state and ask for
- * the same step, so their first attempt is the same attempt. */
+ * The physics counter, in (b): the first step taken after asking for
+ * REJ_DT. A rejected first attempt makes it shorter than REJ_DT, and
+ * unlike the step taken with no request, which a third run measures; the
+ * resumed run's must then be the uninterrupted run's, bit for bit.
+ * Shorter alone proves nothing. A resume that never sees the request
+ * takes the unrequested step, which is shorter too: V3 dropped adopt's
+ * r->dt guard (S5, 2026-11-02) and this counter, which then held only
+ * "shorter", still printed "rejected". */
 #define REJ_STEPS_A 37
 #define REJ_DT      0.75
 #define REJ_STEPS_B 20
@@ -931,6 +935,17 @@ static void rej_second_part(struct reb_simulation *r, int via_integrate, double 
     reb_simulation_steps(r, 1);
     if (first_dt_done) *first_dt_done = r->dt_last_done;
     reb_simulation_steps(r, REJ_STEPS_B - 1);
+}
+
+/* The counter's third run: the same first part, then one step with
+ * nothing asked for, so r->dt is what the integrator left. */
+static double rej_unrequested_first(int format){
+    struct reb_simulation *r = build_rejected(format);
+    reb_simulation_steps(r, REJ_STEPS_A);
+    reb_simulation_steps(r, 1);
+    double d = r->dt_last_done;
+    reb_simulation_free(r);
+    return d;
 }
 
 /* REBOUND's own ias15 - its default integrator, epsilon 1e-9 and PRS23,
@@ -993,11 +1008,21 @@ static int rejected_case(int format, const char *fname, int via_integrate){
     reb_simulation_free(r);
 
     if (!via_integrate){
-        int rejected = first_a > 0 && first_a < REJ_DT && first_b > 0 && first_b < REJ_DT;
+        double first_n = rej_unrequested_first(format);
+        int shorter = first_a > 0 && first_a < REJ_DT;
+        int heeded  = memcmp(&first_a, &first_n, sizeof first_a) != 0;
+        int same    = memcmp(&first_a, &first_b, sizeof first_a) == 0;
+        int rejected = shorter && heeded && same;
+        const char *why =
+              rejected ? ": its first attempt was rejected, in both runs"
+            : !shorter ? ": NOT a rejection, so this proves nothing"
+            : !heeded  ? ": the request changed nothing, so this proves nothing"
+            : memcmp(&first_b, &first_n, sizeof first_b) == 0
+                       ? ": the resumed run took the step with no request - it never saw the request"
+                       : ": the resumed run's first step is not the uninterrupted run's";
         printf("  %-6s %s  asked for dt %a after the load, the first step taken was %a "
-               "(uninterrupted) and %a (resumed)%s\n", fname, rejected ? "ok  " : "FAIL",
-               (double)REJ_DT, first_a, first_b,
-               rejected ? ": its first attempt was rejected" : ": NOT a rejection, so this proves nothing");
+               "(uninterrupted) and %a (resumed), against %a with no request%s\n", fname,
+               rejected ? "ok  " : "FAIL", (double)REJ_DT, first_a, first_b, first_n, why);
         if (!rejected) ok = 0;
     }
     if (st != CFT_ARCHIVE_EXACT || da != db || na != nb2 || memcmp(sa, sb, na) != 0
