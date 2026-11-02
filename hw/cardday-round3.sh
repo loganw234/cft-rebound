@@ -63,6 +63,12 @@
 #          door bits: scalar 0x800, reduce_seg 0x1000, indexed 0x2000.
 #   REV8Q  revision 8's quad, opened as one tile (CFT_XRT_TILES=1), for
 #          the tile-count row only.
+#   DEEP   revision 8's deep single: one tile, the single's seq_features,
+#          and 8,192 scratch slots a lane against the single's 4,096
+#          (cft-fp256 docs/LANGUAGE.md, scratch-capacity). The port's
+#          programs use 10 to 22 slots, so the depth itself should buy
+#          nothing here. The deep leg asks whether the image costs or
+#          saves per call anyway. The owner pointed it out on 2026-11-02.
 # The probe leg prints what each image publishes on this card, at this
 # pin. Read it before you trust the two readings above, which were taken
 # at older pins.
@@ -107,6 +113,9 @@
 #                hw/bench-ensemble.sh on REV8A: first with members that
 #                leave the corrector together, then with members that do
 #                not.
+#   deep         DEEP's probe, then hw/bench-workload.py --quick on it.
+#                Its rows compare with split-rev8a's and tiles', which
+#                ran the same problems and step counts.
 # shellcheck disable=SC1091
 set -u
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -115,12 +124,13 @@ PY=${PYTHON:-python3}
 F128S=${F128S:-$HOME/cardday-f128s/cft_hw_f128_1x.xclbin}
 REV8A=${REV8A:-$HOME/cardday-rev8a/cft_hw_single.xclbin}
 REV8Q=${REV8Q:-$HOME/cardday-rev8q/cft_hw_quad.xclbin}
+DEEP=${DEEP:-$HOME/cardday-rev8d/cft_hw_deep.xclbin}
 GUARD_WAIT=${GUARD_WAIT:-600}
 UNTIL=${UNTIL:-}
-LEGS=(probe pin-f128s split-f128s door-rev8a door-f128s split-rev8a tiles gates-rev8a mixed)
+LEGS=(probe pin-f128s split-f128s door-rev8a door-f128s split-rev8a tiles gates-rev8a mixed deep)
 # Minutes each leg is believed to take on one tile, on the generous side.
 declare -A EST=([probe]=2 [pin-f128s]=5 [split-f128s]=35 [door-rev8a]=25 [door-f128s]=15
-                [split-rev8a]=35 [tiles]=10 [gates-rev8a]=110 [mixed]=50)
+                [split-rev8a]=35 [tiles]=10 [gates-rev8a]=110 [mixed]=50 [deep]=8)
 log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 die() { echo "FATAL: $*" >&2; exit 2; }
 last() { tail -n "${2:-1}" "$1" 2>/dev/null | tr '\n' ' ' | cut -c1-"${3:-300}"; }
@@ -305,6 +315,13 @@ leg_gates_rev8a() {
     log "check_dropin --wide (rc=$?): $(tally "$1/check_dropin-wide.txt"); $(last "$1/check_dropin-wide.txt" 2)"
     CFT_REBOUND_ARTIFACT=$REV8A "$PY" tools/check_ensemble.py --build build > "$1/check_ensemble.txt" 2>&1
     log "check_ensemble (rc=$?): $(tally "$1/check_ensemble.txt"); $(last "$1/check_ensemble.txt" 2)"
+}
+
+leg_deep() {
+    [ -f "$DEEP" ] || { log "FAIL no such image: $DEEP"; return; }
+    build/ias15_cft --probe --artifact "$DEEP" > "$1/probe-DEEP.txt" 2>&1
+    log "probe DEEP (rc=$?; $(basename "$DEEP"), sha256 $(sha256sum "$DEEP" | cut -c1-16)...): $(tr '\n' ';' < "$1/probe-DEEP.txt" | cut -c1-900)"
+    leg_split "$1" 1t-rev8d "$DEEP" --quick
 }
 
 leg_mixed() {
