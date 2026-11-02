@@ -354,9 +354,12 @@ leg_deep() {
 # show them here instead.
 routes() { grep '^# route ' "$1" | sed -E 's/^# route ([a-z_]+)=([a-z]+) by=([a-z]+) calls=([0-9]+) fallbacks=([0-9]+)$/\1=\2 by \3 (\4 calls, \5 fallbacks)/' | paste -sd ';' -; }
 # Data lines, the comparison tools/check_records.py makes: identical, or
-# how many differ.
+# how many differ. Only for two runs that both exited 0. Two refusals
+# print the same message, and session B's dry run measured this function
+# calling them identical.
 same_data() {
     local n
+    if [ "$(grep -c -v '^#' "$1")" -eq 0 ] || [ "$(grep -c -v '^#' "$2")" -eq 0 ]; then echo EMPTY; return; fi
     n=$(diff <(grep -v '^#' "$1") <(grep -v '^#' "$2") | grep -c '^<')
     [ "$n" -eq 0 ] && echo identical || echo "DIFFER:$n"
 }
@@ -378,7 +381,13 @@ route_benches() {
             for kv in ${combo//,/ }; do export "CFT_REBOUND_ROUTE_${kv%%=*}=${kv#*=}"; done
             build/ias15_cft --format fp64 --problem data/problems/kepler.txt --steps 2 --artifact "$REV8A" \
                 --engine program --arith fma --max-iter 60 --quiet > "$sub/routes.txt" 2>&1
-            log "$combo: rc=$?; routes $(routes "$sub/routes.txt")"
+            local rc=$? r
+            r=$(routes "$sub/routes.txt")
+            if [ "$rc" -ne 0 ] || [ -z "$r" ]; then
+                log "FAIL $combo: the route check did not run (rc=$rc): $(last "$sub/routes.txt" 1)"
+            else
+                log "$combo: routes $r"
+            fi
             leg_split "$sub" 1t-rev8a "$REV8A"
         )
     done
@@ -407,7 +416,7 @@ leg_p2_corrector() {
 }
 
 leg_p2_replay() {
-    local d=$1 spec pname prob fmt steps t0 t1 t2 rc1 rc2 rc3 rc4
+    local d=$1 spec pname prob fmt steps t0 t1 t2 rc1 rc2 rc3 rc4 c1 c2 c3 v1 v2 verdict
     local -a common
     [ -f tools/check_corrector.py ] || { log "FAIL this build is not P2's: no tools/check_corrector.py"; return; }
     "$PY" tools/make_nbody.py 64 "$d/nbody64.txt" > /dev/null 2>&1
@@ -423,7 +432,18 @@ leg_p2_replay() {
         t2=$(date +%s.%N)
         build/ias15_cft "${common[@]}" --record-iters "$d/$pname.sw.iters" > "$d/$pname.sw.txt" 2>&1; rc3=$?
         build/ias15_cft "${common[@]}" --artifact "$REV8A" --replay-iters "$d/$pname.sw.iters" > "$d/$pname.swreplay.txt" 2>&1; rc4=$?
-        log "replay $pname $fmt $steps steps (rc $rc1 $rc2 $rc3 $rc4): card recording $(awk -v a="$t0" -v b="$t1" 'BEGIN { printf "%.2f", b - a }') s, its replay $(awk -v a="$t1" -v b="$t2" 'BEGIN { printf "%.2f", b - a }') s; replay against recording: data $(same_data "$d/$pname.card.txt" "$d/$pname.replay.txt"), counters [$(counters "$d/$pname.card.txt")] against [$(counters "$d/$pname.replay.txt")]; the software recording replayed on the card: data $(same_data "$d/$pname.card.txt" "$d/$pname.swreplay.txt")"
+        if [ "$rc1$rc2$rc3$rc4" != 0000 ]; then
+            log "FAIL replay $pname $fmt: a run did not complete (the card's recording rc=$rc1, its replay $rc2, the software recording $rc3, its replay on the card $rc4): $(last "$d/$pname.card.txt" 1)"
+            continue
+        fi
+        c1=$(counters "$d/$pname.card.txt"); c2=$(counters "$d/$pname.replay.txt"); c3=$(counters "$d/$pname.swreplay.txt")
+        v1=$(same_data "$d/$pname.card.txt" "$d/$pname.replay.txt"); v2=$(same_data "$d/$pname.card.txt" "$d/$pname.swreplay.txt")
+        if [ -z "$c1" ] || [ "$c1" != "$c2" ] || [ "$c1" != "$c3" ] || [ "$v1" != identical ] || [ "$v2" != identical ]; then
+            verdict=FAIL
+        else
+            verdict=ok
+        fi
+        log "$verdict replay $pname $fmt $steps steps: the card's recording $(awk -v a="$t0" -v b="$t1" 'BEGIN { printf "%.2f", b - a }') s, its replay $(awk -v a="$t1" -v b="$t2" 'BEGIN { printf "%.2f", b - a }') s; the replay against the recording: data $v1, counters [$c1] against [$c2]; the software recording replayed on the card: data $v2, counters [$c3]"
     done
 }
 
