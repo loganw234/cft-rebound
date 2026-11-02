@@ -27,8 +27,26 @@
 #     system, and for an ensemble whose systems happen to share a ratio,
 #     and wrong otherwise. Only the ensemble case can see that, so it must
 #     show its systems' ratios differing.
+#   - that the prediction after a REJECTED step runs too. An accepted step
+#     predicts from its own e and b with ratio dt / dt_done; a rejected one
+#     predicts from er and br, the last accepted step's, with ratio
+#     dt / dt_last_done. The rejection case must show more nextstep runs
+#     than accepted steps, so at least one prediction came from er and br.
+#     No other case gets there. The only rejections in them are the
+#     ensemble's four, and each is its system's first step, which predicts
+#     nothing.
 # The trailer's step counters and flags_seen must also be the loop's;
 # nothing else compares them.
+#
+# Stated, not closed: the gate cannot see the nextstep run's own flags
+# going missing. They reach flags_seen and the flag abort through
+# run_program()'s note(), which the program shares with the 27 others.
+# On every problem run so far the program raises inexact and nothing
+# else, and other calls raise inexact in every step, so a run whose
+# nextstep flags were dropped prints the same flags_seen=0x10 and passes
+# every case here (V4's V11, measured on 2026-11-02). Only a nextstep run
+# that raised invalid, divide-by-zero, overflow or underflow could show
+# it, and no case here makes one.
 #
 #   python tools/check_program_engine.py [--build build] [--exe ias15_cft]
 #                                        [--formats fp64,fp128,fp256]
@@ -137,12 +155,20 @@ def held(name, loop_txt, prog_txt, nsys, kind):
             print("  FAIL %s: a fixed step's ratio is not 1" % name)
             return False
         said.append("ratio 1 at all %d sampled steps, so q is inert here" % len(rs))
-    elif kind == "adaptive":
+    elif kind in ("adaptive", "rejection"):
         n = sum(1 for r in rs if any(v != 1 for v in r.values()))
         if n == 0:
             print("  FAIL %s: every sampled ratio is 1, so nothing here exercises q" % name)
             return False
         said.append("ratio not 1 at %d of %d sampled steps" % (n, len(rs)))
+        if kind == "rejection":
+            # one system: every accepted step predicts once, so each run
+            # past steps_done is a rejected attempt predicting from er/br
+            if nsys != 1 or npr <= done[0]:
+                print("  FAIL %s: nextstep ran %d times in %d accepted steps (%d rejected), so no prediction came from er and br" %
+                      (name, npr, done[0], rejected[0]))
+                return False
+            said.append("%d of its %d rejections predicted, from er and br" % (npr - done[0], rejected[0]))
     else:
         # the systems' ratios must differ by more than any rounding could
         # hide: then the formats' roundings of them differ as well
@@ -173,6 +199,7 @@ def main():
     exe = ".exe" if os.name == "nt" else ""
     cft = os.path.join(args.build, args.exe + exe)
     kepler = os.path.join(root, "data", "problems", "kepler.txt")
+    e099 = os.path.join(root, "data", "problems", "kepler_e099.txt")
     outer = os.path.join(root, "data", "problems", "outer.txt")
     progs = os.path.join(root, "programs", "out")
     # The per-system ratio's case (see the top): tools/check_ensemble.py's
@@ -188,15 +215,25 @@ def main():
             "--offset", "planet", "x", "0.4"]) is None:
         print("RESULT: FAIL (could not write the ensemble file)")
         return 1
-    # (name, problem, bodies, systems, what the ratio must show, arguments).
+    # (name, problem, bodies, systems, what the case must show, arguments).
     # None is scaled in any tier: this script takes no --light, and the
-    # ensemble's step count is part of what it asserts.
+    # step counts of the last two are what they assert - the ensemble's
+    # mixed first attempt, and the rejection case's predictions.
     cases = [
         ("kepler fixed dt=0.05",     kepler, 2, 1, "fixed",    ["--dt", "0.05", "--epsilon", "0",    "--steps", "200", "--sample", "50"]),
         ("kepler adaptive eps=1e-9", kepler, 2, 1, "adaptive", ["--dt", "0.01", "--epsilon", "1e-9", "--steps", "200", "--sample", "50"]),
         ("outer fixed dt=40",        outer,  6, 1, "fixed",    ["--dt", "40",   "--epsilon", "0",    "--steps", "60",  "--sample", "20"]),
         ("kepler spread E=5 adaptive from dt0=0.6 (mixed rejection)", spread, 2, 5, "systems",
          ["--dt", "0.6", "--epsilon", "1e-9", "--steps", "120", "--sample", "40"]),
+        # The prediction after a rejection (see the top). Kepler e = 0.99
+        # at a loose epsilon, from a small first step. Measured on
+        # 2026-11-02: in 40 steps it rejects 11 times at each format, never
+        # the first step, so all 11 rejected attempts predict from er and
+        # br; the case asserts at least one. A step-count case: it runs 40
+        # steps, not to a time. V4 found the path; at epsilon 1e-9 no case
+        # here reaches it.
+        ("kepler e=0.99 adaptive eps=1e-2 from dt0=1e-4 (rejections that predict)", e099, 2, 1, "rejection",
+         ["--dt", "1e-4", "--epsilon", "1e-2", "--steps", "40", "--sample", "20"]),
     ]
     allok = True
     for fmt in args.formats.split(","):
