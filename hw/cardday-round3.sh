@@ -40,15 +40,19 @@
 # THE IMAGES are one tile each, because on a card tile count is a cost
 # (CLAUDE.md):
 #   F128S  entry 37's image: one f128 tile at 150 MHz, no binary256. It
-#          is the "before", comparable with entries 34 to 37. Believed to
-#          publish none of the door's three bits, since it predates them.
+#          is the "before", comparable with entries 34 to 37. Its probe
+#          read seq_features 0xf1f, contract 0x800 (docs/BITSTREAM.md,
+#          "The tile count, derived"). That is the scalar bit, but not
+#          indexed or reduce_seg, which came after it. So P1's and P2's
+#          routes cannot run on it.
 #   REV8A  revision 8's single tile, every rung. cft-fp256 read its
 #          seq_features on this card as 0x7ff1f, which holds all three
 #          door bits: scalar 0x800, reduce_seg 0x1000, indexed 0x2000.
 #   REV8Q  revision 8's quad, opened as one tile (CFT_XRT_TILES=1), for
 #          the tile-count row only.
-# The probe leg prints what each image publishes. Read it before you
-# believe the "believed" and the "read" above.
+# The probe leg prints what each image publishes on this card, at this
+# pin. Read it before you trust the two readings above, which were taken
+# at older pins.
 #
 # THE LEGS
 #   probe        Each image's own word: VERSION, CAPS and the door's
@@ -65,8 +69,9 @@
 #                On software each new route is the same primitive as
 #                today's; on this tile it is not, so this is the first
 #                test of the tile's routes.
-#   door-f128s   The same on a tile without the bits: each route
-#                reported absent, and today's route only.
+#   door-f128s   The same on a tile with only the scalar bit: the scalar
+#                route on the tile, and indexed and reduce_seg reported
+#                absent, on today's route only.
 #   split-rev8a  The gravity split on the image that the parcels' routes
 #                will run on.
 #   tiles        CFT_XRT_TILES: REV8Q opened as one tile, against REV8A,
