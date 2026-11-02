@@ -39,15 +39,23 @@
 #      physics that makes this a test is asserted, not assumed: at every
 #      format a step rejected, a cap hit, and an ensemble whose systems
 #      leave the corrector at different passes in one attempt.
-#   4. The replay drives the run. A count moved by one changes no record
-#      line (the pass a test stops on changes nothing; P2's ledger entry),
-#      so the controls are: the first attempt cut to one pass must change
-#      the record or be refused by name; a moved count's passes must show
-#      in the replay's own counters; and a capped count moved by one is
-#      refused by name.
+#   4. The replay drives the run, at every format. A count moved by one
+#      changes no record line on most attempts (P2's ledger entries), so
+#      the controls are: the first attempt cut to one pass must change the
+#      record or be refused by name; a moved count's passes must show in
+#      the replay's own counters; a capped count moved by one is refused by
+#      name; and in a mixed attempt of the ensemble, ONE system that is not
+#      the longest cut to one pass must change its own lines and no other
+#      system's, or be refused by name. That last holds each system's own
+#      exit: a replay that kept every system in the corrector to the
+#      attempt's last count passed everything else (V2's M2).
 #   5. Refusals by name: a schedule from another run, one cut short, one
-#      too long, a malformed field, and --trace-pc or --record-iters beside
-#      --replay-iters.
+#      too long, a malformed field, a file that is not a schedule, and
+#      --trace-pc or --record-iters beside --replay-iters.
+#   6. The run key holds every field. A schedule replayed under a run that
+#      differs in one thing - epsilon, the initial state, and every other
+#      field the key carries, read from the key - is refused by name, and
+#      a field that no case moves fails by name (V2's M3 and M3s).
 #
 # The route's name and variable are read from the program, never typed.
 
@@ -405,6 +413,54 @@ def main():
         verdict(rc == 3 and "the cap stopped system 0" in err,
                 "%s: attempt %d, which the cap stopped at %s, moved by one, is refused by name (rc %d)"
                 % (cc["label"], at, b2[at][0], rc))
+        # (d) Each system's own exit. In the mixed ensemble's first attempt
+        #     whose systems leave at different passes, the system with the
+        #     most passes short of the attempt's longest is cut to ONE. That
+        #     must change its own record lines and no other system's, or be
+        #     refused by name. A replay that kept every system in the
+        #     corrector until the attempt's last count, while counting each
+        #     one's passes exactly, reproduces every recording - the extra
+        #     passes land on a fixed point - and leaves this cut converging
+        #     with the rest (V2's M2, 2026-11-02).
+        ke = next((i for i, c2 in enumerate(configs) if c2["fmt"] == fmt and "mixed rejection" in c2["label"]
+                   and c2["mode"] == 2), None)
+        if ke is None or results[ke][1][0] or (published and results[ke][0][0]):
+            verdict(False, "the mixed ensemble did not run at %s, so no system's own exit is held" % fmt)
+            continue
+        he, be = schedule(schedule_of(ke))
+        pick = None
+        for a, fields in enumerate(be):
+            counts = [(s, int(f.rstrip("c"))) for s, f in enumerate(fields) if f != "-"]
+            longest = max((n for _, n in counts), default=0)
+            short = [(n, -s) for s, n in counts if 2 <= n < longest]
+            if short:
+                n, s = max(short)
+                pick = (a, -s, n, longest)
+                break
+        if pick is None:
+            verdict(False, "no attempt of the mixed ensemble at %s had a system leave two or more passes before "
+                    "the longest, so no system's own exit is held" % fmt)
+            continue
+        a, s, n, longest = pick
+        mut = [list(f) for f in be]
+        mut[a][s] = "1"
+        path = os.path.join(work, "%s-one-system.sched" % fmt)
+        write(path, he, mut)
+        rc, out, err = run([cft] + configs[ke]["args"] + ["--replay-iters", path])
+        def by_system(text):
+            lines = {}
+            for l in text.splitlines():
+                if l.startswith("system "):
+                    lines.setdefault(int(l.split()[1]), []).append(l)
+            return lines
+        ref = by_system(results[ke][0][1] if published else results[ke][1][1])
+        new = by_system(out)
+        moved = sorted(k for k in set(ref) | set(new) if ref.get(k) != new.get(k))
+        verdict((rc == 0 and moved == [s]) or (rc == 3 and "--replay-iters" in err),
+                "%s: attempt %d, system %d's %d passes cut to 1 (the attempt's longest ran %d): %s"
+                % (configs[ke]["label"], a, s, n, longest,
+                   ("the systems whose record lines moved are %s, and only %d's may" % (moved, s)) if rc == 0 else
+                   "refused (rc %d): %s" % (rc, err.strip()[-140:])))
 
     # 5. Refusals by name, at the first format.
     fmt0 = formats[0]
@@ -432,6 +488,84 @@ def main():
     verdict(rc == 3 and "--trace-pc and --replay-iters" in err, "--trace-pc beside --replay-iters is refused by name (rc %d)" % rc)
     rc, out, err = run(base + ["--replay-iters", src, "--record-iters", os.path.join(work, "x.sched")])
     verdict(rc == 3 and "--record-iters and --replay-iters" in err, "--record-iters beside --replay-iters is refused by name (rc %d)" % rc)
+    rc, out, err = run(base + ["--replay-iters", os.path.join(pdir, "kepler.txt")])
+    verdict(rc == 3 and "is not a corrector schedule" in err, "a file that is not a schedule is refused by name (rc %d)" % rc)
+
+    # 6. The run key holds every field. A schedule replayed under a run that
+    #    differs in one thing is refused by name, and the refusal's two key
+    #    lines say which fields differ. Every field the key carries must be
+    #    moved by some case here, read from the key itself, so a field added
+    #    to it untested fails by name. Epsilon and the initial state each
+    #    have a case that moves nothing else (V2's M3 and M3s: a key without
+    #    either passed every other check, and replayed a schedule recorded
+    #    at epsilon 1e-9 under 1e-8 with rc 0).
+    print("check_corrector at %s: the run key holds every field" % fmt0)
+    kep = os.path.join(pdir, "kepler.txt")
+    kbase = ["--format", fmt0, "--quiet", "--dt", "0.01", "--epsilon", "1e-9", "--steps", "4", "--sample", "2"]
+    ksched = os.path.join(work, "key.sched")
+    rc, out, err = run([cft, "--problem", kep] + kbase + ["--record-iters", ksched])
+    khead, _ = schedule(ksched)
+    keyline = next((l[6:] for l in khead if l.startswith("# run ")), "")
+    fields = set(kv(keyline))
+    with open(kep, encoding="utf-8") as f:
+        ktext = f.read()
+
+    def variant(tag, edit):
+        p = os.path.join(work, "key-%s.txt" % tag)
+        with open(p, "w", encoding="utf-8", newline="\n") as f:
+            f.write(edit(ktext))
+        return p
+
+    def last_x(text):
+        # the last body's x, its final hex digit moved: one coordinate, one ulp's worth of change
+        lines = text.splitlines()
+        i = max(k for k, l in enumerate(lines) if l.startswith("body "))
+        t = lines[i].split()
+        m, e = t[3].split("p")
+        t[3] = m[:-1] + ("0" if m[-1] != "0" else "1") + "p" + e
+        lines[i] = " ".join(t)
+        return "\n".join(lines) + "\n"
+
+    dtf = os.path.join(work, "key-dt.txt")
+    with open(dtf, "w", encoding="utf-8", newline="\n") as f:
+        f.write("0x1.47ae147ae147bp-7\n" * 5)
+    replace = lambda a, b: [b if x == a else x for x in kbase]
+    cases = [
+        ("epsilon", kep, replace("1e-9", "1e-8"), {"epsilon"}),
+        ("dt0", kep, replace("0.01", "0.02"), {"dt0"}),
+        ("steps", kep, replace("4", "5"), {"steps"}),
+        ("sample", kep, replace("2", "1"), {"sample"}),
+        ("adaptive_mode", kep, kbase + ["--adaptive-mode", "3"], {"adaptive_mode"}),
+        ("max_iter", kep, kbase + ["--max-iter", "11"], {"max_iter"}),
+        ("pc_tol_shift", kep, kbase + ["--pc-tol-shift", "1"], {"pc_tol_shift"}),
+        ("cs", kep, kbase + ["--cs", "augmented"], {"cs"}),
+        ("arith", kep, kbase + ["--arith", "fma"], {"arith"}),
+        ("engine", kep, kbase + ["--arith", "fma", "--engine", "program", "--programs", progs], None),
+        ("softening2", kep, kbase + ["--softening", "0.001"], {"softening2"}),
+        ("min_dt", kep, kbase + ["--min-dt", "0.001"], {"min_dt"}),
+        ("format", kep, replace(fmt0, "fp128" if fmt0 != "fp128" else "fp64"), None),
+        ("state", variant("state", last_x), kbase, {"state"}),
+        ("G", variant("G", lambda t: re.sub(r"(?m)^G \S+$", "G 0x1.0000000000001p+0", t)), kbase, {"G"}),
+        ("problem", variant("name", lambda t: re.sub(r"(?m)^name \S+$", "name kepler_renamed", t)), kbase, {"problem"}),
+        ("N", os.path.join(pdir, "outer.txt"), kbase, None),
+        ("E", ens, kbase, None),
+        ("member", ens, kbase + ["--member", "0"], None),
+        ("dt_file", kep, replace("1e-9", "0") + ["--dt-file", dtf], None),
+    ]
+    moved_all = set()
+    for name, prob, a, only in cases:
+        rc, out, err = run([cft, "--problem", prob] + a + ["--replay-iters", ksched])
+        m = re.search(r"it was recorded from: (.*)\n\s*this run is:\s+(.*)", err)
+        moved = sorted(k for k in set(kv(m.group(1))) | set(kv(m.group(2)))
+                       if kv(m.group(1)).get(k) != kv(m.group(2)).get(k)) if m else []
+        moved_all |= set(moved)
+        verdict(rc == 3 and "was recorded from a different run" in err and name in moved
+                and (only is None or set(moved) == only),
+                "a schedule replayed under another %s is refused by name (rc %d); the keys differ in %s%s"
+                % (name, rc, ", ".join(moved) or "nothing", "" if only is None else ", and in nothing else"))
+    missing = sorted(fields - moved_all)
+    verdict(fields and not missing, "every field of the run key is held by a case: %d of %d%s"
+            % (len(fields) - len(missing), len(fields), " (UNHELD: %s)" % ", ".join(missing) if missing else ""))
 
     print("RESULT: %s" % ("PASS" if ok_all else "FAIL"))
     return 0 if ok_all else 1
