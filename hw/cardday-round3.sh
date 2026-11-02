@@ -116,6 +116,28 @@
 #   deep         DEEP's probe, then hw/bench-workload.py --quick on it.
 #                Its rows compare with split-rev8a's and tiles', which
 #                ran the same problems and step counts.
+#
+# SESSION B: the parcels' routes, on REV8A, the image that publishes
+# their bits. Each leg runs in a clone of the parcel's verified commit,
+# merged with this script's branch, and first checks that the build is
+# that parcel's. Name its legs to run them; with no legs named the
+# script runs session A, above.
+#   p4-program   P4's tools/check_program_engine.py on the card: the
+#                step-control program against the loop engine.
+#   p3-identity  P3's gate_real at every format on the card: a
+#                card-written archive, whose identity names the image.
+#   p2-corrector P2's tools/check_corrector.py on the card, then a bench
+#                with the device test forced on and one with it off.
+#   p2-replay    A schedule recorded on the card and replayed there, and
+#                one recorded on the software backend and replayed on
+#                the card, each held to the card's recording.
+#   p1-gravity   P1's tools/check_gravity.py on the card, then a bench
+#                for each of the four combinations of indexed and
+#                pair_gather.
+# A route bench reads its build's software rows from a cache
+# (bench-workload.py --software-cache), so only the first bench of a
+# build pays for them. BENCH_ARGS adds arguments to every bench, for
+# example --quick when the window is short.
 # shellcheck disable=SC1091
 set -u
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -127,10 +149,12 @@ REV8Q=${REV8Q:-$HOME/cardday-rev8q/cft_hw_quad.xclbin}
 DEEP=${DEEP:-$HOME/cardday-rev8d/cft_hw_deep.xclbin}
 GUARD_WAIT=${GUARD_WAIT:-600}
 UNTIL=${UNTIL:-}
-LEGS=(probe pin-f128s split-f128s door-rev8a door-f128s split-rev8a tiles gates-rev8a mixed deep)
+SESSION_A=(probe pin-f128s split-f128s door-rev8a door-f128s split-rev8a tiles gates-rev8a mixed deep)
+LEGS=("${SESSION_A[@]}" p4-program p3-identity p2-corrector p2-replay p1-gravity)
 # Minutes each leg is believed to take on one tile, on the generous side.
 declare -A EST=([probe]=2 [pin-f128s]=5 [split-f128s]=35 [door-rev8a]=25 [door-f128s]=15
-                [split-rev8a]=35 [tiles]=10 [gates-rev8a]=110 [mixed]=50 [deep]=8)
+                [split-rev8a]=35 [tiles]=10 [gates-rev8a]=110 [mixed]=50 [deep]=8
+                [p4-program]=20 [p3-identity]=15 [p2-corrector]=60 [p2-replay]=20 [p1-gravity]=100)
 log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 die() { echo "FATAL: $*" >&2; exit 2; }
 last() { tail -n "${2:-1}" "$1" 2>/dev/null | tr '\n' ' ' | cut -c1-"${3:-300}"; }
@@ -166,7 +190,7 @@ case "${1:-}" in
 esac
 TAG=$1; shift
 for l in "$@"; do printf '%s\n' "${LEGS[@]}" | grep -qx -- "$l" || die "unknown leg $l (--list names them)"; done
-if [ $# -gt 0 ]; then RUN=("$@"); else RUN=("${LEGS[@]}"); fi
+if [ $# -gt 0 ]; then RUN=("$@"); else RUN=("${SESSION_A[@]}"); fi
 if [ -n "$UNTIL" ]; then
     until_s=$(date -d "$UNTIL" +%s 2>/dev/null) || die "UNTIL=$UNTIL is not a time of day (HH:MM)"
 fi
@@ -274,7 +298,8 @@ leg_split() {  # <dir> <label> <xclbin> [bench-workload option ...]
     local d=$1 label=$2 x=$3
     shift 3
     local rc
-    "$PY" hw/bench-workload.py --image "$label=$x" --formats fp64,fp128 --csv "$d/workload.csv" "$@" \
+    "$PY" hw/bench-workload.py --image "$label=$x" --formats fp64,fp128 --csv "$d/workload.csv" \
+        --software-cache "$HOME/r3-swcache" ${BENCH_ARGS:-} "$@" \
         > "$d/bench-workload.txt" 2>&1; rc=$?
     log "bench-workload $label (rc=$rc): $(card_rows "$d/workload.csv" "$label" 9); $(grep -c 'no rung' "$d/bench-workload.txt") no-rung rows; decompose.csv $(wc -l < "$d/decompose.csv" 2>/dev/null || echo no) lines"
 }
@@ -322,6 +347,92 @@ leg_deep() {
     build/ias15_cft --probe --artifact "$DEEP" > "$1/probe-DEEP.txt" 2>&1
     log "probe DEEP (rc=$?; $(basename "$DEEP"), sha256 $(sha256sum "$DEEP" | cut -c1-16)...): $(tr '\n' ';' < "$1/probe-DEEP.txt" | cut -c1-900)"
     leg_split "$1" 1t-rev8d "$DEEP" --quick
+}
+
+# A card run's route lines, joined. The benches drop them, because they
+# differ by design between a card and software, so the route benches
+# show them here instead.
+routes() { grep '^# route ' "$1" | sed -E 's/^# route ([a-z_]+)=([a-z]+) by=([a-z]+) calls=([0-9]+) fallbacks=([0-9]+)$/\1=\2 by \3 (\4 calls, \5 fallbacks)/' | paste -sd ';' -; }
+# Data lines, the comparison tools/check_records.py makes: identical, or
+# how many differ.
+same_data() {
+    local n
+    n=$(diff <(grep -v '^#' "$1") <(grep -v '^#' "$2") | grep -c '^<')
+    [ "$n" -eq 0 ] && echo identical || echo "DIFFER:$n"
+}
+# The trailer's step counters, which a replay must reproduce as well as
+# the bits (ROUND3.md, P2's trap).
+counters() { grep -o -E '(steps_done|steps_rejected|iterations_max_exceeded|mean_pc_iterations)=[0-9.]+' "$1" | paste -sd ' ' -; }
+
+# One bench per combination of forced routes, each in its own directory.
+# A combination is a comma-separated list of NAME=on|off, for
+# CFT_REBOUND_ROUTE_<NAME>. A short run first shows which routes ran,
+# because a bench's own output drops the route lines.
+route_benches() {
+    local d=$1 combo sub kv
+    shift
+    for combo in "$@"; do
+        sub=$d/${combo//[,=]/-}
+        mkdir -p "$sub"
+        (
+            for kv in ${combo//,/ }; do export "CFT_REBOUND_ROUTE_${kv%%=*}=${kv#*=}"; done
+            build/ias15_cft --format fp64 --problem data/problems/kepler.txt --steps 2 --artifact "$REV8A" \
+                --engine program --arith fma --max-iter 60 --quiet > "$sub/routes.txt" 2>&1
+            log "$combo: rc=$?; routes $(routes "$sub/routes.txt")"
+            leg_split "$sub" 1t-rev8a "$REV8A"
+        )
+    done
+}
+
+leg_p4_program() {
+    [ -f programs/nextstep-fp64.cfta ] || { log "FAIL this build is not P4's: no programs/nextstep-fp64.cfta"; return; }
+    CFT_REBOUND_ARTIFACT=$REV8A "$PY" tools/check_program_engine.py --build build > "$1/check_program_engine.txt" 2>&1
+    log "check_program_engine on REV8A (rc=$?): $(tally "$1/check_program_engine.txt"); $(grep -h '^RESULT' "$1/check_program_engine.txt" | tail -n 1)"
+}
+
+leg_p3_identity() {
+    local fmt
+    grep -q cft_identity src/cft_ias15_fields.h 2>/dev/null || { log "FAIL this build is not P3's: no cft_identity field"; return; }
+    for fmt in fp64 fp128 fp256; do
+        CFT_REBOUND_ARTIFACT=$REV8A build/gate_real --$fmt > "$1/gate_real-$fmt.txt" 2>&1
+        log "gate_real --$fmt on REV8A (rc=$?): $(tally "$1/gate_real-$fmt.txt"); $(grep -m1 -o 'identity "[^"]*"' "$1/gate_real-$fmt.txt" | cut -c1-240)"
+    done
+}
+
+leg_p2_corrector() {
+    [ -f tools/check_corrector.py ] || { log "FAIL this build is not P2's: no tools/check_corrector.py"; return; }
+    CFT_REBOUND_ARTIFACT=$REV8A "$PY" tools/check_corrector.py --build build > "$1/check_corrector.txt" 2>&1
+    log "check_corrector on REV8A (rc=$?): $(tally "$1/check_corrector.txt")"
+    route_benches "$1" "REDUCE_SEG=on" "REDUCE_SEG=off"
+}
+
+leg_p2_replay() {
+    local d=$1 spec pname prob fmt steps t0 t1 t2 rc1 rc2 rc3 rc4
+    local -a common
+    [ -f tools/check_corrector.py ] || { log "FAIL this build is not P2's: no tools/check_corrector.py"; return; }
+    "$PY" tools/make_nbody.py 64 "$d/nbody64.txt" > /dev/null 2>&1
+    "$PY" tools/make_nbody.py 256 "$d/nbody256.txt" > /dev/null 2>&1
+    for spec in "kepler data/problems/kepler.txt fp128 200" "outer data/problems/outer.txt fp128 100" \
+                "nbody64 $d/nbody64.txt fp128 20" "nbody256 $d/nbody256.txt fp128 5"; do
+        read -r pname prob fmt steps <<< "$spec"
+        common=(--format "$fmt" --problem "$prob" --steps "$steps" --engine program --arith fma --max-iter 60 --quiet)
+        t0=$(date +%s.%N)
+        build/ias15_cft "${common[@]}" --artifact "$REV8A" --record-iters "$d/$pname.card.iters" > "$d/$pname.card.txt" 2>&1; rc1=$?
+        t1=$(date +%s.%N)
+        build/ias15_cft "${common[@]}" --artifact "$REV8A" --replay-iters "$d/$pname.card.iters" > "$d/$pname.replay.txt" 2>&1; rc2=$?
+        t2=$(date +%s.%N)
+        build/ias15_cft "${common[@]}" --record-iters "$d/$pname.sw.iters" > "$d/$pname.sw.txt" 2>&1; rc3=$?
+        build/ias15_cft "${common[@]}" --artifact "$REV8A" --replay-iters "$d/$pname.sw.iters" > "$d/$pname.swreplay.txt" 2>&1; rc4=$?
+        log "replay $pname $fmt $steps steps (rc $rc1 $rc2 $rc3 $rc4): card recording $(awk -v a="$t0" -v b="$t1" 'BEGIN { printf "%.2f", b - a }') s, its replay $(awk -v a="$t1" -v b="$t2" 'BEGIN { printf "%.2f", b - a }') s; replay against recording: data $(same_data "$d/$pname.card.txt" "$d/$pname.replay.txt"), counters [$(counters "$d/$pname.card.txt")] against [$(counters "$d/$pname.replay.txt")]; the software recording replayed on the card: data $(same_data "$d/$pname.card.txt" "$d/$pname.swreplay.txt")"
+    done
+}
+
+leg_p1_gravity() {
+    [ -f tools/check_gravity.py ] || { log "FAIL this build is not P1's: no tools/check_gravity.py"; return; }
+    CFT_REBOUND_ARTIFACT=$REV8A "$PY" tools/check_gravity.py --build build > "$1/check_gravity.txt" 2>&1
+    log "check_gravity on REV8A (rc=$?): $(tally "$1/check_gravity.txt"); $(grep -h '^check_gravity: routes' "$1/check_gravity.txt" | cut -c1-240)"
+    route_benches "$1" "INDEXED=off,PAIR_GATHER=off" "INDEXED=on,PAIR_GATHER=off" \
+                       "INDEXED=off,PAIR_GATHER=on" "INDEXED=on,PAIR_GATHER=on"
 }
 
 leg_mixed() {
