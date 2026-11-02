@@ -58,13 +58,14 @@
 #   probe        Each image's own word: VERSION, CAPS and the door's
 #                bits.
 #   pin-f128s    Does libcft 0.18 open entry 37's image (ROUND3.md, "Read
-#                the provider's code", the third claim)? Records card
-#                against software at every rung the image carries,
-#                gate_real at binary64 and binary128, and binary256
-#                refused by name.
+#                the provider's code", the third claim)? gate_real at
+#                binary64 and binary128, and binary256 refused by name.
+#                The records, card against software, are split-f128s's.
 #   split-f128s  The gravity split's "before" (ROADMAP item 4), by
 #                hw/bench-workload.py, whose decompose.csv carries every
-#                trailer key. It is what orders P1's routes.
+#                trailer key. It is what orders P1's routes. Every card
+#                row's record is held byte-identical to its software
+#                row's, which is the pin's record check too.
 #   door-rev8a   tools/check_door.py on a tile that publishes the bits.
 #                On software each new route is the same primitive as
 #                today's; on this tile it is not, so this is the first
@@ -74,8 +75,17 @@
 #                absent, on today's route only.
 #   split-rev8a  The gravity split on the image that the parcels' routes
 #                will run on.
-#   tiles        CFT_XRT_TILES: REV8Q opened as one tile, against REV8A,
-#                each through hw/compare-images.sh.
+#   tiles        CFT_XRT_TILES: REV8Q opened as one tile, through
+#                hw/bench-workload.py --quick. That runs the small
+#                problems, where tile count cost the most (CLAUDE.md).
+#                Compare its rows with split-rev8a's, which ran the same
+#                problems and step counts.
+#
+# The software rows run inside each bench, so they cost card time:
+# minutes for the 512-body rows at binary128, measured in the dry run.
+# So no leg runs a software reference that another leg already ran. That
+# is why the session uses no hw/compare-images.sh, which recomputes its
+# own software reference for every problem at every format.
 #   gates-rev8a  The gates through the new library at every format:
 #                gate_real, check_dropin and check_dropin --wide, and the
 #                ensemble gate (docs/HARDWARE.md, "What to do first",
@@ -203,8 +213,6 @@ leg_probe() {
 
 leg_pin_f128s() {
     local fmt rc
-    hw/compare-images.sh "1t-f128=$F128S" > "$1/compare-images.txt" 2>&1
-    log "compare-images on F128S (rc=$?): $(tally "$1/compare-images.txt")"
     for fmt in fp64 fp128; do
         CFT_REBOUND_ARTIFACT=$F128S build/gate_real --$fmt > "$1/gate_real-$fmt.txt" 2>&1
         log "gate_real --$fmt on F128S (rc=$?): $(tally "$1/gate_real-$fmt.txt"); $(last "$1/gate_real-$fmt.txt" 2)"
@@ -218,10 +226,12 @@ leg_pin_f128s() {
     fi
 }
 
-leg_split() {  # <dir> <label> <xclbin>
-    "$PY" hw/bench-workload.py --image "$2=$3" --formats fp64,fp128 --csv "$1/workload.csv" \
-        > "$1/bench-workload.txt" 2>&1
-    log "bench-workload $2 (rc=$?): $(tally "$1/bench-workload.txt"); decompose.csv $(wc -l < "$1/decompose.csv" 2>/dev/null || echo no) lines; $(last "$1/bench-workload.txt" 2)"
+leg_split() {  # <dir> <label> <xclbin> [bench-workload option ...]
+    local d=$1 label=$2 x=$3
+    shift 3
+    "$PY" hw/bench-workload.py --image "$label=$x" --formats fp64,fp128 --csv "$d/workload.csv" "$@" \
+        > "$d/bench-workload.txt" 2>&1
+    log "bench-workload $label (rc=$?): $(tally "$d/bench-workload.txt"); decompose.csv $(wc -l < "$d/decompose.csv" 2>/dev/null || echo no) lines; $(last "$d/bench-workload.txt" 2)"
 }
 leg_split_f128s() { leg_split "$1" 1t-f128 "$F128S"; }
 leg_split_rev8a() { leg_split "$1" 1t-rev8a "$REV8A"; }
@@ -233,12 +243,7 @@ leg_door() {  # <dir> <xclbin> <formats>
 leg_door_rev8a() { leg_door "$1" "$REV8A" fp64,fp128,fp256; }
 leg_door_f128s() { leg_door "$1" "$F128S" fp64,fp128; }
 
-leg_tiles() {
-    hw/compare-images.sh "1t-rev8a=$REV8A" > "$1/rev8a.txt" 2>&1
-    log "compare-images REV8A (rc=$?): $(tally "$1/rev8a.txt")"
-    CFT_XRT_TILES=1 hw/compare-images.sh "rev8q-tile1=$REV8Q" > "$1/rev8q-tile1.txt" 2>&1
-    log "compare-images REV8Q with CFT_XRT_TILES=1 (rc=$?): $(tally "$1/rev8q-tile1.txt")"
-}
+leg_tiles() { ( export CFT_XRT_TILES=1; leg_split "$1" rev8q-tile1 "$REV8Q" --quick ); }
 
 leg_gates_rev8a() {
     local fmt
