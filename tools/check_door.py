@@ -55,8 +55,13 @@ COUNT_LINE = re.compile(r"^door route (\w+) calls=(\d+) fallbacks=(\d+)$")
 SUMMARY = re.compile(r"^door: (\d+) identical, (\d+) differ, (\d+) not compared, (\d+) accounting errors; "
                      r"controls (\d+) of (\d+)$")
 TRAILER_ROUTE = re.compile(r"^# route (\w+)=(on|off) by=(\w+) calls=(\d+) fallbacks=(\d+)$")
+# program_calls is held too. A route counts the same whichever half
+# carries it (P0's rule), and the card-day normalisers keep this key. So a
+# route whose new half is a program run, and whose old half is not, would
+# otherwise pass here and still read as differing from software on a card
+# without the bit (P2, by sabotage, 2026-11-02).
 COUNTERS = ("steps_done", "iterations_max_exceeded", "steps_rejected", "mean_pc_iterations",
-            "max_pc_iterations", "flags_seen", "calls", "divsqrt_calls")
+            "max_pc_iterations", "flags_seen", "calls", "divsqrt_calls", "program_calls")
 # What each --door-refuse case must say, and which route it belongs to.
 # The cases themselves are read from the program's own refusal of an
 # unknown one.
@@ -254,11 +259,15 @@ def main():
                 continue
             missing = [k for k in COUNTERS if k not in t0 or k not in t1]
             carried = sum(v[2] + v[3] for v in list(r0.values()) + list(r1.values()))
-            same = s0 == s1 and len(s0) > 0 and not missing and all(t0[k] == t1[k] for k in COUNTERS)
+            differ = [k for k in COUNTERS if k not in missing and t0[k] != t1[k]]
+            same = s0 == s1 and len(s0) > 0 and not missing and not differ
             forced = sorted(r1) == names and all(v[0] == "off" and v[1] == "forced" for v in r1.values())
+            # A failing line names what differed, never the claim it failed.
             verdict(same and forced and sorted(r0) == names,
-                    "%s: %d sample lines and all %d counters identical%s; forced-off run reports every route off by=forced%s"
+                    "%s: %d sample lines and all %d counters identical%s%s%s; forced-off run reports every route off by=forced%s"
                     % (name, len(s0), len(COUNTERS), " (MISSING: %s)" % ", ".join(missing) if missing else "",
+                       "" if s0 == s1 else " (THE SAMPLE LINES DIFFER)",
+                       "" if not differ else " (DIFFER: %s)" % ", ".join("%s %s against %s" % (k, t0[k], t1[k]) for k in differ),
                        "" if carried else
                        " (vacuous for now: no route carried a call in either run, which is P0's state)"))
             if fmt == f0 and name == runs[0][0]:
