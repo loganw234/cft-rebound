@@ -41,10 +41,17 @@
  * The name itself is the integrator's, and is defined in cft_ias15.h
  * beside the call that registers it. */
 
-/* What a load did. */
+/* What a load did. Every value at or above 0 is a load that happened;
+ * the state's own provenance member says the same, and outlives the
+ * return value. */
 enum cft_archive_status {
     CFT_ARCHIVE_EXACT           =  0, /* cft_ fields present and consistent: the wide state was restored bit for bit */
     CFT_ARCHIVE_PROMOTED        =  1, /* no cft_ fields: REBOUND's binary64 state was promoted */
+    CFT_ARCHIVE_EXACT_CLOCK_STEPS64 = 2, /* the wide state restored bit for bit, but the archive
+                                       * carried no wide clock and steps - every archive written
+                                       * before 2026-11-02 - so t, t_hi, t_lo, dt and dt_last
+                                       * were rebuilt from binary64, as every load did then.
+                                       * CFT_PROV_EXACT_CLOCK_STEPS64 says what that concedes */
     CFT_ARCHIVE_FORMAT_MISMATCH = -1, /* the archive's cft_format is not the run's format: refused */
     CFT_ARCHIVE_COUNT_MISMATCH  = -2, /* the element count and the blob lengths disagree: refused */
     CFT_ARCHIVE_NO_FILE         = -3,
@@ -56,6 +63,11 @@ const char *cft_archive_status_str(enum cft_archive_status s);
 /* Check the shape of the three descriptor lists (names, widths, order).
  * 0 if sound, otherwise the number of complaints, each on stderr. */
 int cft_archive_selftest(void);
+
+/* The longest identity a probe reports whole. The longest this project
+ * writes is under 250 bytes: libcft_build= and a 64-digit commit, then
+ * a 64-digit image digest, a byte count and a version. */
+#define CFT_ARCHIVE_IDENTITY_MAX 512
 
 /* What one snapshot of an archive says about itself, read from the file
  * itself rather than inferred from a loaded simulation. For a snapshot
@@ -93,10 +105,29 @@ struct cft_archive_info {
     int      alias_lengths_agree;
 
     /* What the WRITING run's state said about itself. provenance is a
-     * cft_ias15_provenance; -1 when the archive names no such field,
-     * which every archive written before 2026-09-11 does. */
+     * cft_ias15_provenance - how that state had been restored; -1 when
+     * the archive names no such field, which every archive written
+     * before 2026-09-11 does. */
     int      provenance;
     uint64_t iterations_max_exceeded;
+
+    /* The clock family, appended 2026-11-02: cft_t, cft_t_hi, cft_t_lo,
+     * cft_dt and cft_dt_last, one element of the format's width each.
+     * Counted like the alias family, and like it OPTIONAL, because
+     * every archive written before 2026-11-02 has none. */
+    int      n_clock_seen;      /* how many of the CFT_N_CLOCK_BLOBS are present */
+    uint64_t clock_bytes;       /* their size_data, which must be the format's width */
+    int      clock_lengths_agree;
+
+    /* The WRITING run's identity, cft_identity: what it said it ran on,
+     * stated and not checked (the state struct's `identity`). "" when
+     * the archive carries none - every archive written before
+     * 2026-11-02, and every one the gates' stub integrator writes.
+     * identity_bytes is its size_data, terminator included; a longer one
+     * than fits here is cut, and identity_cut says so. */
+    char     identity[CFT_ARCHIVE_IDENTITY_MAX];
+    uint64_t identity_bytes;
+    int      identity_cut;
 };
 
 /* The high-water body count an archive implies: hiwater_n_elem/3 when
@@ -135,6 +166,11 @@ unsigned char **cft_archive_state_blob(struct cft_ias15_state *s, int i);
  * alias_csx and alias_csv. These are sized by hiwater_n_elem rather
  * than by n_elem, which is the whole reason they are a second family. */
 unsigned char **cft_archive_state_alias(struct cft_ias15_state *s, int i);
+
+/* The i'th member of the CLOCK family, by the order of CFT_FD_CLOCK, or
+ * NULL past the end: t, t_hi, t_lo, dt, dt_last. One element each, sized
+ * by clock_bytes, in BYTES. */
+unsigned char **cft_archive_state_clock(struct cft_ias15_state *s, int i);
 
 int  cft_archive_state_alloc(struct cft_ias15_state *s, size_t n_elem);
 void cft_archive_state_free(struct cft_ias15_state *s);

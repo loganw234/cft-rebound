@@ -22,8 +22,14 @@
 # floats (%a), so the comparison is over bits rather than over a decimal
 # rendering of them: a last-bit difference shows as a different line.
 #
-# THREE SEQUENCES, and THE SWEEP.
+# FOUR SEQUENCES, and THE SWEEP.
 #   plain     a checkpoint, 60 steps then 120, at a fixed step.
+#   old       plain's checkpoint written with the field list as it was
+#             before 2026-11-02 (gate_real --old-list), which is how the
+#             suite holds "old archives still load" with no binary in the
+#             tree. Its resume must equal plain's archive resumed with the
+#             clock's and the steps' loads removed, and differ from the
+#             straight run in the clock alone (old_sequence()).
 #   regrow    a particle REMOVAL before the checkpoint and one added back
 #             below the original high-water mark afterwards. REBOUND keeps
 #             the arrays a count change re-reads at N_allocated rather
@@ -88,9 +94,10 @@
 #
 #   python tools/check_checkpoint.py [--build build] [--quick]
 #
-# --quick is binary64 only. An artifact in CFT_REBOUND_ARTIFACT is
-# inherited by every process, so this gate runs on a card without a flag
-# of its own.
+# --quick is binary64 only, and skips the sweep by name: it is the full
+# tier's (make check). An artifact in CFT_REBOUND_ARTIFACT is inherited
+# by every process, so this gate runs on a card without a flag of its
+# own.
 
 import argparse
 import os
@@ -145,13 +152,15 @@ def first_difference(a, b):
     return "no difference found, which contradicts the comparison"
 
 
-def one_sequence(exe, fmt, workdir, seq, extra, controls):
+def one_sequence(exe, fmt, workdir, seq, extra, controls, keep=None):
     ckpt = os.path.join(workdir, "ckpt_%s_%s.bin" % (fmt, seq))
     flag = "--" + fmt
 
     ok, straight, err = run(exe, [flag] + extra + ["--straight"], True)
     if not ok:
         return False, "the straight run failed: %s" % err.strip().splitlines()[-1:]
+    if keep is not None:
+        keep["straight"], keep["ckpt"] = straight, ckpt
 
     ok, _, err = run(exe, [flag] + extra + ["--save", ckpt], False)
     if not ok:
@@ -169,6 +178,14 @@ def one_sequence(exe, fmt, workdir, seq, extra, controls):
 
     if straight != resumed:
         return False, "the continued run DIFFERS - %s" % first_difference(straight, resumed)
+
+    # The physics counter for the adaptive sequence: its step control must
+    # have moved dt off the 0.01 every sequence starts from, or it was a
+    # fixed-step run passing for the wrong reason.
+    if "--epsilon" in extra:
+        dts = [l for l in straight.splitlines() if l.startswith("dt ")]
+        if not dts or float.fromhex(dts[0].split()[1]) == 0.01:
+            return False, "the step control never moved dt (%s): not an adaptive run" % dts
 
     # The controls. Same three processes, except the resume is told to
     # drop part of what it loaded. If one of THOSE still matches, the
@@ -189,6 +206,42 @@ def one_sequence(exe, fmt, workdir, seq, extra, controls):
     return True, "%d values identical, %s differ, archive %d B%s" % (
         len(straight.splitlines()), " and ".join(used), size,
         (" | " + note) if note else "")
+
+
+def old_sequence(exe, fmt, workdir, straight, new_ckpt):
+    """AN ARCHIVE WRITTEN BEFORE 2026-11-02 STILL LOADS, and does what
+    every load did before then: it restores the wide state exactly and
+    rebuilds the clock and steps from binary64. gate_real --old-list
+    writes one, with the field list as it was (field for field af2f400's
+    own; tools/check_archive.py's docstring). Its resume must equal the
+    plain sequence's archive resumed with the clock's AND the steps'
+    loads removed, and must differ from the straight run only in the
+    clock: at this fixed step the trajectory does not depend on it."""
+    flag = "--" + fmt
+    ckpt = os.path.join(workdir, "ckpt_%s_old.bin" % fmt)
+    ok, _, err = run(exe, [flag, "--old-list", "--save", ckpt], False)
+    if not ok:
+        return False, "the save with the old field list failed: %s" % err.strip()
+    ok, old, err2 = run(exe, [flag, "--resume", ckpt], True)
+    if not ok:
+        return False, "the resume of the old archive failed: %s" % err2.strip()
+    ok, rebuilt, _ = run(exe, [flag, "--resume", new_ckpt], True,
+                         {"CFT_REBOUND_NO_CLOCK": "1", "CFT_REBOUND_NO_STEP": "1"})
+    if not ok:
+        return False, "the resume with the clock's and steps' loads removed would not start"
+    if old != rebuilt:
+        return False, ("an old archive does not resume as a new one whose clock and steps "
+                       "were rebuilt from binary64 - %s" % first_difference(rebuilt, old))
+    kinds = sorted(set(kind(a) for a, b in zip(straight.splitlines(), old.splitlines()) if a != b))
+    if not kinds:
+        return False, ("the old archive resumed identically to the straight run, clock "
+                       "included, so this case cannot show what an old archive concedes")
+    if "other" in kinds:
+        return False, ("the old archive's resume differs from the straight run beyond its "
+                       "clock and steps - %s" % first_difference(straight, old))
+    return True, ("resumes as one whose clock and steps were rebuilt from binary64, and "
+                  "differs from the straight run in %s lines only | %s" % (
+                      " and ".join(kinds), err2.strip()))
 
 
 def kind(line):
@@ -302,8 +355,9 @@ def main():
     art = os.environ.get("CFT_REBOUND_ARTIFACT", "")
     print("check_checkpoint: three separate processes per format and sequence, "
           "on %s" % (art if art else "the software backend"))
-    print("                  plain = a checkpoint; regrow = a removal, a checkpoint "
-          "and one added back under the mark; adaptive = plain at epsilon 1e-9")
+    print("                  plain = a checkpoint; old = plain's, written as before "
+          "2026-11-02; regrow = a removal, a checkpoint and one added back under the "
+          "mark; adaptive = plain at epsilon 1e-9")
     print("                  splits = a checkpoint after each of s = 1..%d steps, then %d "
           "more, at a fixed step of 0.01 (the 2-of-40 case)" % (SPLITS, AFTER))
     print("                  each also runs controls that drop part of the loaded "
@@ -313,10 +367,27 @@ def main():
     with tempfile.TemporaryDirectory(prefix="cft_ckpt_") as workdir:
         for fmt in formats:
             for seq, extra, controls in SEQUENCES:
-                ok, detail = one_sequence(exe, fmt, workdir, seq, extra, controls)
+                keep = {} if seq == "plain" else None
+                ok, detail = one_sequence(exe, fmt, workdir, seq, extra, controls, keep)
                 print("  %-6s %-8s %s  %s" % (fmt, seq, "PASS" if ok else "FAIL", detail),
                       flush=True)
                 allok = allok and ok
+                if keep is not None:
+                    if ok:
+                        ok, detail = old_sequence(exe, fmt, workdir, keep["straight"], keep["ckpt"])
+                    else:
+                        detail = "not run: it resumes the plain sequence's archive, which failed"
+                    print("  %-6s %-8s %s  %s" % (fmt, "old", "PASS" if ok else "FAIL", detail),
+                          flush=True)
+                    allok = allok and ok
+            if a.quick:
+                # The sweep is eighty resumes, about two and a half minutes at
+                # fp64 on a busy host, and the case it holds is binary128's
+                # and binary256's. --quick checks the clock at fp64 through
+                # plain and adaptive and their CFT_REBOUND_NO_CLOCK control.
+                print("  %-6s %-8s SKIPPED  --quick: the 2-of-40 sweep is the full tier's "
+                      "(make check), at every format" % (fmt, "splits"), flush=True)
+                continue
             ok, detail = splits_sweep(exe, fmt, workdir)
             print("  %-6s %-8s %s  %s" % (fmt, "splits", "PASS" if ok else "FAIL", detail),
                   flush=True)

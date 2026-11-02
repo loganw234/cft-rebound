@@ -91,20 +91,43 @@ static void run_format(int format){
     struct cft_archive_info info;
     cft_archive_probe(path("gate1_two.bin"), -1, &info);
 
-    /* The return value said "restored exactly"; the state has to say so
-     * too, because a caller may discard a return value and until
-     * 2026-09-11 nothing else recorded it. Both loads, because a
-     * promoted one would also come back non-NULL. */
+    /* The stub's state has no wide clock or steps - its step keeps only
+     * the binary64 r->t - so its archives carry no clock family, exactly
+     * like every archive written before 2026-11-02. Both loads must
+     * therefore say what such a load does: the wide state restored
+     * exactly, the clock and steps from binary64. The return value says
+     * it, and so must the state, because a caller may discard a return
+     * value and until 2026-09-11 nothing else recorded it. Both loads,
+     * because a promoted one would also come back non-NULL. The real
+     * integrator's archives, which do carry the family, are
+     * tests/gate_real.c's. */
     int okp = 1;
     for (int k = 0; k < 2; k++){
         struct cft_ias15_state *s = (struct cft_ias15_state*)(k ? c : b)->integrator.state;
-        if (!s || s->provenance != CFT_PROV_EXACT){
-            printf("  %-9s FAIL  the %s load's state says provenance \"%s\", wanted "
-                   "\"%s\"\n", fn, k ? "appended-diff" : "one-snapshot",
+        enum cft_archive_status sk = k ? st2 : st;
+        if (!s || s->provenance != CFT_PROV_EXACT_CLOCK_STEPS64
+               || sk != CFT_ARCHIVE_EXACT_CLOCK_STEPS64){
+            printf("  %-9s FAIL  the %s load returned \"%s\" and its state says \"%s\"; "
+                   "an archive with no clock family should say \"%s\"\n",
+                   fn, k ? "appended-diff" : "one-snapshot", cft_archive_status_str(sk),
                    cft_ias15_provenance_str(s ? s->provenance : -1),
-                   cft_ias15_provenance_str(CFT_PROV_EXACT));
+                   cft_ias15_provenance_str(CFT_PROV_EXACT_CLOCK_STEPS64));
             okp = 0;
         }
+        if (s && (s->clock_bytes || s->t || s->identity)){
+            printf("  %-9s FAIL  the %s load's state holds a clock or an identity the "
+                   "archive did not carry\n", fn, k ? "appended-diff" : "one-snapshot");
+            okp = 0;
+        }
+    }
+    /* And the file itself: a writer whose members are NULL wrote none of
+     * the clock family and no identity - REBOUND's writer skips a
+     * REB_POINTER field of zero length, which is what keeps this
+     * archive what a build from before 2026-11-02 wrote. */
+    if (info.n_clock_seen || info.identity_bytes){
+        printf("  %-9s FAIL  the stub wrote %d clock fields and an identity of %llu bytes\n",
+               fn, info.n_clock_seen, (unsigned long long)info.identity_bytes);
+        okp = 0;
     }
     /* Nothing here ever removed a particle, so the high-water mark is
      * the live count and the alias family must be absent - which is
@@ -142,9 +165,12 @@ int main(int argc, char **argv){
     int shape = cft_archive_selftest();
     if (shape) printf("  descriptor lists: MALFORMED\n");
     else printf("  descriptor lists: %d blobs of n_elem + %d of hiwater_n_elem + %d "
-                "scalars at each of fp64/fp128/fp256, every name cft_-prefixed and "
-                "unique, every walker index a distinct member, cft_n_elem last\n",
-                CFT_N_BLOBS, CFT_N_ALIAS_BLOBS, CFT_N_SCALARS);
+                "clock fields + %d identity + %d scalars at each of fp64/fp128/fp256, "
+                "every name cft_-prefixed and unique, every walker index a distinct "
+                "member, the fields appended 2026-11-02 after every older one, "
+                "cft_n_elem last\n",
+                CFT_N_BLOBS, CFT_N_ALIAS_BLOBS, CFT_N_CLOCK_BLOBS, CFT_N_IDENTITY,
+                CFT_N_SCALARS);
     if (shape) fail = 1;
     run_format(CFT_FP64);
     run_format(CFT_FP128);

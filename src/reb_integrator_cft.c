@@ -191,6 +191,46 @@ static int supported(struct reb_simulation *r, struct cft_ias15_state *st){
 /* ------------------------------------------------------------------ */
 /* Binding the one engine to this simulation                           */
 /* ------------------------------------------------------------------ */
+/* What this process says it ran on, for the state's `identity`: the
+ * standalone record's `# identity` line in the same words (src/ias15_cft.c,
+ * main()), from the engine's two identity calls, which are read once at
+ * open. Formatted once and never freed; publish_state() points every
+ * state the engine binds at it. Stated, not checked (cft_ias15.h). */
+static void id_append(char *buf, size_t cap, size_t *n, const char *s){
+    while (*s && *n + 1 < cap) buf[(*n)++] = *s++;
+    buf[*n] = '\0';
+}
+static const char *identity_text(size_t *bytes){
+    static char buf[512];
+    static size_t len;
+    if (!len && ias15_engine_is_open()){
+        char part[96];
+        unsigned char sha[32];
+        unsigned long long image_bytes = 0;
+        uint32_t version = 0;
+        size_t n = 0;
+        id_append(buf, sizeof buf, &n, "libcft_build=");
+        for (const char *p = ias15_engine_build_id(); *p && n + 1 < sizeof buf; p++)
+            buf[n++] = (*p == ' ') ? ',' : *p;
+        buf[n] = '\0';
+        if (ias15_engine_image_digest(sha, &image_bytes, &version) == 0){
+            id_append(buf, sizeof buf, &n, " image_sha256=");
+            for (int i = 0; i < 32; i++){
+                snprintf(part, sizeof part, "%02x", sha[i]);
+                id_append(buf, sizeof buf, &n, part);
+            }
+            snprintf(part, sizeof part, " image_bytes=%llu image_version=0x%x",
+                     image_bytes, (unsigned)version);
+            id_append(buf, sizeof buf, &n, part);
+        }else{
+            id_append(buf, sizeof buf, &n, " image=none");
+        }
+        len = n + 1;
+    }
+    *bytes = len;
+    return len ? buf : NULL;
+}
+
 static void publish_state(struct cft_ias15_state *st){
     struct ias15_engine_view w;
     ias15_engine_view(&w);
@@ -204,6 +244,19 @@ static void publish_state(struct cft_ias15_state *st){
     st->n_elem = w.n_elem;
     st->E = 1;
     st->constants_digest = ias15_engine_constants_digest();
+
+    /* The wide clock and steps (cft_ias15.h, appended 2026-11-02),
+     * borrowed from the engine like the blobs, one element each. The
+     * view's dt and dt_last are const because the ENGINE takes a wide
+     * step only through ias15_engine_put_dt_wide(), which re-broadcasts
+     * it; the archive only ever reads a published state's members, so
+     * the casts hand nothing a way to write them. */
+    st->t = w.t; st->t_hi = w.t_hi; st->t_lo = w.t_lo;
+    st->dt = (unsigned char *)w.dt; st->dt_last = (unsigned char *)w.dt_last;
+    st->clock_bytes = w.elem_size;
+    /* And what this run says it ran on, which is what the next snapshot
+     * of this state should carry: this run is the one producing it. */
+    st->identity = (char *)identity_text(&st->identity_bytes);
 
     /* The high-water mark and what it strands, for the archive.
      *
@@ -335,6 +388,11 @@ static int adopt_loaded_state(struct reb_simulation *r, struct cft_ias15_state *
         free(st->alias_csx); st->alias_csx = NULL;
         free(st->alias_csv); st->alias_csv = NULL;
         st->hiwater_n_elem = 0;
+        free(st->t);  free(st->t_hi); free(st->t_lo);
+        free(st->dt); free(st->dt_last);
+        st->t = st->t_hi = st->t_lo = st->dt = st->dt_last = NULL;
+        st->clock_bytes = 0;
+        free(st->identity); st->identity = NULL; st->identity_bytes = 0;
         return 1;
     }
 
@@ -442,12 +500,82 @@ static int adopt_loaded_state(struct reb_simulation *r, struct cft_ias15_state *
         if (drop) st->hiwater_n_elem = 0;
     }
 
-    /* The clock is REBOUND's own, restored from its own fields, and the
-     * engine's copy was not reset with the rest - so write it here
-     * rather than leave the step's "has it changed" guard to notice. */
-    ias15_engine_put_t_f64(r->t);
-    ias15_engine_put_dt_f64(r->dt);
-    ias15_engine_put_dt_last_f64(r->dt_last_done);
+    /* THE CLOCK AND STEPS (cft_ias15.h, appended 2026-11-02). The engine's
+     * copies were not reset with the rest, so they are written here
+     * rather than left to the step's "has it changed" guard.
+     *
+     * From the archive when it carried them: t, t_hi and t_lo, and dt
+     * and dt_last, as the wide bytes the saving run's engine held. Until
+     * then all five were rebuilt from REBOUND's binary64 r->t, r->dt and
+     * r->dt_last_done, which loses whatever binary64 cannot carry - a
+     * clock ulp at a fixed step, the trajectory at an adaptive one
+     * (tools/check_checkpoint.py's sweep and adaptive sequence).
+     *
+     * REBOUND's own field still wins wherever it disagrees with the wide
+     * value's view, because that is what the step's guard does in an
+     * uninterrupted run: a user's edit of r->t between the save and the
+     * first step, REBOUND restoring r->dt after an exact finish, or
+     * reb_simulation_integrate() zeroing r->dt_last_done each promote the
+     * binary64 value there, and so they do here. Where nothing touched
+     * them the view IS the field, and the wide value goes in whole.
+     *
+     * ORDER MATTERS: this must be the last write of the engine's clock
+     * and steps before the first step, because put_t_f64(), put_dt_f64()
+     * and put_dt_last_f64() rebuild them from binary64. After it, only
+     * the step's guard calls them, and only where an uninterrupted run's
+     * guard would too: a field changed under the view, or the view
+     * invalidated by a particle added or removed, a refused force write
+     * or a new binding - each of which truncates the uninterrupted run's
+     * clock and steps to binary64 at the same moment.
+     *
+     * The negative controls for tools/check_checkpoint.py, one per half:
+     * CFT_REBOUND_NO_CLOCK leaves the clock to binary64 and
+     * CFT_REBOUND_NO_STEP the steps, and with either set a comparison
+     * that still matches never tested that half. */
+    {
+        const int carried = st->clock_bytes == width
+                         && st->t && st->t_hi && st->t_lo && st->dt && st->dt_last
+                         && st->t != w.t;
+        double view;
+        if (carried && !getenv("CFT_REBOUND_NO_CLOCK")){
+            memcpy(w.t, st->t, width);
+            memcpy(w.t_hi, st->t_hi, width);
+            memcpy(w.t_lo, st->t_lo, width);
+            view = ias15_engine_get_t_f64();
+            if (memcmp(&view, &r->t, sizeof view) != 0) ias15_engine_put_t_f64(r->t);
+        }else{
+            ias15_engine_put_t_f64(r->t);
+        }
+        if (carried && !getenv("CFT_REBOUND_NO_STEP")){
+            ias15_engine_put_dt_wide(st->dt);
+            view = ias15_engine_get_dt_f64();
+            if (memcmp(&view, &r->dt, sizeof view) != 0) ias15_engine_put_dt_f64(r->dt);
+            ias15_engine_put_dt_last_wide(st->dt_last);
+            view = ias15_engine_get_dt_last_f64();
+            if (memcmp(&view, &r->dt_last_done, sizeof view) != 0)
+                ias15_engine_put_dt_last_f64(r->dt_last_done);
+        }else{
+            ias15_engine_put_dt_f64(r->dt);
+            ias15_engine_put_dt_last_f64(r->dt_last_done);
+        }
+        /* Release what the loader allocated; publish_state() is about to
+         * point all five at the engine's own, which must not be freed. */
+        unsigned char **mine[5] = { &st->t, &st->t_hi, &st->t_lo, &st->dt, &st->dt_last };
+        const unsigned char *eng[5] = { w.t, w.t_hi, w.t_lo, w.dt, w.dt_last };
+        for (int k = 0; k < 5; k++){
+            if (*mine[k] && *mine[k] != eng[k]) free(*mine[k]);
+            *mine[k] = NULL;
+        }
+        st->clock_bytes = 0;
+        /* The identity that arrived is the WRITER's. publish_state()
+         * replaces it with this run's, which produces what comes next;
+         * cft_archive_probe() still reads the writer's from the file. */
+        size_t own_bytes;
+        const char *own = identity_text(&own_bytes);
+        if (st->identity && st->identity != own) free(st->identity);
+        st->identity = NULL;
+        st->identity_bytes = 0;
+    }
     view_t = r->t; view_dt = r->dt; view_dt_last = r->dt_last_done;
 
     /* The wide x and v ARE the truth now, so the step must not
@@ -988,6 +1116,11 @@ static void cft_ias15_free(void *p){
             free(st->g[m]);  free(st->b[m]);  free(st->e[m]);
             free(st->br[m]); free(st->er[m]); free(st->csb[m]);
         }
+        /* The clock, the steps and the identity, appended 2026-11-02,
+         * are the loader's on the same terms. */
+        free(st->t);  free(st->t_hi); free(st->t_lo);
+        free(st->dt); free(st->dt_last);
+        free(st->identity);
     }
     /* The alias family, on the same terms as the blobs above and for
      * the same reason - an owner's point into the engine and must not

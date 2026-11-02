@@ -273,6 +273,70 @@ static int time_diff(const char *fname, const unsigned char *a, const unsigned c
     return n;
 }
 
+/* THE FIELD LIST AS IT WAS BEFORE 2026-11-02: this format's, less every
+ * field whose member was appended that day (CFT_OFF_APPENDED_2026_11_02
+ * in src/cft_ias15_fields.h) - derived from where the members start, not
+ * from a list of names. Bound in place of the real one before a save, it
+ * writes the archive a build from before then wrote: measured field for
+ * field against af2f400's own, identical but for the four fields any two
+ * REBOUND runs differ in (tools/check_archive.py's docstring). That is
+ * how the suite holds "old archives still load" without keeping a
+ * binary file in the tree. --old-list selects it for the save phase. */
+static int old_fields = 0;
+static const struct reb_binarydata_field_descriptor *old_list(int format){
+    static struct reb_binarydata_field_descriptor l[512];
+    const struct reb_binarydata_field_descriptor *f = cft_archive_descriptor_list(format);
+    int n = 0;
+    for (; f && f->name[0] && n < 511; f++)
+        if (f->offset < CFT_OFF_APPENDED_2026_11_02) l[n++] = *f;
+    memset(&l[n], 0, sizeof l[n]);
+    return l;
+}
+
+/* WHAT A SOFTWARE-BACKEND ARCHIVE MUST SAY IT RAN ON, from libcft itself
+ * rather than from the shim that formats it: the standalone record's
+ * `# identity` words (the state struct's `identity`), with the image
+ * refused by name, as the software backend and a remote handle always
+ * refuse it. */
+static void expected_identity(char *buf, size_t cap){
+    size_t n = 0;
+    const char *p;
+    for (p = "libcft_build="; *p && n + 1 < cap; p++) buf[n++] = *p;
+    for (p = cft_build_id(); *p && n + 1 < cap; p++) buf[n++] = (*p == ' ') ? ',' : *p;
+    for (p = " image=none"; *p && n + 1 < cap; p++) buf[n++] = *p;
+    buf[n] = '\0';
+}
+
+/* The archive's identity held to that. With an xclbin in
+ * CFT_REBOUND_ARTIFACT the image must instead be named, by a 64-digit
+ * SHA-256 - a card-written archive, which is the card day's to run. */
+static int identity_ok(const char *fname, const struct cft_archive_info *info){
+    const char *art = getenv("CFT_REBOUND_ARTIFACT");
+    const int named = art && art[0] && strncmp(art, "cft://", 6) != 0;
+    char want[CFT_ARCHIVE_IDENTITY_MAX];
+    expected_identity(want, sizeof want);
+    if (!named){
+        if (strcmp(info->identity, want) != 0 || info->identity_bytes != strlen(want) + 1){
+            printf("  %-6s FAIL  the archive says it ran on \"%s\" (%llu bytes); this build on "
+                   "this backend must say \"%s\"\n", fname, info->identity,
+                   (unsigned long long)info->identity_bytes, want);
+            return 0;
+        }
+        return 1;
+    }
+    const size_t k = strlen(want) - strlen(" image=none");
+    const char *d = info->identity + k;
+    int hex = strncmp(info->identity, want, k) == 0 && strncmp(d, " image_sha256=", 14) == 0;
+    for (int i = 0; hex && i < 64; i++)
+        hex = (d[14 + i] >= '0' && d[14 + i] <= '9') || (d[14 + i] >= 'a' && d[14 + i] <= 'f');
+    if (!hex){
+        printf("  %-6s FAIL  the archive says it ran on \"%s\"; on %s it must name this build "
+               "and the image's SHA-256\n", fname, info->identity, art);
+        return 0;
+    }
+    return 1;
+}
+
 /* The in-process sequences' answer to the engine outliving a
  * simulation: between a save and its load, an unrelated run that leaves
  * a different clock, a different dt and a different dt_last in the
@@ -414,10 +478,12 @@ static int phase_save(int format, double dt, const char *path, int regrow){
         reb_simulation_steps(r, steps_a);
     }
     if (cft_archive_bind(r)){ fprintf(stderr, "gate_real: bind failed\n"); return 2; }
+    if (old_fields) r->integrator.callbacks.field_descriptor_list = old_list(format);
     remove(path);
     reb_simulation_save_to_file(r, path);
-    fprintf(stderr, "gate_real: wrote %s at t=%.17g with %zu particles after %ld steps\n",
-            path, r->t, r->N, regrow ? steps_a + steps_m : steps_a);
+    fprintf(stderr, "gate_real: wrote %s at t=%.17g with %zu particles after %ld steps%s\n",
+            path, r->t, r->N, regrow ? steps_a + steps_m : steps_a,
+            old_fields ? ", with the field list as it was before 2026-11-02" : "");
     reb_simulation_free(r);
     return 0;
 }
@@ -430,9 +496,13 @@ static int phase_resume(int format, const char *path, int regrow){
         return 2;
     }
     struct cft_ias15_state *s = (struct cft_ias15_state*)r->integrator.state;
-    fprintf(stderr, "gate_real: loaded %s (%s, provenance \"%s\") at t=%.17g\n",
+    struct cft_archive_info pi;
+    memset(&pi, 0, sizeof pi);
+    cft_archive_probe(path, 0, &pi);
+    fprintf(stderr, "gate_real: loaded %s (%s, provenance \"%s\") at t=%.17g, written on \"%s\"\n",
             path, cft_archive_status_str(st),
-            cft_ias15_provenance_str(s ? s->provenance : -1), r->t);
+            cft_ias15_provenance_str(s ? s->provenance : -1), r->t,
+            pi.identity_bytes ? pi.identity : "(no identity)");
     if (regrow){
         if (shrink_phase2(r)){ reb_simulation_free(r); return 2; }
     }else{
@@ -446,6 +516,28 @@ static int phase_resume(int format, const char *path, int regrow){
 /* ------------------------------------------------------------------ */
 /* Sequence 1, in one process                                          */
 /* ------------------------------------------------------------------ */
+/* THE OTHER LOAD PATH. cft_archive_load() is one call; a caller already
+ * holding a simulation uses the two-call form instead: REBOUND's own
+ * reb_simulation_create_from_file(), then cft_archive_finish_load() with
+ * the same file's probe. Both must give the same status, and the state
+ * must say the same about how it was restored. The simulation is freed
+ * unstepped, so it never binds the engine and needs no scrub. */
+static int load_two_call(const char *fname, const char *path, int format,
+                         enum cft_archive_status want_st, int want_prov){
+    struct cft_archive_info i2;
+    enum cft_archive_status st2 = CFT_ARCHIVE_BAD;
+    struct reb_simulation *b2 = reb_simulation_create_from_file((char*)path, 0);
+    if (b2 && cft_archive_probe(path, 0, &i2) == 0)
+        st2 = cft_archive_finish_load(b2, &i2, format, NULL);
+    struct cft_ias15_state *s2 = b2 ? (struct cft_ias15_state*)b2->integrator.state : NULL;
+    int good = b2 && s2 && st2 == want_st && s2->provenance == want_prov;
+    printf("  %-6s %s  the two-call load (create_from_file, then finish_load): %s, state says "
+           "\"%s\"%s\n", fname, good ? "ok  " : "FAIL", cft_archive_status_str(st2),
+           cft_ias15_provenance_str(s2 ? s2->provenance : -1),
+           good ? "" : "; it must say what cft_archive_load() said");
+    if (b2) reb_simulation_free(b2);
+    return good;
+}
 /* Sequence 1 at a fixed step (eps 0, steps_a + steps_b), and sequence 4
  * at an adaptive one (eps ADAPT_EPS, ADAPT_STEPS_A + ADAPT_STEPS_B). */
 static int one_format(int format, const char *fname, double dt, double eps, long na, long nb){
@@ -459,6 +551,15 @@ static int one_format(int format, const char *fname, double dt, double eps, long
     uint64_t dref = wide_digest(ref);
     unsigned char tbref[N_TIME * 32];
     size_t tw = time_bytes(tbref);     /* before the free: the engine outlives it */
+    /* The physics counter beside the comparison: an adaptive case whose
+     * step control never moved dt would be a fixed-step case passing
+     * for the wrong reason. */
+    if (eps > 0.0){
+        int moved = memcmp(&ref->dt, &dt, sizeof dt) != 0;
+        printf("  %-6s %s  the step control moved dt from %a to %a in %ld steps\n",
+               fname, moved ? "ok  " : "FAIL", dt, ref->dt, na + nb);
+        if (!moved) ok = 0;
+    }
     reb_simulation_free(ref);          /* releases the engine for the next owner */
 
     /* ---- the checkpoint: na, save, free ---- */
@@ -498,6 +599,20 @@ static int one_format(int format, const char *fname, double dt, double eps, long
                fname, info.n_alias_blobs_seen, (unsigned long long)info.hiwater_n_elem);
         ok = 0;
     }
+    /* The clock family, whole and at this format's width, and what the
+     * writer said it ran on. */
+    printf("  %-6s archive: clock and steps %d/%d at %llu bytes, identity \"%s\"\n",
+           fname, info.n_clock_seen, CFT_N_CLOCK_BLOBS, (unsigned long long)info.clock_bytes,
+           info.identity);
+    if (info.n_clock_seen != CFT_N_CLOCK_BLOBS || !info.clock_lengths_agree
+            || info.clock_bytes != (uint64_t)cft_format_size((cft_format)format)){
+        printf("  %-6s FAIL  the archive carries %d of %d clock and step fields at %llu "
+               "bytes; at %s each is %zu\n", fname, info.n_clock_seen, CFT_N_CLOCK_BLOBS,
+               (unsigned long long)info.clock_bytes, cft_format_name((cft_format)format),
+               cft_format_size((cft_format)format));
+        ok = 0;
+    }
+    if (!identity_ok(fname, &info)) ok = 0;
 
     /* The engine outlives the saving run and still holds its clock and
      * steps, which are exactly what the load must restore: overwrite
@@ -518,12 +633,13 @@ static int one_format(int format, const char *fname, double dt, double eps, long
     /* The return value said "restored exactly". The STATE has to say so
      * too, because a caller may discard a return value and nothing else
      * in the state recorded it - ROADMAP.md line 404. */
-    if (!bs || bs->provenance != CFT_PROV_EXACT){
+    if (!bs || bs->provenance != CFT_PROV_EXACT || st != CFT_ARCHIVE_EXACT){
         printf("  %-6s FAIL  the load returned %s and the state's provenance is \"%s\"\n",
                fname, cft_archive_status_str(st),
                cft_ias15_provenance_str(bs ? bs->provenance : -1));
         ok = 0;
     }
+    if (!load_two_call(fname, ARCHIVE, format, CFT_ARCHIVE_EXACT, CFT_PROV_EXACT)) ok = 0;
     reb_simulation_steps(b, nb);
     size_t nsb; unsigned char *sb = snap(b, &nsb);
     uint64_t db = wide_digest(b);
@@ -565,9 +681,168 @@ static int one_format(int format, const char *fname, double dt, double eps, long
                "and steps identical across the checkpoint\n",
                fname, (unsigned long)(nref / sizeof(double)), (unsigned long long)dref);
     }
-
-    free(sb); free(sref);
+    free(sb);
     reb_simulation_free(b);
+
+    /* AN ARCHIVE WRITTEN BEFORE 2026-11-02 STILL LOADS, and says what it
+     * concedes. old_list() writes one; the load must restore the wide
+     * state exactly, on both load paths, and say that its clock and
+     * steps came from binary64. At a fixed step the trajectory does not
+     * depend on the clock, so the particles and the wide state must
+     * still be the straight run's - only the clock is not, and
+     * tools/check_checkpoint.py's "old" sequence holds the clock to a
+     * resume that rebuilt it from binary64 on purpose. Only at the fixed
+     * step: at an adaptive one the steps feed the trajectory. */
+    if (eps == 0.0){
+        static const char *OLD = "gate_real_old.bin";
+        struct reb_simulation *o = build_cfg(format, dt, 0, eps);
+        reb_simulation_steps(o, na);
+        if (cft_archive_bind(o)){ printf("  %-6s FAIL  cft_archive_bind\n", fname); free(sref); return 0; }
+        o->integrator.callbacks.field_descriptor_list = old_list(format);
+        remove(OLD);
+        reb_simulation_save_to_file(o, OLD);
+        reb_simulation_free(o);
+
+        struct cft_archive_info oi;
+        memset(&oi, 0, sizeof oi);
+        if (cft_archive_probe(OLD, 0, &oi)){ printf("  %-6s FAIL  probe of the old archive\n", fname); free(sref); return 0; }
+        printf("  %-6s old archive: cft_fields=%d blobs=%d/%d clock=%d identity=%llu bytes\n",
+               fname, oi.n_cft_fields, oi.n_blobs_seen, CFT_N_BLOBS, oi.n_clock_seen,
+               (unsigned long long)oi.identity_bytes);
+        if (!oi.has_cft || oi.n_clock_seen || oi.identity_bytes){
+            printf("  %-6s FAIL  the old list wrote %d clock fields and an identity of %llu "
+                   "bytes; it should write neither\n", fname, oi.n_clock_seen,
+                   (unsigned long long)oi.identity_bytes);
+            ok = 0;
+        }
+        scrub_time(format);
+        enum cft_archive_status ost;
+        struct reb_simulation *ob = cft_archive_load(OLD, 0, format, NULL, &ost);
+        struct cft_ias15_state *os = ob ? (struct cft_ias15_state*)ob->integrator.state : NULL;
+        printf("  %-6s old archive load: %s, state says \"%s\"\n", fname,
+               cft_archive_status_str(ost), cft_ias15_provenance_str(os ? os->provenance : -1));
+        if (!ob || !os || ost != CFT_ARCHIVE_EXACT_CLOCK_STEPS64
+                || os->provenance != CFT_PROV_EXACT_CLOCK_STEPS64){
+            printf("  %-6s FAIL  an archive with no clock family must load, and say \"%s\"\n",
+                   fname, cft_ias15_provenance_str(CFT_PROV_EXACT_CLOCK_STEPS64));
+            ok = 0;
+        }
+        if (!load_two_call(fname, OLD, format, CFT_ARCHIVE_EXACT_CLOCK_STEPS64,
+                           CFT_PROV_EXACT_CLOCK_STEPS64)) ok = 0;
+        if (ob){
+            reb_simulation_steps(ob, nb);
+            size_t nso; unsigned char *so = snap(ob, &nso);
+            uint64_t dold = wide_digest(ob);
+            /* The particles: 7 doubles a body, before snap()'s t and dt. */
+            const size_t np = sizeof(double) * 7 * (size_t)ob->N;
+            if (dold != dref || nso != nref || memcmp(so, sref, np) != 0){
+                printf("  %-6s FAIL  the old archive's continuation is not the straight run's: "
+                       "wide state %016llx against %016llx\n", fname,
+                       (unsigned long long)dold, (unsigned long long)dref);
+                ok = 0;
+            }else{
+                printf("  %-6s ok    the old archive's continuation: %lu particle values and "
+                       "the wide state (%016llx) the straight run's, the clock and steps from "
+                       "binary64\n", fname, (unsigned long)(np / sizeof(double)),
+                       (unsigned long long)dold);
+            }
+            free(so);
+            /* And the run goes on appending to the file it resumed, as a
+             * Simulationarchive is used: snapshot 0 is the old writer's
+             * and has no clock family, and the snapshot appended now is a
+             * diff in which all six of NOTE 6's fields APPEAR. A diff
+             * writes an appearing field whole, so that snapshot must load
+             * exactly, with this run's identity - which needs the probe
+             * to see fields an overlay carries and its base does not. */
+            reb_simulation_save_to_file(ob, OLD);
+            struct cft_archive_info ai;
+            memset(&ai, 0, sizeof ai);
+            enum cft_archive_status ast = CFT_ARCHIVE_BAD;
+            struct reb_simulation *ab = NULL;
+            if (cft_archive_probe(OLD, -1, &ai) == 0)
+                ab = cft_archive_load(OLD, -1, format, NULL, &ast);
+            struct cft_ias15_state *as = ab ? (struct cft_ias15_state*)ab->integrator.state : NULL;
+            char want_id[CFT_ARCHIVE_IDENTITY_MAX];
+            expected_identity(want_id, sizeof want_id);
+            const char *art = getenv("CFT_REBOUND_ARTIFACT");
+            const int id_known = !(art && art[0] && strncmp(art, "cft://", 6) != 0);
+            printf("  %-6s appended to the old archive: %lld snapshots, the last with %d/%d "
+                   "clock fields and identity \"%s\", loads %s\n", fname,
+                   (long long)ai.n_snapshots, ai.n_clock_seen, CFT_N_CLOCK_BLOBS, ai.identity,
+                   cft_archive_status_str(ast));
+            if (!as || ast != CFT_ARCHIVE_EXACT || as->provenance != CFT_PROV_EXACT
+                    || ai.n_clock_seen != CFT_N_CLOCK_BLOBS || ai.n_snapshots != 2
+                    || (id_known && strcmp(ai.identity, want_id))){
+                printf("  %-6s FAIL  a snapshot this build appended to an old archive must "
+                       "carry the clock family and this run's identity, and load exactly\n",
+                       fname);
+                ok = 0;
+            }
+            if (ab) reb_simulation_free(ab);
+            reb_simulation_free(ob);
+        }
+        remove(OLD);
+    }
+
+    free(sref);
+    return ok;
+}
+
+/* ------------------------------------------------------------------ */
+/* Sequence 5: REBOUND's binary64 fields still win, in one process      */
+/* ------------------------------------------------------------------ */
+/* A load adopts the archived wide clock and steps only where REBOUND's
+ * own r->t, r->dt and r->dt_last_done still round from them, because an
+ * uninterrupted run's step guard promotes those fields whenever they
+ * changed under it (adopt_loaded_state()). Two flows change them, and a
+ * checkpoint in the middle of either must continue as if there had been
+ * none:
+ *   a. reb_simulation_integrate() to a time, at an adaptive step: it
+ *      zeroes r->dt_last_done on entry, shrinks the last step to land on
+ *      the time, and writes r->dt back to the last full step after;
+ *   b. a user's edit of r->t between the save and the next step.
+ * Each run is compared with the same flow uninterrupted: particles, t,
+ * the wide digest, and the engine's clock and steps as bytes. */
+static int edits_case(int format, const char *fname, const char *what, int adaptive){
+    int ok = 1;
+    unsigned char ta[N_TIME * 32], tb[N_TIME * 32];
+    size_t na, nb2, tw;
+    uint64_t da, db;
+    unsigned char *sa, *sb;
+    struct reb_simulation *r = build_cfg(format, 0.01, 0, adaptive ? ADAPT_EPS : 0.0);
+    /* uninterrupted */
+    if (adaptive){ reb_simulation_integrate(r, 0.3); reb_simulation_integrate(r, 0.6); }
+    else{ reb_simulation_steps(r, 10); r->t += 0.25; reb_simulation_steps(r, 10); }
+    sa = snap(r, &na); da = wide_digest(r); tw = time_bytes(ta);
+    reb_simulation_free(r);
+    /* with a checkpoint where the first half ends */
+    r = build_cfg(format, 0.01, 0, adaptive ? ADAPT_EPS : 0.0);
+    if (adaptive) reb_simulation_integrate(r, 0.3); else reb_simulation_steps(r, 10);
+    if (cft_archive_bind(r)){ printf("  %-6s FAIL  cft_archive_bind\n", fname); return 0; }
+    remove(ARCHIVE);
+    reb_simulation_save_to_file(r, ARCHIVE);
+    reb_simulation_free(r);
+    scrub_time(format);
+    enum cft_archive_status st;
+    r = cft_archive_load(ARCHIVE, 0, format, NULL, &st);
+    if (!r){ printf("  %-6s FAIL  load: %s\n", fname, cft_archive_status_str(st)); free(sa); return 0; }
+    if (adaptive) reb_simulation_integrate(r, 0.6);
+    else{ r->t += 0.25; reb_simulation_steps(r, 10); }
+    sb = snap(r, &nb2); db = wide_digest(r); time_bytes(tb);
+    if (st != CFT_ARCHIVE_EXACT || da != db || na != nb2 || memcmp(sa, sb, na) != 0
+            || !tw || memcmp(ta, tb, N_TIME * tw) != 0){
+        printf("  %-6s FAIL  %s, across a checkpoint, is not the uninterrupted run "
+               "(load %s; wide state %016llx against %016llx)\n", fname, what,
+               cft_archive_status_str(st), (unsigned long long)da, (unsigned long long)db);
+        if (tw) time_diff(fname, ta, tb, tw);
+        ok = 0;
+    }else{
+        printf("  %-6s PASS  %s, across a checkpoint: %lu values, the wide state (%016llx) "
+               "and the clock and steps the uninterrupted run's\n", fname, what,
+               (unsigned long)(na / sizeof(double)), (unsigned long long)da);
+    }
+    free(sa); free(sb);
+    reb_simulation_free(r);
     return ok;
 }
 
@@ -864,6 +1139,7 @@ int main(int argc, char **argv){
         if (!strcmp(argv[i], "--epsilon") && i + 1 < argc) epsilon_arg = atof(argv[++i]);
         if (!strcmp(argv[i], "--dump-from") && i + 1 < argc) dump_from = atol(argv[++i]);
         if (!strcmp(argv[i], "--save-each") && i + 1 < argc){ phase = 2; save_each = argv[++i]; }
+        if (!strcmp(argv[i], "--old-list")) old_fields = 1;
     }
     if (only < 0) only = 0;
 
@@ -890,7 +1166,9 @@ int main(int argc, char **argv){
            "across the same checkpoint\n");
     printf("           4. 1 at epsilon %g: %d steps, checkpoint, %d more, against %d straight\n",
            ADAPT_EPS, ADAPT_STEPS_A, ADAPT_STEPS_B, ADAPT_STEPS_A + ADAPT_STEPS_B);
-    printf("           1, 2 and 4 compare the particles, t, the wide digest, and the engine's "
+    printf("           5. REBOUND's fields still win: integrate to a time across a checkpoint, "
+           "and r->t edited after one\n");
+    printf("           1, 2, 4 and 5 compare the particles, t, the wide digest, and the engine's "
            "wide clock and steps (t, t_hi, t_lo, dt, dt_last) as bytes\n");
 
     /* One format per process. The engine opens once and sync_config()
@@ -904,6 +1182,8 @@ int main(int argc, char **argv){
         ok = one_format(fmts[only], names[only], 0.01, 0.0, steps_a, steps_b) && ok;
         ok = one_format_regrow(fmts[only], names[only], 0.01) && ok;
         ok = one_format(fmts[only], alabel, 0.01, ADAPT_EPS, ADAPT_STEPS_A, ADAPT_STEPS_B) && ok;
+        ok = edits_case(fmts[only], alabel, "integrate to 0.3 then to 0.6", 1) && ok;
+        ok = edits_case(fmts[only], names[only], "10 steps, r->t += 0.25, 10 more", 0) && ok;
     }
     ok = one_format_maxiter(fmts[only], names[only], 0.01) && ok;
     printf("gate_real: %s\n", ok ? "PASS" : "FAIL");

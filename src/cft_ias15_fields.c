@@ -43,16 +43,18 @@ const struct reb_binarydata_field_descriptor cft_fd_fp256[] = CFT_FD_LIST(32);
  * narrow list is the right one to register. */
 const struct reb_binarydata_field_descriptor cft_ias15_field_descriptor_list[] = CFT_FD_LIST(8);
 
-/* cft_ias15_state.provenance in words. Here rather than in
- * src/cft_archive.c because a caller holding a state may want it and
- * not every target that holds a state links the archive module:
- * DROPIN_OBJ in the Makefile is the engine, the shim, this file and
- * the refusal table, and build/check_dropin links exactly that. */
+/* cft_ias15_state.provenance in words: how the state was restored. Here
+ * rather than in src/cft_archive.c because a caller holding a state may
+ * want it and not every target that holds a state links the archive
+ * module: DROPIN_OBJ in the Makefile is the engine, the shim, this file
+ * and the refusal table, and build/check_dropin links exactly that. */
 const char *cft_ias15_provenance_str(int provenance){
     switch (provenance){
         case CFT_PROV_NONE:     return "created here";
         case CFT_PROV_EXACT:    return "restored exactly";
         case CFT_PROV_PROMOTED: return "promoted from binary64";
+        case CFT_PROV_EXACT_CLOCK_STEPS64:
+            return "restored exactly, its clock and steps from binary64";
     }
     return "?";
 }
