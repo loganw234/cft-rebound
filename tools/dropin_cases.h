@@ -109,5 +109,7 @@ void cases_pairs(void);  /* tools/cases_pairs.c - which pairs gravity computes:
                           * r->gravity_ignore_terms */
 void cases_corrector(void); /* tools/cases_corrector.c - which route the corrector's
                              * exit test took, through ias15_engine_route() */
+void cases_gravity(void); /* tools/cases_gravity.c - gravity's two routes in the
+                           * library half, and its tables rebuilt mid-run */
 
 #endif /* DROPIN_CASES_H */

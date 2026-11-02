@@ -325,7 +325,7 @@ int                ias15_engine_image_digest(unsigned char sha256[32],
  * engine_routes()): r from 0, -1 past the last. It is the library half's
  * view of the program's `# route` trailer lines. */
 struct ias15_engine_route {
-    const char *name;          /* scalar, indexed, reduce_seg */
+    const char *name;          /* the route's name, as route_def[] (src/ias15_cft.c) spells it */
     int on;                    /* this run takes the new route */
     const char *by;            /* device, absent, hidden or forced */
     unsigned long long calls, fallbacks;

@@ -246,7 +246,12 @@ $(B)/cft_rebound_run.o: src/cft_rebound_run.c include/cft_rebound.h src/hexfloat
 $(B)/libcft_rebound.a: $(B)/cft_rebound_run.o $(B)/cft_supported.o
 	ar rcs $@ $^
 
-$(B)/ias15_cft$(EXE): src/ias15_cft.c src/ias15_constants.h src/hexfloat.h src/ias15_limits.h $(B)/normalabs_images.h $(CFTLIB)
+# Gravity's sequencer programs, compiled into both halves (ROUND3.md, P1);
+# the header's rule is beside `programs`, below, where $(ASM) is defined.
+GRAVITY_CFTA := $(wildcard programs/gravity-*.cfta)
+GRAVITY_H    := $(B)/gravity_images.h src/cft_embedded_image.h
+
+$(B)/ias15_cft$(EXE): src/ias15_cft.c src/ias15_constants.h src/hexfloat.h src/ias15_limits.h $(B)/normalabs_images.h $(GRAVITY_H) $(CFTLIB)
 	$(CC) $(CSTD) $(CFLAGS) $(WARN) -Isrc -I$(B) -I$(CFT)/include -o $@ src/ias15_cft.c $(CFTLIB) $(LIBS)
 
 # ---------------------------------------------------------------------
@@ -262,7 +267,7 @@ $(B)/ias15_cft$(EXE): src/ias15_cft.c src/ias15_constants.h src/hexfloat.h src/i
 DROPIN_OBJ := $(B)/ias15_cft_lib.o $(B)/reb_integrator_cft.o $(B)/cft_ias15_fields.o \
               $(B)/cft_supported.o
 
-$(B)/ias15_cft_lib.o: src/ias15_cft.c src/ias15_constants.h src/ias15_engine.h src/ias15_limits.h $(B)/normalabs_images.h
+$(B)/ias15_cft_lib.o: src/ias15_cft.c src/ias15_constants.h src/ias15_engine.h src/ias15_limits.h $(B)/normalabs_images.h $(GRAVITY_H)
 	@mkdir -p $(B)
 	$(CC) -c $(CSTD) $(CFLAGS) $(WARN) -DIAS15_CFT_LIBRARY -Isrc -I$(B) -I$(CFT)/include -o $@ src/ias15_cft.c
 
@@ -317,7 +322,7 @@ PIC_OBJ := $(B)/pic/ias15_cft_lib.o $(B)/pic/reb_integrator_cft.o \
            $(B)/pic/cft_ias15_shared.o $(B)/pic/cft_supported.o
 PICFLAGS := $(CSTD) $(CFLAGS) $(WARN) $(SHPIC) -Isrc -I$(CFT)/include -I$(REB)
 
-$(B)/pic/ias15_cft_lib.o: src/ias15_cft.c src/ias15_constants.h src/ias15_engine.h src/ias15_limits.h $(B)/normalabs_images.h
+$(B)/pic/ias15_cft_lib.o: src/ias15_cft.c src/ias15_constants.h src/ias15_engine.h src/ias15_limits.h $(B)/normalabs_images.h $(GRAVITY_H)
 	@mkdir -p $(B)/pic
 	$(CC) -c $(PICFLAGS) -DIAS15_CFT_LIBRARY -I$(B) -o $@ src/ias15_cft.c
 
@@ -470,7 +475,8 @@ dropin: $(B)/libcft_ias15.a $(B)/check_dropin$(EXE)
 CASES_SRC := tools/check_dropin.c tools/dropin_common.c \
              tools/cases_core.c tools/cases_wide.c \
              tools/cases_forces.c tools/cases_modes.c \
-             tools/cases_pairs.c tools/cases_seam.c tools/cases_corrector.c
+             tools/cases_pairs.c tools/cases_seam.c tools/cases_corrector.c \
+             tools/cases_gravity.c
 
 $(B)/check_dropin$(EXE): $(CASES_SRC) tools/dropin_cases.h src/cft_supported.h $(DROPIN_OBJ) $(B)/librebound.a $(CFTLIB)
 	$(CC) $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -Isrc -I$(CFT)/include -I$(REB) \
@@ -531,8 +537,21 @@ check-archive: $(ARCHIVE_GATES)
 # The sequencer programs: generated as text, assembled by the pinned
 # clone's own assembler (built here from its sources).
 ASM := $(CFT)/cft-asm$(EXE)
-$(ASM):
+# After libcft.a: both are sub-makes in the same clone, and under -j two of
+# them building libcft.a at once is a race (the lead's 2026-11-02 trap).
+# `all` reaches this rule now, through gravity's header.
+$(ASM): $(CFTLIB)
 	$(MAKE) -C $(CFT) CC=$(CC) PYTHON=$(PYTHON) $(CFT_MAKEVARS) cft-asm$(EXE)
+
+# Gravity's sequencer programs, compiled into both halves (ROUND3.md, P1):
+# the library half loads nothing from disk. Assembled by the pinned
+# cft-asm from the checked-in programs/gravity-*.cfta, which `make
+# programs` writes. The header is rewritten only when its bytes change, so
+# that `programs` rewriting every .cfta does not relink the engine on each
+# suite run (tools/embed_programs.py says why that matters on Windows).
+$(B)/gravity_images.h: tools/embed_programs.py $(GRAVITY_CFTA) $(ASM)
+	@mkdir -p $(B)
+	$(PYTHON) tools/embed_programs.py --asm $(ASM) --name gravity --out $@ $(GRAVITY_CFTA)
 
 .PHONY: programs
 programs: $(ASM)
@@ -596,6 +615,11 @@ IN_SUBPROC  := --input $(B)/gate_subprocess$(EXE) --input $(B)/ias15_cft$(EXE)
 # engine too, generates an ensemble, and reads the pinned MANIFEST
 IN_CORRECTOR := --input tools/check_corrector.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) \
                 --input tools/make_ensemble.py --input $(CFTPROGS)/MANIFEST
+# tools/check_gravity.py: the program, the problems, the program images it
+# holds the binary to, the two generators it runs and the header it reads
+# the body cap from; --library adds the drop-in gate it runs.
+IN_GRAVITY  := --input tools/check_gravity.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) \
+               --input tools/make_nbody.py --input tools/make_ensemble.py --input src/ias15_limits.h
 
 # The pins, checked at build time and not only at fetch time: a clone
 # under third_party/ that is not at its MANIFEST commit fails every tier
@@ -614,6 +638,7 @@ check: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_program_engine --mode full --input tools/check_program_engine.py --input tools/check_equivalence.py --input tools/make_ensemble.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) -- $(PYTHON) tools/check_program_engine.py --build $(B)
 	$(GATE_CACHE) --leg check_door --mode full --input tools/check_door.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_door.py --build $(B)
 	$(GATE_CACHE) --leg check_corrector --mode full $(IN_CORRECTOR) -- $(PYTHON) tools/check_corrector.py --build $(B)
+	$(GATE_CACHE) --leg check_gravity --mode full $(IN_GRAVITY) $(IN_DROPIN) -- $(PYTHON) tools/check_gravity.py --build $(B) --library
 	$(GATE_CACHE) --leg check_records --mode full --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B)
 	$(GATE_CACHE) --leg check_ensemble --mode full --input tools/check_ensemble.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_ensemble.py --build $(B)
 	$(GATE_CACHE) --leg check_archive --mode full --input tools/check_archive.py $(IN_ARCHIVE) -- $(PYTHON) tools/check_archive.py --build $(B)
@@ -641,6 +666,7 @@ check-quick: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_program_engine --mode quick --input tools/check_program_engine.py --input tools/check_equivalence.py --input tools/make_ensemble.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) -- $(PYTHON) tools/check_program_engine.py --build $(B) --formats fp64
 	$(GATE_CACHE) --leg check_door --mode quick --input tools/check_door.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_door.py --build $(B) --formats fp64
 	$(GATE_CACHE) --leg check_corrector --mode quick $(IN_CORRECTOR) -- $(PYTHON) tools/check_corrector.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_gravity --mode quick $(IN_GRAVITY) -- $(PYTHON) tools/check_gravity.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_records --mode quick --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_ensemble --mode quick --input tools/check_ensemble.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_ensemble.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_archive --mode quick --input tools/check_archive.py $(IN_ARCHIVE) -- $(PYTHON) tools/check_archive.py --build $(B)
@@ -671,6 +697,7 @@ check-light: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_program_engine --mode quick --input tools/check_program_engine.py --input tools/check_equivalence.py --input tools/make_ensemble.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) -- $(PYTHON) tools/check_program_engine.py --build $(B) --formats fp64
 	$(GATE_CACHE) --leg check_door --mode quick --input tools/check_door.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_door.py --build $(B) --formats fp64
 	$(GATE_CACHE) --leg check_corrector --mode quick $(IN_CORRECTOR) -- $(PYTHON) tools/check_corrector.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_gravity --mode quick $(IN_GRAVITY) -- $(PYTHON) tools/check_gravity.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_records --mode quick --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_ensemble --mode quick --input tools/check_ensemble.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_ensemble.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_archive --mode quick --input tools/check_archive.py $(IN_ARCHIVE) -- $(PYTHON) tools/check_archive.py --build $(B)
