@@ -29,10 +29,21 @@
 #                     scratch in/out: a0, g0..g6, b0..b6, csb0..csb6 (22 slots)
 #                     bank: R0..R_{n-1} = 1/rr, C0..C_{n-2} = c
 #                     deposit: tmp = g_new - g_old (the convergence measure)
+#   nextstep-<fmt>    predict_next_step: the next step's e and b, once a step
+#                     streams: a = q, the lane's step ratio
+#                     scratch in/out: e0..e6, b0..b6 (14 slots), in place
+#                     bank: the 11 distinct binomials C(j+1, m+1), 0 <= m < j <= 6
+#                     deposit: none
 #
 # The instruction order is exactly the host loop's in --arith fma
 # mode; the check is that the two engines produce identical bits.
+# nextstep is the one exception to the ORDER, not to the operations:
+# it issues the host loop's operations on the host loop's operands, one
+# level at a time where the loop goes one call at a time (see
+# nextstep() for why), and a lane's results do not depend on the order
+# of operations that do not feed each other.
 
+import math
 import os
 import sys
 
@@ -192,6 +203,111 @@ def correct(fmt, n):
     return "\n".join(L) + "\n"
 
 
+def nextstep_bank():
+    """The binomials predict_next_step multiplies by, C(j+1, m+1) for
+    0 <= m < j <= 6, each distinct value ONCE, in the order the level
+    loop first needs it: m ascending, j from 6 down. Its twenty-one
+    products take eleven values (2, 3, 4, 5, 6, 7, 10, 15, 20, 21, 35).
+    Eleven fit the port's sixteen-slot bank, and the constant fields'
+    plain form, which stops at fifteen; twenty-one would need the kx
+    form, a feature none of the other programs asks a device for.
+
+    The host fills the bank by the same walk over KBIN, keeping each
+    bit pattern the first time it meets it (predict_next_step_vec() in
+    src/ias15_cft.c). A different order here would multiply by the
+    wrong binomials, and the program engine's gate would see it."""
+    seen = []
+    for m in range(7):
+        for j in range(6, m, -1):
+            c = math.comb(j + 1, m + 1)
+            if c not in seen:
+                seen.append(c)
+    return seen
+
+
+def nextstep(fmt):
+    """REBOUND's predict_next_step, once a step, for every lane: the
+    next step's predicted e and b from this step's (or, after a
+    rejection, the last accepted step's) and q, the ratio of the new
+    step to the one they belong to. Per lane it is exactly what
+    predict_next_step_vec() issues there:
+
+        q2..q7 = q1*q1, q1*q2, q2*q2, q2*q3, q3*q3, q3*q4 (q1 = q)
+        for m = 0..6:
+            be  = b_m - e_m
+            s   = b6*C(7,m+1) + b5*C(6,m+1) + ... + b_{m+1}*C(m+2,m+1),
+                  left to right, then + b_m (s is b6 itself at m = 6)
+            e_m = q_{m+1} * s
+            b_m = e_m + be
+
+    The 69 operations of the elementwise route, 34 multiplications, 28
+    additions and 7 subtractions, with the same operands in the same
+    operand order. There is no compensated addition here: those are the
+    end-of-step update's, in step_attempt().
+
+    q is stream a, the LANE's. In an ensemble every system keeps its own
+    step, so its own ratio; a ratio taken from the bank would be right
+    for one system, and for an ensemble whose systems share a ratio,
+    and wrong for every other one. The ratio > 20 branch (zero the
+    prediction) stays the caller's, applied per system after the run,
+    as it is after the elementwise route.
+
+    The scratch block is updated in place: slots 0..6 carry e0..e6 in
+    and the predicted e out, 7..13 b0..b6 in and the predicted b out.
+    Level m reads b_m..b_6 and e_m and nothing else, so storing its two
+    results over its own two inputs, levels ascending, overwrites
+    nothing a later level reads. That is why the program goes level by
+    level where the host loop goes call by call. Nothing is deposited."""
+    bank = nextstep_bank()
+    L = [HEADER % ("nextstep-" + fmt, "IAS15 predict_next_step, the next step's e and b; see tools/gen_programs.py")]
+    L.append(".format   %s" % fmt)
+    L.append(".deposits 0")
+    L.append(".bank     external")
+    for c in bank:
+        L.append(".const    BIN%d" % c)
+    L.append(".scratch  in 14")
+    L.append(".scratch  out 14")
+    for m in range(7):
+        L.append(".slot     E%d = %d" % (m, m))
+    for m in range(7):
+        L.append(".slot     B%d = %d" % (m, 7 + m))
+    regs = {"q1": "r0", "q2": "r3", "q3": "r4", "q4": "r5", "q5": "r6", "q6": "r7", "q7": "r8",
+            "s": "r9", "u": "r10", "bj": "r11", "bm": "r12", "be": "r13", "en": "r14", "bn": "r15"}
+    for k, v in regs.items():
+        L.append(".reg      %s = %s" % (k, v))
+    L.append("")
+    L.append("mul  q2, q1, q1")
+    L.append("mul  q3, q1, q2")
+    L.append("mul  q4, q2, q2")
+    L.append("mul  q5, q2, q3")
+    L.append("mul  q6, q3, q3")
+    L.append("mul  q7, q3, q4")
+    for m in range(7):
+        L.append("ldl  bm, B%d" % m)
+        L.append("ldl  be, E%d" % m)
+        L.append("sub  be, bm, be")                  # be = b_m - e_m
+        first = True
+        for j in range(6, m, -1):
+            c = math.comb(j + 1, m + 1)
+            L.append("ldl  bj, B%d" % j)
+            if first:
+                L.append("mul  s, bj, BIN%d" % c)    # s = b_j*C, the sum's first term
+                first = False
+            else:
+                L.append("mul  u, bj, BIN%d" % c)
+                L.append("add  s, s, u")             # s += b_j*C
+        if first:
+            L.append("mul  en, q%d, bm" % (m + 1))   # m = 6: e6 = q7*b6
+        else:
+            L.append("add  s, s, bm")                # + b_m
+            L.append("mul  en, q%d, s" % (m + 1))    # e_m = q_{m+1} * s
+        L.append("add  bn, en, be")                  # b_m = e_m + be
+        L.append("stl  en, E%d" % m)
+        L.append("stl  bn, B%d" % m)
+    L.append("halt")
+    return "\n".join(L) + "\n"
+
+
 def main():
     os.makedirs(outdir, exist_ok=True)
     names = []
@@ -209,6 +325,10 @@ def main():
             with open(os.path.join(outdir, name), "w", newline="\n") as f:
                 f.write(correct(fmt, n))
             names.append(name)
+        name = "nextstep-%s.cfta" % fmt
+        with open(os.path.join(outdir, name), "w", newline="\n") as f:
+            f.write(nextstep(fmt))
+        names.append(name)
     print("wrote %d programs under %s" % (len(names), outdir))
     return 0
 
