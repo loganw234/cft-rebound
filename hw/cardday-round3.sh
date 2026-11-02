@@ -222,8 +222,12 @@ leg_pin_f128s() {
     done
     build/ias15_cft --format fp256 --artifact "$F128S" --problem data/problems/kepler.txt --steps 2 --quiet \
         > "$1/fp256-refused.txt" 2>&1; rc=$?
-    if [ "$rc" -ge 1 ] && [ "$rc" -le 2 ] && grep -q -i -E 'binary256|fp256' "$1/fp256-refused.txt"; then
-        log "binary256 on F128S: refused by name (rc=$rc): $(grep -m1 -i -E 'binary256|fp256' "$1/fp256-refused.txt" | cut -c1-300)"
+    # die() exits 3, and so does an image that never opened. So the exit
+    # status cannot tell the refusal apart; only engine_check_format()'s
+    # own sentence can.
+    if [ "$rc" -ne 0 ] && [ "$rc" -lt 128 ] && grep -q 'and this run asked for' "$1/fp256-refused.txt" \
+       && grep -q 'nothing was computed' "$1/fp256-refused.txt"; then
+        log "binary256 on F128S: refused by name (rc=$rc): $(grep -m1 -o 'carries [^(]*' "$1/fp256-refused.txt" | cut -c1-200)"
     else
         log "FAIL binary256 on F128S was not refused by name (rc=$rc): $(last "$1/fp256-refused.txt" 2)"
     fi
@@ -232,9 +236,19 @@ leg_pin_f128s() {
 leg_split() {  # <dir> <label> <xclbin> [bench-workload option ...]
     local d=$1 label=$2 x=$3
     shift 3
+    local rc ran ident verdict
     "$PY" hw/bench-workload.py --image "$label=$x" --formats fp64,fp128 --csv "$d/workload.csv" "$@" \
-        > "$d/bench-workload.txt" 2>&1
-    log "bench-workload $label (rc=$?): $(tally "$d/bench-workload.txt"); decompose.csv $(wc -l < "$d/decompose.csv" 2>/dev/null || echo no) lines; $(last "$d/bench-workload.txt" 2)"
+        > "$d/bench-workload.txt" 2>&1; rc=$?
+    # An image that does not open reads as one that carries no format.
+    # The bench then prints "no rung" rows, writes no card row, and exits
+    # 0, as the third dry run measured. So the card rows are counted from
+    # the CSV, never taken from the exit status.
+    ran=$(awk -F, -v m="$label" '$3 == m' "$d/workload.csv" 2>/dev/null | wc -l)
+    ident=$(awk -F, -v m="$label" '$3 == m && $9 == "identical"' "$d/workload.csv" 2>/dev/null | wc -l)
+    if [ "$ran" -eq 0 ]; then verdict="FAIL no card row ran: the image did not open, or carries no format asked for"
+    elif [ "$ident" -ne "$ran" ]; then verdict="FAIL $((ran - ident)) of $ran card rows are not identical to software"
+    else verdict="$ran card rows, every one identical to software"; fi
+    log "bench-workload $label (rc=$rc): $verdict; $(grep -c 'no rung' "$d/bench-workload.txt") no-rung rows; decompose.csv $(wc -l < "$d/decompose.csv" 2>/dev/null || echo no) lines"
 }
 leg_split_f128s() { leg_split "$1" 1t-f128 "$F128S"; }
 leg_split_rev8a() { leg_split "$1" 1t-rev8a "$REV8A"; }
