@@ -13,13 +13,12 @@
  * covering the routes. This topic adds three things it cannot see.
  *
  * 1. THE ROUTES, READ. ias15_engine_route() is the library half's view of
- *    the program's `# route` lines (V0, 2026-10-31). A route that is on
- *    must have carried calls and no fallbacks, and one that is off the
- *    reverse. On the software backend with no door variable set, both
- *    must be on `by=device`, because it publishes every bit. Without
- *    this, a library half that never took the new route would pass every
- *    case in the suite. Read here for the whole process so far, and
- *    around each case below.
+ *    the program's `# route` lines (V0, 2026-10-31). Each route must be in
+ *    the state this process's environment requires (expected(), below),
+ *    and its counters must agree: on, calls and no fallbacks; off, the
+ *    reverse. Without this, a library half that never took the new route
+ *    would pass every case in the suite. Read here for the whole process
+ *    so far, and around each case below.
  * 2. THE TABLES, REBUILT MID-RUN. Gravity's index tables are built for a
  *    pair list and a set of rows (build_scatter()), which change in two
  *    places: a body removed, through ias15_engine_set_bodies(), and
@@ -65,18 +64,84 @@ static struct groute route_named(const char *name){
 }
 
 static const char *const groutes[2] = { "indexed", "pair_gather" };
+static const char *const genv[2] = { "CFT_REBOUND_ROUTE_INDEXED", "CFT_REBOUND_ROUTE_PAIR_GATHER" };
 
-/* What one stretch of work moved: on, calls and no fallbacks; off, the
- * reverse. Prints the two route lines, and fails a route that carried
- * nothing or carried it the wrong way. */
+/* An item of a comma list, matched whole: the door's own reading of
+ * CFT_REBOUND_HIDE_FEATURES (src/ias15_cft.c, engine_routes()). */
+static int list_names(const char *list, const char *name){
+    const size_t n = strlen(name);
+    for (const char *p = list; p && *p; ){
+        const size_t l = strcspn(p, ",");
+        if (l == n && !strncmp(p, name, n)) return 1;
+        p += l;
+        if (*p == ',') p++;
+    }
+    return 0;
+}
+
+/* The state the door must have opened route k in, from the environment
+ * alone, as P2's tools/cases_corrector.c derives reduce_seg's: on or off,
+ * and the by= that alone can say so. A card may say either of two.
+ *   - the route's own variable on or off: that state, by=forced;
+ *   - CFT_REBOUND_HIDE_FEATURES naming either route: off by=hidden. The
+ *     two share one bit, CFT_SEQ_FEAT_INDEXED, so hiding one hides both;
+ *   - the software backend, with neither: on by=device and nothing else,
+ *     because it publishes every bit;
+ *   - a card, with neither: on by=device, or off by=absent on an image
+ *     without the bit.
+ * `off by=device` is never right anywhere: by=device means the bit
+ * decided, so the route is on. At d4e710b this was held only on software
+ * with no door variable set, so HIDE_FEATURES=scalar, or any card,
+ * accepted it (V1, 2026-11-02). Any other value of a route's variable is
+ * refused at open, and "auto" or empty is the unforced case. */
+static void expected(int k, int *on, const char **by, const char **by_card_off){
+    const char *want = getenv(genv[k]), *hide = getenv("CFT_REBOUND_HIDE_FEATURES"),
+               *art = getenv("CFT_REBOUND_ARTIFACT");
+    *by_card_off = NULL;
+    if (want && (!strcmp(want, "on") || !strcmp(want, "off"))){ *on = !strcmp(want, "on"); *by = "forced"; }
+    else if (hide && (list_names(hide, groutes[0]) || list_names(hide, groutes[1]))){ *on = 0; *by = "hidden"; }
+    else if (!art || !art[0]){ *on = 1; *by = "device"; }
+    else { *on = 1; *by = "device"; *by_card_off = "absent"; }
+}
+
+/* Route k held: in the state the environment requires, and its counters
+ * agreeing - on, calls and no fallbacks; off, the reverse - over the
+ * stretch of work that moved them by dc and df. One line either way, and
+ * "route NAME=STATE by=BY calls=N fallbacks=N" in it word for word, which
+ * tools/check_gravity.py --library reads from the first two. */
+static void route_held(int k, const char *label, const struct groute *g, unsigned long long dc,
+                       unsigned long long df){
+    const char *scope = label[0] ? " in this case" : "";
+    int want_on;
+    const char *want_by, *card_off;
+    if (!g->found){
+        printf("  FAIL %sias15_engine_route() has no route named %s\n", label, groutes[k]);
+        failures++;
+        return;
+    }
+    expected(k, &want_on, &want_by, &card_off);
+    const int state = (g->on == want_on && !strcmp(g->by, want_by)) ||
+                      (card_off && !g->on && !strcmp(g->by, card_off));
+    const int counts = g->on ? (dc > 0 && df == 0) : (df > 0 && dc == 0);
+    if (state && counts)
+        printf("  ok   %sroute %s=%s by=%s calls=%llu fallbacks=%llu%s, as this environment requires\n",
+               label, groutes[k], g->on ? "on" : "off", g->by, dc, df, scope);
+    else{
+        printf("  FAIL %sroute %s=%s by=%s calls=%llu fallbacks=%llu%s, where this environment requires %s by=%s%s%s"
+               ", with the counter of the route taken above zero and the other zero\n", label, groutes[k],
+               g->on ? "on" : "off", g->by, dc, df, scope, want_on ? "on" : "off", want_by,
+               card_off ? " or off by=" : "", card_off ? card_off : "");
+        failures++;
+    }
+}
+
+/* What one stretch of work moved, each route held to the environment. */
 static void routes_moved(const char *label, const struct groute before[2]){
+    char l[160];
+    snprintf(l, sizeof l, "%s: ", label);
     for (int k = 0; k < 2; k++){
         const struct groute g = route_named(groutes[k]);
-        const unsigned long long dc = g.calls - before[k].calls, df = g.fallbacks - before[k].fallbacks;
-        const int right = g.on ? (dc > 0 && df == 0) : (df > 0 && dc == 0);
-        printf("  %s %s: route %s=%s by=%s carried %llu calls and %llu fallbacks\n", right ? "ok  " : "FAIL",
-               label, groutes[k], g.on ? "on" : "off", g.by, dc, df);
-        if (!right) failures++;
+        route_held(k, l, &g, g.calls - before[k].calls, g.fallbacks - before[k].fallbacks);
     }
 }
 
@@ -87,25 +152,10 @@ static void routes_now(struct groute out[2]){
 /* 1. The routes, for the whole process so far: every case before this one
  *    ran through them. */
 static void case_routes_so_far(void){
-    const char *art = getenv("CFT_REBOUND_ARTIFACT");
-    const int software = !art || !art[0];
-    const int unforced = !getenv("CFT_REBOUND_ROUTE_INDEXED") && !getenv("CFT_REBOUND_ROUTE_PAIR_GATHER") &&
-                         !getenv("CFT_REBOUND_HIDE_FEATURES");
     printf("the routes every case so far took (ias15_engine_route()):\n");
     for (int k = 0; k < 2; k++){
         const struct groute g = route_named(groutes[k]);
-        int right;
-        if (!g.found){
-            printf("  FAIL ias15_engine_route() has no route named %s\n", groutes[k]);
-            failures++;
-            continue;
-        }
-        right = g.on ? (g.calls > 0 && g.fallbacks == 0) : (g.fallbacks > 0 && g.calls == 0);
-        if (software && unforced) right &= g.on && !strcmp(g.by, "device");
-        printf("  %s route %s=%s by=%s calls=%llu fallbacks=%llu%s\n", right ? "ok  " : "FAIL", groutes[k],
-               g.on ? "on" : "off", g.by, g.calls, g.fallbacks,
-               software && unforced ? " (the software backend, unforced: on by=device is required)" : "");
-        if (!right) failures++;
+        route_held(k, "", &g, g.calls, g.fallbacks);
     }
 }
 

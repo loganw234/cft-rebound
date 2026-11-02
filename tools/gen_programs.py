@@ -239,9 +239,12 @@ def correct(fmt, n):
 #
 # The fold comes in every power-of-two width up to 256 slots, the
 # assembler's default scratch depth (docs/PROGRAMS.md of the pinned tree,
-# `.scratch N`): a run takes the narrowest that holds what is left of the
-# rows, so a short row costs at most twice its own length in +0 adds, and
-# a longer one takes several runs, each continuing the last one's sum.
+# `.scratch N`): a run takes the narrowest that holds what is left of its
+# longest row, so that row costs less than twice its own length in adds,
+# +0s included; every other row in the run is padded with +0 to the same
+# width, whatever its own length (V1, 2026-11-02: this said "a short row",
+# which holds only for the longest). A row longer than the widest fold
+# takes several runs, each continuing the last one's sum.
 GRAVITY_FOLD_WIDTHS = [1 << i for i in range(9)]
 
 

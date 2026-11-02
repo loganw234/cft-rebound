@@ -31,7 +31,8 @@
 #      both routes run one program per call.
 #      Beside each, the physics it had to have: steps taken, and the fold
 #      runs a force evaluation, which must be the rows' length over the
-#      widest fold, rounded up - so the chained case is chained.
+#      widest fold, rounded up - so the chained case is chained - and, for
+#      the rejected step's case, steps_rejected above zero.
 #   3. The body cap's refusal still holds one past it. The cap is read
 #      from src/ias15_limits.h, never typed here. (Its one force
 #      evaluation, at the cap, on the routes against the elementwise
@@ -163,9 +164,10 @@ def main():
                         "--members", "4", "--out", ens, "--geometric", "2", "x", "0.25"], check=True, cwd=root,
                        stdout=subprocess.DEVNULL)
     s = 1 if args.quick else 2
+    rejecting = "kepler e=0.99, a rejected step"     # here for its rejection, which is asserted below
     problems = [
         ("kepler, two bodies, adaptive", os.path.join(probs, "kepler.txt"), ["--dt", "0.01", "--epsilon", "1e-9", "--steps", str(40 * s), "--sample", "20"], None),
-        ("kepler e=0.99, a rejected step", os.path.join(probs, "kepler_e099.txt"), ["--dt", "0.01", "--epsilon", "1e-9", "--steps", str(30 * s), "--sample", "10"], None),
+        (rejecting, os.path.join(probs, "kepler_e099.txt"), ["--dt", "0.01", "--epsilon", "1e-9", "--steps", str(30 * s), "--sample", "10"], None),
         ("pythagorean, three bodies", os.path.join(probs, "pythagorean.txt"), ["--dt", "0.01", "--epsilon", "1e-9", "--steps", str(40 * s), "--sample", "20"], None),
         ("outer, six bodies, pluto massless", os.path.join(probs, "outer.txt"), ["--dt", "40", "--epsilon", "0", "--steps", str(20 * s), "--sample", "10"], None),
         ("outer x4, an ensemble", ens, ["--dt", "40", "--epsilon", "1e-9", "--steps", str(10 * s), "--sample", "10"], None),
@@ -236,6 +238,10 @@ def main():
             if evals == 0 or runs != want:
                 bad.append("the physics: %d force evaluations and %.3f fold runs each, for rows of %d and a widest "
                            "fold of %d (wanted %d)" % (evals, runs, rows, wmax, want))
+            rejected = ref[4].get("steps_rejected", "")
+            if name == rejecting and not (rejected.isdigit() and int(rejected) > 0):
+                bad.append("the physics: steps_rejected=%s, and this case is here for a rejected step (V1, 2026-11-02: "
+                           "it was printed and not asserted)" % (rejected or "missing"))
             physics = ("%s steps, %s rejected, %d force evaluations, %.3g fold runs each"
                        % (ref[4].get("steps_done"), ref[4].get("steps_rejected"), evals, runs))
             if not bad:

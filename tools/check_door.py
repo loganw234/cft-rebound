@@ -30,7 +30,9 @@
 #        - a route forced on against a hidden bit;
 #        - a bad value, a bad route name, and a misspelled variable;
 #        - every --door-refuse call, on BOTH routes, so that today's route
-#          never computes what the new one refuses.
+#          never computes what the new one refuses. Where the two refuse
+#          in different words, each route is held to its own, which says
+#          which route ran.
 #   4. A run with every route forced off gives the same record as the
 #      default run, with every counter present on both sides. That is
 #      the fallback's own gate. The route lines say how many calls each
@@ -65,7 +67,20 @@ REFUSALS = {"ix-alias-dense": ("indexed", "once any operand has an index table")
             "ix-table-on-null": ("indexed", "has an index table and no source"),
             "ix-zero-source": ("indexed", "beside a source of zero elements"),
             "reduce-partial": ("reduce_seg", "are not whole segments"),
-            "px-alias-pool": ("indexed", "may write over none of its inputs")}
+            "px-alias-pool": ("indexed", "may write over none of its inputs"),
+            "px-stream-a-null": ("indexed", "stream a is NULL, and a program run reads it into r0"),
+            "px-table-on-null": ("indexed", "has an index table and no source, which cft_program_run_ex refuses"),
+            "px-zero-source": ("indexed", "beside a source of zero elements, which cft_program_run_ex refuses"),
+            "px-table-no-block": ("indexed", "declares no scratch input, which cft_program_run_ex refuses"),
+            # An index past its source: the new route refuses it in libcft's
+            # words and today's in the engine's, each impossible on the other
+            # route. So a route that says it is on while today's runs fails
+            # here (V1's m4_lie, 2026-11-02), and so does today's route with
+            # its bound check gone.
+            "px-index-past-source": ("indexed", {"on": "idx_scratch_src says the pool holds",
+                                                 "off": "is past its source of"}),
+            "px-pair-past-source": ("pair_gather", {"on": "idx_scratch_src says the pool holds",
+                                                    "off": "is past its source of"})}
 DATA = re.compile(r"^door data: (\d+) of (\d+) nonzero values carry bits below binary64's reach$", re.M)
 POSITIONS = re.compile(r"^door data: (\d+) of (\d+) bit positions below binary64's reach are set in some value$", re.M)
 ZEROS = re.compile(r"^door data: zeros (\d+) positive and (\d+) negative$", re.M)
@@ -236,8 +251,12 @@ def main():
             if state == "on" and routes.get(route, {}).get("by") == "absent":
                 continue
             rc, out, err = run([cft, "--door-refuse", case, "--format", f0], {routes[route]["env"]: state})
-            verdict(rc == 3 and phrase in err and "NOT refused" not in out,
-                    "%s is refused by name with %s=%s (rc %d)" % (case, routes[route]["env"], state, rc))
+            words = phrase[state] if isinstance(phrase, dict) else phrase
+            verdict(rc == 3 and words in err and "NOT refused" not in out,
+                    "%s is refused by name with %s=%s%s (rc %d)%s"
+                    % (case, routes[route]["env"], state,
+                       ", in the words of the route that must have run" if isinstance(phrase, dict) else "", rc,
+                       "" if rc == 3 and words in err else ": wanted \"%s\", got: %s" % (words, err.strip()[-200:])))
 
     # 4. Every route forced off against the default: the same record.
     kepler = os.path.join(root, "data", "problems", "kepler.txt")

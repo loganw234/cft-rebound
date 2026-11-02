@@ -3510,8 +3510,52 @@ static int door_refuse(const char *name){
                                     { 0, 0, 0, src }, NULL, b };
         vprog_ix(ROUTE_INDEXED, &io, "door refuse");
     }
+    /* vprog_ix()'s other rules, one case each (V1, 2026-11-02: only the
+     * overlap rule had one). Each run is gravity's own shape, fold1 or the
+     * cube, and wrong in exactly one way. */
+    else if (!strcmp(name, "px-stream-a-null")){   /* stream a NULL, which r0 reads in every lane */
+        const struct prog_io io = { gravity_image("gravity-cube"), n, { NULL, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
+                                    { 0, 0, 0, 0 }, NULL, d };
+        vprog_ix(ROUTE_INDEXED, &io, "door refuse");
+    }
+    else if (!strcmp(name, "px-table-on-null")){   /* a table on the scratch-in block, which is NULL */
+        const struct prog_io io = { gravity_image("gravity-fold1"), n, { a, NULL, NULL, NULL }, { NULL, NULL, NULL, t },
+                                    { 0, 0, 0, src }, NULL, d };
+        vprog_ix(ROUTE_INDEXED, &io, "door refuse");
+    }
+    else if (!strcmp(name, "px-zero-source")){     /* a table on the block, beside a source of zero elements */
+        const struct prog_io io = { gravity_image("gravity-fold1"), n, { a, NULL, NULL, b }, { NULL, NULL, NULL, t },
+                                    { 0, 0, 0, 0 }, NULL, d };
+        vprog_ix(ROUTE_INDEXED, &io, "door refuse");
+    }
+    else if (!strcmp(name, "px-table-no-block")){  /* a table on the block of the cube, which declares none */
+        const struct prog_io io = { gravity_image("gravity-cube"), n, { a, NULL, NULL, b }, { NULL, NULL, NULL, t },
+                                    { 0, 0, 0, src }, NULL, d };
+        vprog_ix(ROUTE_INDEXED, &io, "door refuse");
+    }
+    /* An index at its source's length, one past the last element. The two
+     * routes refuse it in different words, the new one in libcft's and
+     * today's in die()'s here, so tools/check_door.py holds each route to
+     * its own: a route that says it is on while today's runs is caught by
+     * the words (V1's m4_lie). One case for each of gravity's switches. */
+    else if (!strcmp(name, "px-index-past-source")){
+        const struct prog_io io = { gravity_image("gravity-fold1"), n, { a, NULL, NULL, b }, { NULL, NULL, NULL, t },
+                                    { 0, 0, 0, src }, NULL, d };
+        t[5] = (uint32_t)src;
+        vprog_ix(ROUTE_INDEXED, &io, "door refuse");
+    }
+    else if (!strcmp(name, "px-pair-past-source")){
+        uint32_t *t6 = door_table(6 * n, src);   /* the pair program reads six slots a lane */
+        V so = valloc(3 * n);
+        const struct prog_io io = { gravity_image("gravity-pair"), n, { a, NULL, NULL, b }, { NULL, NULL, NULL, t6 },
+                                    { 0, 0, 0, src }, so, d };
+        t6[6 * 3 + 4] = (uint32_t)src;
+        vprog_ix(ROUTE_PAIR_GATHER, &io, "door refuse");
+        free(t6); free(so);
+    }
     else die("--door-refuse %s: the cases are ix-alias-dense, ix-alias-source, ix-table-on-null, "
-             "ix-zero-source, reduce-partial and px-alias-pool", name);
+             "ix-zero-source, reduce-partial, px-alias-pool, px-stream-a-null, px-table-on-null, "
+             "px-zero-source, px-table-no-block, px-index-past-source and px-pair-past-source", name);
     printf("door refuse %s: NOT refused\n", name);
     free(a); free(b); free(d); free(t);
     return 1;
