@@ -93,7 +93,7 @@ norm_record() { sed -E '/^# (route|identity) /d; s/ staged_bytes=[0-9]+//; s#bac
 # `# route` lines, because they differ by design between a card and the
 # software backend. So they are printed here instead, where a fallback
 # cannot pass unseen.
-routes () { grep '^# route ' "$1" | sed -E 's/^# route ([a-z_]+)=([a-z]+) by=([a-z]+) calls=([0-9]+) fallbacks=([0-9]+)$/\1=\2 by \3 (\4 calls, \5 fallbacks)/' | paste -sd ';' -; }
+routes () { grep '^# route ' "$1" | sed -E 's/^# route ([a-z_]+)=([a-z]+) by=([a-z_]+) calls=([0-9]+) fallbacks=([0-9]+)$/\1=\2 by \3 (\4 calls, \5 fallbacks)/' | paste -sd ';' -; }
 
 run_one() {  # <out> <artifact|""> <fmt> <problem> <steps>
   local out=$1 art=$2 fmt=$3 prob=$4 nsteps=$5 t0 t1

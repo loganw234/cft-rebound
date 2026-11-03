@@ -47,7 +47,7 @@ norm_record() { sed -E '/^# (route|identity) /d; s/ staged_bytes=[0-9]+//; s#bac
 # `# route` lines, because they differ by design between a card and the
 # software backend. So they are printed here instead, where a fallback
 # cannot pass unseen.
-routes () { grep '^# route ' "$1" | sed -E 's/^# route ([a-z_]+)=([a-z]+) by=([a-z]+) calls=([0-9]+) fallbacks=([0-9]+)$/\1=\2 by \3 (\4 calls, \5 fallbacks)/' | paste -sd ';' -; }
+routes () { grep '^# route ' "$1" | sed -E 's/^# route ([a-z_]+)=([a-z]+) by=([a-z_]+) calls=([0-9]+) fallbacks=([0-9]+)$/\1=\2 by \3 (\4 calls, \5 fallbacks)/' | paste -sd ';' -; }
 therm() { xbutil examine -d 0000:02:00.1 -r thermal -r electrical 2>/dev/null | grep -E "FPGA|Int Vcc|^\s*Power  " | sed 's/^\s*//; s/\s\+/ /g' | tr '\n' ';'; }
 last() { tail -n "${2:-1}" "$1" 2>/dev/null | tr '\n' ' ' | cut -c1-"${3:-300}"; }
 {

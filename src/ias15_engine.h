@@ -312,7 +312,7 @@ int                ias15_engine_image_digest(unsigned char sha256[32],
 struct ias15_engine_route {
     const char *name;          /* the route's name, as route_def[] (src/ias15_cft.c) spells it */
     int on;                    /* this run takes the new route */
-    const char *by;            /* device, absent, hidden or forced */
+    const char *by;            /* device, opt_in, absent, hidden or forced */
     unsigned long long calls, fallbacks;
 };
 int                ias15_engine_route(int r, struct ias15_engine_route *out);

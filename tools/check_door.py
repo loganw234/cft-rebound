@@ -22,6 +22,8 @@
 #        - on the software backend, every bit published, because it
 #          publishes them all (cft.h). A probe that reads none is broken,
 #          and it passed every check here before 2026-10-31 (V0's N4).
+#          So every route is by=device there, except the opt-in routes
+#          (OPT_IN), which auto leaves off and which say by=opt_in.
 #        - a family that a card does not publish has every case reported
 #          as not compared, and never as a pass.
 #   2. With every bit hidden, no case is identical and every case is not
@@ -38,10 +40,19 @@
 #      the fallback's own gate. The route lines say how many calls each
 #      family carried, so a comparison that nothing exercised shows up as
 #      one. In P0 nothing calls the door yet.
+#      The opt-in routes are off by default, so that comparison no longer
+#      reaches them, and the opposite one does: a run with every opt-in
+#      route forced on, against the default, compared the same way, with
+#      each forced route on by=forced and carrying calls, and each off in
+#      the default by=opt_in and carrying fallbacks. Where the device does
+#      not publish an opt-in route's bit, forcing it on is refused, and the
+#      comparison is skipped and says so.
 #   5. The record's `# identity` line names the library build.
 #
 # The route names, variables, bits and refusal cases are read from the
-# program's own output and source, never typed here.
+# program's own output and source, never typed here, except OPT_IN: which
+# routes are opt-in is the owner's decision (2026-11-02), and a program
+# that changed it must fail here rather than be read.
 
 import argparse
 import os
@@ -59,6 +70,12 @@ SUMMARY = re.compile(r"^door: (\d+) identical, (\d+) differ, (\d+) not compared,
 TRAILER_ROUTE = re.compile(r"^# route (\w+)=(on|off) by=(\w+) calls=(\d+) fallbacks=(\d+)$")
 COUNTERS = ("steps_done", "iterations_max_exceeded", "steps_rejected", "mean_pc_iterations",
             "max_pc_iterations", "flags_seen", "calls", "divsqrt_calls")
+# The opt-in routes: auto leaves each off even where the device publishes
+# its bit, by=opt_in, and CFT_REBOUND_ROUTE_<NAME>=on takes it. They are
+# gravity's two switches (ROUND3.md, P1). On the rev8a tile each made a
+# step 22-40% slower at 64 to 512 bodies with the same bits (lead.md,
+# 2026-11-02 16:55), so the owner made them opt-in.
+OPT_IN = ("indexed", "pair_gather")
 # What each --door-refuse case must say, and which route it belongs to.
 # The cases themselves are read from the program's own refusal of an
 # unknown one.
@@ -192,9 +209,12 @@ def main():
         verdict(cok == cn and cn >= len(present),
                 "controls: %d of %d saw their difference, one or more for each of %d published families" % (cok, cn, len(present)))
         if software:
-            verdict(all(d["by"] == "device" for d in routes.values()),
-                    "the software backend publishes every bit: %s"
-                    % ", ".join("%s by=%s" % (r, d["by"]) for r, d in sorted(routes.items())))
+            # every bit published: each route on by=device, but an opt-in
+            # route off by=opt_in, which only a published bit can say
+            want = {r: ("off", "opt_in") if r in OPT_IN else ("on", "device") for r in routes}
+            verdict(all((d["on"], d["by"]) == want[r] for r, d in routes.items()) and all(g in routes for g in OPT_IN),
+                    "the software backend publishes every bit, and auto leaves only the opt-in routes off: %s"
+                    % ", ".join("%s=%s by=%s" % (r, d["on"], d["by"]) for r, d in sorted(routes.items())))
         for r, d in sorted(routes.items()):
             calls, falls = counts.get(r, (0, 0))
             if d["by"] == "absent":
@@ -284,6 +304,43 @@ def main():
             if fmt == f0 and name == runs[0][0]:
                 verdict(ident is not None and "libcft_build=" in ident and (" image=none" in ident or " image_sha256=" in ident),
                         "the record names its library build: %s" % (ident or "no # identity line"))
+
+    # 4b. The opt-in routes forced on against the default. The default
+    # leaves them off, so part 4 compares today's route with today's route
+    # for them; this is the comparison that reaches the new one. The other
+    # routes must say the same in both runs.
+    opt = [r for r in names if r in OPT_IN]
+    on_env = {routes[r]["env"]: "on" for r in opt}
+    unpublished = [r for r in opt if routes[r]["by"] == "absent"]
+    for fmt in formats if opt else []:
+        print("check_door at %s: every opt-in route forced on against the default" % fmt)
+        if unpublished:
+            print("  note %s: not published on this device, so forcing on is refused, and today's route is all "
+                  "there is to compare" % ", ".join(unpublished))
+            continue
+        for name, prob, extra in runs:
+            rc0, err0, s0, t0, r0, _ = record(cft, fmt, prob, extra)
+            rc1, err1, s1, t1, r1, _ = record(cft, fmt, prob, extra, on_env)
+            if rc0 or rc1:
+                verdict(False, "%s did not run (rc %d/%d): %s" % (name, rc0, rc1, (err0 or err1)[-300:].strip()))
+                continue
+            missing = [k for k in COUNTERS if k not in t0 or k not in t1]
+            differ = [k for k in COUNTERS if k not in missing and t0[k] != t1[k]]
+            same = s0 == s1 and len(s0) > 0 and not missing and not differ
+            dflt = all(r in r0 and r0[r][:2] == ("off", "opt_in") and r0[r][2] == 0 and r0[r][3] > 0 for r in opt)
+            forced = all(r in r1 and r1[r][:2] == ("on", "forced") and r1[r][2] > 0 and r1[r][3] == 0 for r in opt)
+            others = sorted(r0) == names and sorted(r1) == names and all(r0[r] == r1[r] for r in names if r not in opt)
+            verdict(same and dflt and forced and others,
+                    "%s: %d sample lines and all %d counters identical%s%s%s; the default leaves %s off by=opt_in "
+                    "(fallbacks %s), forced on they carry calls %s and no fallback%s"
+                    % (name, len(s0), len(COUNTERS), " (MISSING: %s)" % ", ".join(missing) if missing else "",
+                       "" if s0 == s1 else " (THE SAMPLE LINES DIFFER)",
+                       "" if not differ else " (DIFFER: %s)" % ", ".join("%s %s against %s" % (k, t0[k], t1[k]) for k in differ),
+                       " and ".join(opt), "/".join(str(r0[r][3]) if r in r0 else "?" for r in opt),
+                       "/".join(str(r1[r][2]) if r in r1 else "?" for r in opt),
+                       "" if dflt and forced and others else
+                       " (ROUTES: default %s; forced %s)" % (", ".join("%s=%s by=%s calls=%d fallbacks=%d" % ((r,) + r0[r]) for r in sorted(r0)),
+                                                             ", ".join("%s=%s by=%s calls=%d fallbacks=%d" % ((r,) + r1[r]) for r in sorted(r1)))))
 
     print("RESULT: %s" % ("PASS" if allok else "FAIL"))
     return 0 if allok else 1

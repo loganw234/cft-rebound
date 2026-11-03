@@ -78,7 +78,7 @@ norm () { sed -E '/^# (route|identity) /d; s/ staged_bytes=[0-9]+//; s#backend=[
 # `# route` lines, because they differ by design between a card and the
 # software backend. So they are printed here instead, where a fallback
 # cannot pass unseen.
-routes () { grep '^# route ' "$1" | sed -E 's/^# route ([a-z_]+)=([a-z]+) by=([a-z]+) calls=([0-9]+) fallbacks=([0-9]+)$/\1=\2 by \3 (\4 calls, \5 fallbacks)/' | paste -sd ';' -; }
+routes () { grep '^# route ' "$1" | sed -E 's/^# route ([a-z_]+)=([a-z]+) by=([a-z_]+) calls=([0-9]+) fallbacks=([0-9]+)$/\1=\2 by \3 (\4 calls, \5 fallbacks)/' | paste -sd ';' -; }
 eff () { grep -oE 'pc_lane_efficiency=[0-9.]+' "$1" | tail -1 | cut -d= -f2; }
 pss () { grep -oE 'mean_pc_iterations=[0-9.]+' "$1" | tail -1 | cut -d= -f2; }
 run_one () {  # <out> <fmt> <problem> [--artifact X]
