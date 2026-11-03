@@ -5,12 +5,16 @@
  *
  * Gravity runs as sequencer programs now, in both halves. Its two switches
  * are the door's: `indexed` (the accumulate fold) and `pair_gather` (the
- * pair program's six inputs), each decided once, at open, by the device's
- * bit or a CFT_REBOUND_ROUTE_* variable (src/ias15_cft.c, engine_routes()).
- * So every case in check_dropin runs gravity on the routes this process
- * opened with - on the software backend, unforced, both new routes - and
- * holds it to REBOUND's own ias15 bit for bit. That is the REBOUND gate
- * covering the routes. This topic adds three things it cannot see.
+ * pair program's six inputs), each decided once, at open, by a
+ * CFT_REBOUND_ROUTE_* variable (src/ias15_cft.c, engine_routes()). Both
+ * are opt-in: unforced, each is off, by=opt_in, even where the device
+ * publishes the bit, because on the rev8a tile each made a step slower
+ * (lead.md, 2026-11-02 16:55). So every case in check_dropin runs gravity
+ * on the routes this process opened with and holds it to REBOUND's own
+ * ias15 bit for bit: today's routes in the suite's own run, and the new
+ * ones in tools/check_gravity.py --library, which runs this whole suite
+ * with both forced on. That pair is the REBOUND gate covering the routes.
+ * This topic adds three things it cannot see.
  *
  * 1. THE ROUTES, READ. ias15_engine_route() is the library half's view of
  *    the program's `# route` lines (V0, 2026-10-31). Each route must be in
@@ -85,23 +89,26 @@ static int list_names(const char *list, const char *name){
  *   - the route's own variable on or off: that state, by=forced;
  *   - CFT_REBOUND_HIDE_FEATURES naming either route: off by=hidden. The
  *     two share one bit, CFT_SEQ_FEAT_INDEXED, so hiding one hides both;
- *   - the software backend, with neither: on by=device and nothing else,
- *     because it publishes every bit;
- *   - a card, with neither: on by=device, or off by=absent on an image
+ *   - the software backend, with neither: off by=opt_in and nothing else.
+ *     It publishes every bit, and both routes are opt-in;
+ *   - a card, with neither: off by=opt_in, or off by=absent on an image
  *     without the bit.
- * `off by=device` is never right anywhere: by=device means the bit
- * decided, so the route is on. At d4e710b this was held only on software
- * with no door variable set, so HIDE_FEATURES=scalar, or any card,
- * accepted it (V1, 2026-11-02). Any other value of a route's variable is
- * refused at open, and "auto" or empty is the unforced case. */
+ * So unforced, a route is never on, and `on by=device` is never right:
+ * that would be auto taking an opt-in route. A route forced on must be on
+ * by=forced, and that is the only state in which this topic can see a
+ * library half silently on today's route (M4): check_gravity.py --library
+ * runs the suite so. At d4e710b, before the routes were opt-in, this was
+ * held only on software with no door variable set (V1, 2026-11-02). Any
+ * other value of a route's variable is refused at open, and "auto" or
+ * empty is the unforced case. */
 static void expected(int k, int *on, const char **by, const char **by_card_off){
     const char *want = getenv(genv[k]), *hide = getenv("CFT_REBOUND_HIDE_FEATURES"),
                *art = getenv("CFT_REBOUND_ARTIFACT");
     *by_card_off = NULL;
     if (want && (!strcmp(want, "on") || !strcmp(want, "off"))){ *on = !strcmp(want, "on"); *by = "forced"; }
     else if (hide && (list_names(hide, groutes[0]) || list_names(hide, groutes[1]))){ *on = 0; *by = "hidden"; }
-    else if (!art || !art[0]){ *on = 1; *by = "device"; }
-    else { *on = 1; *by = "device"; *by_card_off = "absent"; }
+    else if (!art || !art[0]){ *on = 0; *by = "opt_in"; }
+    else { *on = 0; *by = "opt_in"; *by_card_off = "absent"; }
 }
 
 /* Route k held: in the state the environment requires, and its counters

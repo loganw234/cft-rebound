@@ -173,11 +173,21 @@ static int engine_check_format(const char *artifact){
  *
  * So each family is decided here, once, at open, for the program and
  * the library half alike:
- *   - by the device's bit, in cft_caps.seq_features;
+ *   - unset, empty or auto: by the device's bit, in cft_caps.seq_features,
+ *     unless the family is OPT-IN (route_def[].opt_in). auto leaves an
+ *     opt-in family off even where the device publishes its bit, and says
+ *     so as by=opt_in; a bit that is missing is still by=absent, and one
+ *     hidden by=hidden. Gravity's two switches, indexed and pair_gather,
+ *     are opt-in (ROUND3.md, P1). Measured on the rev8a tile on 2026-11-02
+ *     (lead.md, 16:55): the same bits in all four combinations, but each
+ *     made a step 22-40% slower at 64 to 512 bodies, and both together
+ *     47-74%. Under auto a card publishing CFT_SEQ_FEAT_INDEXED would
+ *     have taken both, so the owner made them opt-in;
  *   - CFT_REBOUND_ROUTE_<NAME>=off takes today's route whatever the
  *     device publishes. That is the fallback's own gate.
- *   - CFT_REBOUND_ROUTE_<NAME>=on demands the new route. On a device
- *     without the bit it is REFUSED by name, never quietly fallen back.
+ *   - CFT_REBOUND_ROUTE_<NAME>=on demands the new route, and is how an
+ *     opt-in family is taken. On a device without the bit it is REFUSED
+ *     by name, never quietly fallen back.
  *   - CFT_REBOUND_HIDE_FEATURES=<name>[,<name>] makes the device look as
  *     if it lacked a bit. The software backend publishes every bit, so
  *     this test-only hook is what lets the fallback and the refusal run
@@ -192,19 +202,20 @@ static const struct {
     const char *name, *env;      /* the trailer's name, and its variable */
     uint32_t bit;                /* in cft_caps.seq_features */
     const char *bit_name;
+    int opt_in;                  /* auto leaves it off, by=opt_in (above) */
 } route_def[N_ROUTES] = {
-    { "scalar",     "CFT_REBOUND_ROUTE_SCALAR",     CFT_SEQ_FEAT_SCALAR,  "CFT_SEQ_FEAT_SCALAR (CAPS2[7], ABI 0.12)" },
-    { "indexed",    "CFT_REBOUND_ROUTE_INDEXED",    CFT_SEQ_FEAT_INDEXED, "CFT_SEQ_FEAT_INDEXED (CAPS2[9], ABI 0.14)" },
-    { "reduce_seg", "CFT_REBOUND_ROUTE_REDUCE_SEG", CFT_FEAT_REDUCE_SEG,  "CFT_FEAT_REDUCE_SEG (CAPS2[8], ABI 0.13)" },
+    { "scalar",     "CFT_REBOUND_ROUTE_SCALAR",     CFT_SEQ_FEAT_SCALAR,  "CFT_SEQ_FEAT_SCALAR (CAPS2[7], ABI 0.12)", 0 },
+    { "indexed",    "CFT_REBOUND_ROUTE_INDEXED",    CFT_SEQ_FEAT_INDEXED, "CFT_SEQ_FEAT_INDEXED (CAPS2[9], ABI 0.14)", 1 },
+    { "reduce_seg", "CFT_REBOUND_ROUTE_REDUCE_SEG", CFT_FEAT_REDUCE_SEG,  "CFT_FEAT_REDUCE_SEG (CAPS2[8], ABI 0.13)", 0 },
     /* Gravity's second switch (ROUND3.md, P1): who gathers the pair
      * program's six inputs, the device through a table or the host. The
      * first is `indexed`, which carries gravity's accumulate fold. The two
-     * share one bit, so hiding either name hides both. */
-    { "pair_gather", "CFT_REBOUND_ROUTE_PAIR_GATHER", CFT_SEQ_FEAT_INDEXED, "CFT_SEQ_FEAT_INDEXED (CAPS2[9], ABI 0.14)" },
+     * share one bit, so hiding either name hides both. Both are opt-in. */
+    { "pair_gather", "CFT_REBOUND_ROUTE_PAIR_GATHER", CFT_SEQ_FEAT_INDEXED, "CFT_SEQ_FEAT_INDEXED (CAPS2[9], ABI 0.14)", 1 },
 };
 static int route_on[N_ROUTES];           /* this run takes the new route */
 static int route_have[N_ROUTES];         /* the device publishes it, unhidden */
-static const char *route_by[N_ROUTES];   /* device, absent, hidden or forced */
+static const char *route_by[N_ROUTES];   /* device, opt_in, absent, hidden or forced */
 static unsigned long long route_calls[N_ROUTES], route_fallbacks[N_ROUTES];
 
 /* The routes' names, or their variables, joined for a sentence. Built
@@ -289,8 +300,9 @@ static int engine_routes(const char *artifact){
         int hid = (hidden & route_def[r].bit) != 0;
         route_have[r] = (c.seq_features & route_def[r].bit) && !hid;
         if (!want || !want[0] || !strcmp(want, "auto")){
-            route_on[r] = route_have[r];
-            route_by[r] = route_have[r] ? "device" : hid ? "hidden" : "absent";
+            /* an opt-in family is off unless asked for, bit or no bit */
+            route_on[r] = route_have[r] && !route_def[r].opt_in;
+            route_by[r] = route_have[r] ? (route_def[r].opt_in ? "opt_in" : "device") : hid ? "hidden" : "absent";
         }else if (!strcmp(want, "off")){
             route_on[r] = 0; route_by[r] = "forced";
         }else if (!strcmp(want, "on")){
@@ -562,10 +574,12 @@ static DOOR_UNUSED void vrun_k(cft_op op, V d, const V a, const V b, const V c, 
 /* d = op(a[ia], b[ib], c[ic]) over n elements. An operand with a table
  * is read through it from a source of src elements; an operand without
  * one is dense, n elements, as cft_run's. CFT_IDX_NONE reads +0. This
- * goes through cft_run_ex's idx_* where the device publishes
- * CFT_SEQ_FEAT_INDEXED. Otherwise the host gathers into scratch and the
- * run is today's cft_run, which is the software backend's own
- * definition of the indexed call (cft.h, cft_elem_args).
+ * goes through cft_run_ex's idx_* where the indexed route is on: asked
+ * for by CFT_REBOUND_ROUTE_INDEXED=on, on a device publishing
+ * CFT_SEQ_FEAT_INDEXED, since the family is opt-in (engine_routes()).
+ * Otherwise the host gathers into scratch and the run is today's cft_run,
+ * which is the software backend's own definition of the indexed call
+ * (cft.h, cft_elem_args).
  *
  * Once any operand has a table, d may overlap NONE of the operands,
  * dense or indexed. cft.h's rule (P2's): a table makes the run a
@@ -1384,8 +1398,10 @@ static cft_program *fold_program(size_t q){
  * On either route of either switch the same programs run on the same
  * bits; only who gathers differs. So the records, calls= and
  * program_calls= are the same on all four, and the `# route` lines say
- * which ran. The divide and the square root stay library calls, as they
- * were. */
+ * which ran. Both switches are opt-in (engine_routes()): unless one is
+ * forced on, the host gathers, because on the rev8a tile each device
+ * gather made a step slower. The divide and the square root stay library
+ * calls, as they were. */
 static void gravity_body(void);
 static void gravity(void){ double _t0 = now_s(); in_gravity = 1; gravity_body(); in_gravity = 0; t_gravity += now_s() - _t0; }
 static void gravity_body(void){

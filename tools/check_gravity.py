@@ -8,7 +8,11 @@
 # with two switches on the door: `indexed`, whether the accumulate fold's
 # addends are gathered by the device through a table or by the host, and
 # `pair_gather`, the same choice for the pair program's six coordinates.
-# On either route the same programs run on the same bits.
+# On either route the same programs run on the same bits. Both switches
+# are opt-in (src/ias15_cft.c, engine_routes()): unforced, each is off,
+# by=opt_in, even where the device publishes the bit, because on the
+# rev8a tile each made a step slower (lead.md, 2026-11-02 16:55). The
+# device's gather runs only where a variable asks for it.
 #
 #   python tools/check_gravity.py [--build build] [--quick] [--library]
 #   (`make check` passes --library; check-quick and check-light pass --quick)
@@ -24,9 +28,11 @@
 #      six with a massless one, an ensemble, 33 bodies, a rejected step,
 #      and (at binary64) rows one past the widest fold, which take two
 #      runs a force evaluation. Every run's two `# route` lines are
-#      asserted: on or off, by= (forced, or device for the default run),
-#      calls= above zero where the route ran and zero where it did not,
-#      and fallbacks= the reverse. The trailer's counters must agree
+#      asserted: on or off, by= (forced; for the default run, off by=opt_in,
+#      or on a card off by=absent), calls= above zero where the route ran
+#      and zero where it did not, and fallbacks= the reverse. The physics
+#      below reads its counts from the default run, today's routes, whose
+#      fallbacks count the same runs. The trailer's counters must agree
 #      across the combinations too, calls= and program_calls= included:
 #      both routes run one program per call.
 #      Beside each, the physics it had to have: steps taken, and the fold
@@ -38,9 +44,15 @@
 #      evaluation, at the cap, on the routes against the elementwise
 #      reference, is --door-selftest's, held by tools/check_door.py.)
 #   4. --library: the drop-in's whole suite (check_dropin --light) with
-#      both gravity routes forced off passes against REBOUND, and its own
-#      gravity topic reads both routes off by=forced through
-#      ias15_engine_route(). The default suite run is the routes-on half.
+#      both gravity routes forced ON passes against REBOUND, and its own
+#      gravity topic reads both routes on by=forced through
+#      ias15_engine_route(), with calls and no fallback. The suite's own
+#      check_dropin leg is the today's-routes half, since the routes are
+#      opt-in. A library half silently on today's route (M4) passes that
+#      leg, which is right for it, and fails here: forced on is the one
+#      state that tells them apart. A device without the bit refuses the
+#      routes forced on, here as in part 2, so this gate needs one that
+#      publishes it.
 #
 # The route names, their variables and the hide list are read from the
 # program's own output, never typed here, except the two gravity names
@@ -215,9 +227,10 @@ def main():
                     if combo is not None:
                         want_on, want_by = combo[i] == "on", ("forced",)
                     elif software:
-                        want_on, want_by = True, ("device",)    # it publishes every bit (cft.h)
+                        # every bit published (cft.h), and both routes opt-in
+                        want_on, want_by = False, ("opt_in",)
                     else:
-                        want_on, want_by = on == "on", ("device",) if on == "on" else ("absent",)
+                        want_on, want_by = False, ("opt_in", "absent")
                     ok = (on == ("on" if want_on else "off") and by in want_by and
                           ((calls > 0 and falls == 0) if want_on else (falls > 0 and calls == 0)))
                     if not ok:
@@ -269,11 +282,17 @@ def main():
                 "%d bodies, one past CFT_MAX_BODIES = %d, is refused by name (rc %d): %s"
                 % (cap + 1, cap, rc, err.strip()[-160:]))
 
-    # 4. The library half on today's routes.
+    # 4. The library half on the new routes, forced on: the routes are
+    # opt-in, so the suite's own check_dropin leg runs today's, and this
+    # is the one run of the suite that takes the new ones. It is also the
+    # only state in which a library half silently on today's route (M4)
+    # differs from a correct one.
+    # A device without the bit refuses the routes forced on, here as in the
+    # matrix above, so this gate needs one that publishes it.
     if args.library:
-        print("check_gravity: the drop-in's suite with both gravity routes forced off")
+        print("check_gravity: the drop-in's suite with both gravity routes forced on")
         dropin = os.path.join(args.build, "check_dropin" + exe)
-        env = {routes[g]["env"]: "off" for g in GRAVITY}
+        env = {routes[g]["env"]: "on" for g in GRAVITY}
         rc, out, err = run([dropin, "--light"], env)
         lines = out.splitlines()
         seen = {}
@@ -281,10 +300,10 @@ def main():
             m = re.match(r"^\s+(ok  |FAIL) route (\w+)=(on|off) by=(\w+) calls=(\d+) fallbacks=(\d+)", line)
             if m:
                 seen[m.group(2)] = (m.group(1).strip(), m.group(3), m.group(4), int(m.group(5)), int(m.group(6)))
-        right = all(g in seen and seen[g][:3] == ("ok", "off", "forced") and seen[g][3] == 0 and seen[g][4] > 0
+        right = all(g in seen and seen[g][:3] == ("ok", "on", "forced") and seen[g][3] > 0 and seen[g][4] == 0
                     for g in GRAVITY)
         verdict(rc == 0 and "check_dropin: every case passed" in out and right,
-                "check_dropin --light, gravity on today's routes: rc %d, %s; %s"
+                "check_dropin --light, gravity forced onto the new routes: rc %d, %s; %s"
                 % (rc, "every case passed" if "check_dropin: every case passed" in out else "NOT every case passed",
                    ", ".join("%s=%s by=%s calls=%d fallbacks=%d" % ((g,) + seen[g][1:]) if g in seen else g + " unread"
                              for g in GRAVITY)))
