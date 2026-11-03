@@ -352,7 +352,7 @@ leg_deep() {
 # A card run's route lines, joined. The benches drop them, because they
 # differ by design between a card and software, so the route benches
 # show them here instead.
-routes() { grep '^# route ' "$1" | sed -E 's/^# route ([a-z_]+)=([a-z]+) by=([a-z]+) calls=([0-9]+) fallbacks=([0-9]+)$/\1=\2 by \3 (\4 calls, \5 fallbacks)/' | paste -sd ';' -; }
+routes() { grep '^# route ' "$1" | sed -E 's/^# route ([a-z_]+)=([a-z]+) by=([a-z_]+) calls=([0-9]+) fallbacks=([0-9]+)$/\1=\2 by \3 (\4 calls, \5 fallbacks)/' | paste -sd ';' -; }
 # Data lines, the comparison tools/check_records.py makes: identical, or
 # how many differ. Only for two runs that both exited 0. Two refusals
 # print the same message, and session B's dry run measured this function
