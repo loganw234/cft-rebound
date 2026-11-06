@@ -297,7 +297,8 @@ def main():
         rep = run(cmd + ["--replay-iters", s_on if published else s_off])
         return on, off, rep, s_on, s_off
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    # One at a time on a card: four would share the one tile.
+    with ThreadPoolExecutor(max_workers=1 if os.environ.get("CFT_REBOUND_ARTIFACT") else 4) as pool:
         results = list(pool.map(job, range(len(configs))))
 
     seen = {fmt: {"rejected": 0, "capped": 0, "mixed": 0, "mixed_reject": 0} for fmt in formats}

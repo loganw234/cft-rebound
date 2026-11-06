@@ -126,18 +126,32 @@
 #                step-control program against the loop engine.
 #   p3-identity  P3's gate_real at every format on the card: a
 #                card-written archive, whose identity names the image.
-#   p2-corrector P2's tools/check_corrector.py on the card, then a bench
-#                with the device test forced on and one with it off.
+#   p2-corrector P2's tools/check_corrector.py on the card, its runs one
+#                at a time.
+#   p2-bench     A bench with the device test forced off, then on. The
+#                second is also the merged tree's default route on a
+#                card, so it is the round's "after" beside split-rev8a's
+#                "before".
 #   p2-replay    A schedule recorded on the card and replayed there, and
 #                one recorded on the software backend and replayed on
 #                the card, each held to the card's recording.
-#   p1-gravity   P1's tools/check_gravity.py on the card, then a bench
-#                for each of the four combinations of indexed and
-#                pair_gather.
+#   p1-gate      P1's tools/check_gravity.py on the card.
+#   p1-gravity   p1-gate, then a bench for each of the four combinations
+#                of indexed and pair_gather.
+#   p5-scalar    A bench with the scalar route forced off, then on.
 # A route bench reads its build's software rows from a cache
 # (bench-workload.py --software-cache), so only the first bench of a
 # build pays for them. BENCH_ARGS adds arguments to every bench, for
 # example --quick when the window is short.
+#
+# SESSION C: the merged tree, 2026-11-06. What session B could not fit,
+# and what no parcel's own clone could show.
+#   ensemble     tools/check_ensemble.py on the card, gates-rev8a's last
+#                gate on its own.
+#   dropin-light check_dropin --light: the merged engine's drop-in on a
+#                tile, at a quarter of check_dropin's card time.
+#   dropin-wide  check_dropin --wide, gates-rev8a's binary128 gate on its
+#                own.
 # shellcheck disable=SC1091
 set -u
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -150,11 +164,16 @@ DEEP=${DEEP:-$HOME/cardday-rev8d/cft_hw_deep.xclbin}
 GUARD_WAIT=${GUARD_WAIT:-600}
 UNTIL=${UNTIL:-}
 SESSION_A=(probe pin-f128s split-f128s door-rev8a door-f128s split-rev8a tiles gates-rev8a mixed deep)
-LEGS=("${SESSION_A[@]}" p4-program p3-identity p2-corrector p2-replay p1-gravity)
-# Minutes each leg is believed to take on one tile, on the generous side.
-declare -A EST=([probe]=2 [pin-f128s]=5 [split-f128s]=35 [door-rev8a]=25 [door-f128s]=15
-                [split-rev8a]=35 [tiles]=10 [gates-rev8a]=110 [mixed]=50 [deep]=8
-                [p4-program]=20 [p3-identity]=15 [p2-corrector]=60 [p2-replay]=20 [p1-gravity]=100)
+LEGS=("${SESSION_A[@]}" p4-program p3-identity p2-corrector p2-bench p2-replay p1-gate p1-gravity p5-scalar
+      ensemble dropin-light dropin-wide)
+# Minutes each leg takes on one tile, on the generous side. Where a leg
+# has run, this is its time on 2026-11-02 and a margin; those days' legs
+# ran up to four times the first estimates.
+declare -A EST=([probe]=2 [pin-f128s]=10 [split-f128s]=45 [door-rev8a]=15 [door-f128s]=15
+                [split-rev8a]=45 [tiles]=10 [gates-rev8a]=300 [mixed]=60 [deep]=8
+                [p4-program]=65 [p3-identity]=35 [p2-corrector]=150 [p2-bench]=55 [p2-replay]=20
+                [p1-gate]=70 [p1-gravity]=130 [p5-scalar]=55
+                [ensemble]=90 [dropin-light]=80 [dropin-wide]=150)
 log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 die() { echo "FATAL: $*" >&2; exit 2; }
 last() { tail -n "${2:-1}" "$1" 2>/dev/null | tr '\n' ' ' | cut -c1-"${3:-300}"; }
@@ -411,8 +430,12 @@ leg_p3_identity() {
 leg_p2_corrector() {
     [ -f tools/check_corrector.py ] || { log "FAIL this build is not P2's: no tools/check_corrector.py"; return; }
     CFT_REBOUND_ARTIFACT=$REV8A "$PY" tools/check_corrector.py --build build > "$1/check_corrector.txt" 2>&1
-    log "check_corrector on REV8A (rc=$?): $(tally "$1/check_corrector.txt")"
-    route_benches "$1" "REDUCE_SEG=on" "REDUCE_SEG=off"
+    log "check_corrector on REV8A (rc=$?): $(tally "$1/check_corrector.txt"); $(grep -h '^RESULT' "$1/check_corrector.txt" | tail -n 1)"
+}
+
+leg_p2_bench() {
+    [ -f tools/check_corrector.py ] || { log "FAIL this build is not P2's: no tools/check_corrector.py"; return; }
+    route_benches "$1" "REDUCE_SEG=off" "REDUCE_SEG=on"
 }
 
 leg_p2_replay() {
@@ -447,12 +470,36 @@ leg_p2_replay() {
     done
 }
 
-leg_p1_gravity() {
+leg_p1_gate() {
     [ -f tools/check_gravity.py ] || { log "FAIL this build is not P1's: no tools/check_gravity.py"; return; }
     CFT_REBOUND_ARTIFACT=$REV8A "$PY" tools/check_gravity.py --build build > "$1/check_gravity.txt" 2>&1
     log "check_gravity on REV8A (rc=$?): $(tally "$1/check_gravity.txt"); $(grep -h '^check_gravity: routes' "$1/check_gravity.txt" | cut -c1-240)"
+}
+
+leg_p1_gravity() {
+    leg_p1_gate "$1"
     route_benches "$1" "INDEXED=off,PAIR_GATHER=off" "INDEXED=on,PAIR_GATHER=off" \
                        "INDEXED=off,PAIR_GATHER=on" "INDEXED=on,PAIR_GATHER=on"
+}
+
+leg_p5_scalar() {
+    [ -f tools/check_scalar.py ] || { log "FAIL this build is not P5's: no tools/check_scalar.py"; return; }
+    route_benches "$1" "SCALAR=off" "SCALAR=on"
+}
+
+leg_ensemble() {
+    CFT_REBOUND_ARTIFACT=$REV8A "$PY" tools/check_ensemble.py --build build > "$1/check_ensemble.txt" 2>&1
+    log "check_ensemble (rc=$?): $(tally "$1/check_ensemble.txt"); $(last "$1/check_ensemble.txt" 2)"
+}
+
+leg_dropin_light() {
+    CFT_REBOUND_ARTIFACT=$REV8A build/check_dropin --light > "$1/check_dropin-light.txt" 2>&1
+    log "check_dropin --light (rc=$?): $(tally "$1/check_dropin-light.txt"); $(last "$1/check_dropin-light.txt" 2); $(grep -h -E 'route (indexed|pair_gather|reduce_seg)=' "$1/check_dropin-light.txt" | tail -n 3 | cut -c1-120 | tr '\n' ';')"
+}
+
+leg_dropin_wide() {
+    CFT_REBOUND_ARTIFACT=$REV8A build/check_dropin --wide > "$1/check_dropin-wide.txt" 2>&1
+    log "check_dropin --wide (rc=$?): $(tally "$1/check_dropin-wide.txt"); $(last "$1/check_dropin-wide.txt" 2)"
 }
 
 leg_mixed() {
