@@ -3,9 +3,10 @@
  *
  * THE SCALAR ROUTE IN THE LIBRARY HALF (ROUND3.md, P5).
  *
- * A constant operand goes to the library as one element, through the
- * door's vrun_k() (src/ias15_cft.c, vmulk() and vfmak()). The family is
- * opt-in: unforced it is off, by=opt_in, even where the device publishes
+ * A constant operand goes to the library as one element where the route
+ * is on, through the door's vrun_k(), and is today's call on the whole
+ * vector where it is off (src/ias15_cft.c, vmulk() and vfmak()). The family
+ * is opt-in: unforced it is off, by=opt_in, even where the device publishes
  * the bit, because no card has measured it. So every case in check_dropin
  * holds the sites to REBOUND's own ias15 on the route this process opened
  * with: today's in the suite's own run, and the new one in

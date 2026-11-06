@@ -4,13 +4,13 @@
 #
 # The gate of the scalar route (ROUND3.md, P5).
 #
-# A constant operand of an elementwise call used to be a vector of N3
-# copies of one value. It goes to the library as ONE element now, through
-# the door's vrun_k(). The route is opt-in (src/ias15_cft.c, route_def[]):
-# unforced it is off, by=opt_in, even where the device publishes the bit,
-# because no card has measured it, and vrun_k() broadcasts the element into
-# scratch and runs today's call. So nothing but a forced run takes the new
-# route, and every run here says which one it wants.
+# A constant operand of an elementwise call is a vector of N3 copies of one
+# value. With the scalar route on it goes to the library as ONE element,
+# through the door's vrun_k(). The route is opt-in (src/ias15_cft.c,
+# route_def[]): unforced it is off, by=opt_in, even where the device publishes
+# the bit, because no card has measured it, and each site is then today's
+# call on the whole vector (vmulk() and its kin). So nothing but a forced run
+# takes the new route, and every run here says which one it wants.
 #
 #   python tools/check_scalar.py [--build build] [--quick] [--library]
 #                                [--exe ias15_cft] [--source FILE]
@@ -29,6 +29,12 @@
 #      this parcel leaves, each of which is printed: a divide, a compare, or
 #      a site in dtnew_*() and choose_timestep(), which are nobody's this
 #      round. Anything else is a site the conversion missed.
+#      And each helper must take today's call with the route off, count the
+#      fallback, and call vrun_k() only with the route on, with no site
+#      calling vrun_k() itself. Its fallback copies element 0 into scratch.
+#      So a site through it would cost the default route that copy, and would
+#      blind the comparison below, and no run could tell: the bits, the counts
+#      and the bytes are the same either way.
 #   2. THE MATRIX. Every problem, at every format, on both engines and both
 #      forms of the arithmetic, on three routes: default, forced off and
 #      forced on.
@@ -54,14 +60,20 @@
 #   3. THE TRAP. DTB, DTDB, RB, D1B and D2B look exactly like scalars with
 #      one system, and with systems that happen to share a step. In any
 #      other ensemble element 0 is system 0's step, applied to every system.
-#      THE ROUTES CANNOT SEE THIS. vrun_k()'s fallback broadcasts element 0
-#      as well, so both routes compute the same wrong answer, and part 2's
-#      comparison passes it. What can see it is an ensemble against its own
-#      members run alone, where element 0 is each system's own. So every
-#      ensemble here is held to that, forced on, and the case that exists
-#      for the trap must SHOW its systems' steps differing, and a mixed
-#      attempt. The fixed-step ensemble must show them equal: it is the
-#      inert case (METHOD.md 5), there so that it is not taken for a test.
+#      Two oracles see it, and every ensemble here is held to both:
+#        - The routes, part 2's comparison. With the route off a site reads
+#          the whole vector, and with it on element 0 alone, so a per-system
+#          vector gives different records on the two.
+#        - The members. Forced on, each system must equal itself run alone
+#          (--member k), where element 0 is its own. This one also holds
+#          what the two routes share.
+#      Nothing else in the suite can see it. Every other leg takes today's
+#      route, which stays right under this defect, so this is the only gate
+#      that runs an ensemble with the route forced on.
+#      The case that exists for the trap must SHOW its systems' steps
+#      differing, and a mixed attempt. The fixed-step ensemble must show them
+#      equal: it is the inert case (METHOD.md 5), there so that it is not
+#      taken for a test.
 #   4. --library. The library half takes the route from the same door, and
 #      the route being opt-in, the suite's own check_dropin leg runs today's.
 #      So a library half that ignored the forced route passes that leg.
@@ -71,9 +83,9 @@
 #      uninterrupted run at each format, forced on against forced off: the
 #      same dump, wide state included, each side's route read.
 #
-# Part 2 compares the two routes and part 3 an ensemble with its members.
-# Neither sees a defect both routes share that E = 1 shares too. The suite's
-# REBOUND gates do, because they run these same sites through the fallback.
+# Neither oracle sees a site given the wrong constant, which both routes and
+# E = 1 share. The suite's REBOUND gates do, because they run the same sites
+# on today's route.
 #
 # A device without the bit refuses the route forced on, here as in
 # check_gravity.py, so this gate needs one that publishes it.
@@ -128,7 +140,7 @@ SITES = (
     ("step_attempt", "KHALF", "N3", "fma", "both", "attempt", NODES),                        # and its half
     ("step_attempt", "KPOSR", "N3", "fma", "both", "attempt", LEVELS + 1),                   # with a0's
     ("step_attempt", "KVELR", "N3", "fma", "both", "attempt", LEVELS),
-    ("energy_all", "half", "NB", "both", "standalone", "energy", 1),
+    ("energy_all", "halfb", "NB", "both", "standalone", "energy", 1),
     ("energy_all", "G", "P", "both", "standalone", "energy", 1),
     ("energy_all", "K0", "E", "both", "standalone", "energy", 1),
 )
@@ -138,10 +150,13 @@ WORKERS = 1 if os.environ.get("CFT_REBOUND_ARTIFACT") else 4      # on a card th
 # The parts of the source this recount does not read: the door's own
 # wrappers and their self-test, and the reference gravity that every record
 # before P1 was made with, which --door-selftest holds gravity to.
-NOT_SITES = {"vrun_k", "vmulk", "vfmak", "door_k", "door_selftest", "gravity_reference"}
-# energy_all()'s 1/2, a quotient of two constants made one line above its site.
-LOCAL_CONSTANTS = {"energy_all": {"half"}}
-CALL = re.compile(r"\b(vmulk|vfmak|vrun_k|vmul|vfma|vadd|vsub|vcopysign|vdiv|vcmplt|vcmple)\(")
+# The helpers: each one's plain call with the route off, its mask with the
+# route on, and which of its arguments is the constant.
+HELPERS = {"vmulk": ("vmul", "2u", 2), "vfmak": ("vfma", "2u", 2), "vkmul": ("vmul", "1u", 1), "vaddk": ("vadd", "4u", 2)}
+NOT_SITES = {"vrun_k", "door_k", "door_selftest", "gravity_reference"} | set(HELPERS)
+# energy_all()'s 1/2, a quotient of two constants broadcast one line above its site.
+LOCAL_CONSTANTS = {"energy_all": {"halfb"}}
+CALL = re.compile(r"\b(vmulk|vfmak|vkmul|vaddk|vrun_k|vmul|vfma|vadd|vsub|vcopysign|vdiv|vcmplt|vcmple)\(")
 COMPARES = ("vcmplt", "vcmple")
 
 
@@ -246,6 +261,15 @@ def recount(path):
     per_system = set(re.findall(r"\bbcast_sys\(\s*(\w+)\s*,", src))
     sites, left, bad = [], [], []
     aliased = 0
+    # Each helper: today's call with the route off, and vrun_k() only with it on.
+    for name, (plain, mask, _) in HELPERS.items():
+        body = bodies.get(name, "")
+        call = re.search(r"\bvrun_k\(([^;]*)\);", body)
+        off_branch = re.search(r"if\s*\(\s*!route_on\[ROUTE_SCALAR\]\s*\)\s*\{\s*route_fallbacks\[ROUTE_SCALAR\]\+\+;\s*%s\([^;]*\);\s*return;\s*\}" % plain, body)
+        if not off_branch or not call or mask not in call.group(1) or body.find("vrun_k(") < off_branch.end():
+            bad.append("%s() does not take %s() and count one fallback with the route off, then vrun_k() with mask %s: "
+                       "a site through it would copy into scratch on the default route, and read element 0 on both"
+                       % (name, plain, mask))
     for name, off, body in funcs:
         if name in NOT_SITES:
             continue
@@ -255,15 +279,13 @@ def recount(path):
             line = src.count("\n", 0, off + m.start()) + 1
             call = m.group(1)
             args = arguments(body, m.end())
-            if call in ("vmulk", "vfmak", "vrun_k"):
-                if call == "vrun_k":
-                    mask = int(args[6].rstrip("uU"), 0)
-                    if mask not in (1, 2, 4):
-                        bad.append("%s:%d: vrun_k() with mask %s, and no site here passes other than one scalar" % (name, line, args[6]))
-                        continue
-                    k, d, width = args[2 + mask.bit_length() - 1], args[1], args[5]
-                else:
-                    k, d, width = args[2], args[0], args[-1]
+            if call == "vrun_k":
+                bad.append("%s:%d: a site calls vrun_k() itself, whose fallback copies into scratch: the default route "
+                           "must be today's call, through a helper" % (name, line))
+                continue
+            if call in HELPERS:
+                pos = HELPERS[call][2]
+                k, d, width = args[pos], args[0], args[-1]
                 b = base(k)
                 konst = alias.get(b, b)
                 if b not in known:
@@ -271,7 +293,7 @@ def recount(path):
                     bad.append("%s:%d: %s passes %s as a scalar, and it is not a constant.%s" % (name, line, call, b, why))
                 if base(d) == b:
                     bad.append("%s:%d: %s's result is its own scalar, %s" % (name, line, call, b))
-                if call != "vrun_k" and base(args[1]) == base(d):
+                if any(base(o) == base(d) for i, o in enumerate(args[1:-1], 1) if i != pos):
                     aliased += 1
                 sites.append((name, konst, width, line))
                 continue
@@ -286,7 +308,7 @@ def recount(path):
             elif call == "vdiv":
                 left.append(("a divide: cft_div has no scalar form, and is not an opcode cft_run_ex can take", name, hit[0], width, call, line))
             elif call in COMPARES:
-                left.append(("a compare: vcmplt() and vcmple() stage no bytes in the count, so vrun_k() would move today's route", name, hit[0], width, call, line))
+                left.append(("a compare: vcmplt() and vcmple() count no staged bytes, so vrun_k() would add to staged_bytes and not take from it", name, hit[0], width, call, line))
             else:
                 bad.append("%s:%d: %s(%s) passes the constant %s as a vector: a site the conversion missed"
                            % (name, line, call, ", ".join(args), hit[0]))
@@ -428,8 +450,9 @@ def check_case(cft, fmt, engine, arith, case, env_name, want_default, work, prog
     # 2. The records, the schedule, every counter.
     for label, r in (("default", d), ("on", on)):
         if r.recs != off.recs or not r.recs:
-            bad.append("the record %s differs from forced off's, or is empty (%d and %d lines)"
-                       % (label, len(r.recs), len(off.recs)))
+            bad.append("the record %s differs from forced off's in %d of %d lines%s"
+                       % (label, sum(a != b for a, b in zip(r.recs, off.recs)) + abs(len(r.recs) - len(off.recs)), len(off.recs),
+                          ": today's route reads each lane, and the new one element 0" if label == "on" else ""))
         if r.sched != off.sched or not r.sched:
             bad.append("the corrector's schedule %s differs from forced off's" % label)
         if r.counters() != off.counters():
@@ -528,7 +551,8 @@ def check_case(cft, fmt, engine, arith, case, env_name, want_default, work, prog
                            % (k, theirs, {key: mem.tail.get(key) for key in theirs}))
                 continue
             same += 1
-        said.append("%d of %d systems equal themselves run alone, forced on" % (same, E))
+        said.append("the two oracles: forced on %s forced off, and %d of %d systems equal themselves run alone, forced on"
+                    % ("equals" if on.recs == off.recs else "DIFFERS FROM", same, E))
     # A failing line says what the run did, never the claim it failed.
     derived = calls == want_calls and falls == want_calls and s_off - s_on == want_fall
     said.append("the route carried %d calls and staged_bytes fell by %d%s" % (calls, s_off - s_on, ", both as derived" if derived else ""))

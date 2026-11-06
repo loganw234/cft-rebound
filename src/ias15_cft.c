@@ -491,11 +491,12 @@ static void vaugadd(V r, V e, const V a, const V b, size_t n){
 /* The door's wrappers. Each takes its route where engine_routes()      */
 /* put it, or today's route, which gives the same bits by the contract. */
 /* ------------------------------------------------------------------ */
-/* vrun_k() carries the integration's constant operands (ROUND3.md, P5)
- * and vreduce_seg() the corrector's maximum (P2). Only --door-selftest
- * calls vrun_ix(): gravity gathers through vprog_ix() instead (P1). So
- * the library half would warn that it is unused, and it keeps its
- * DOOR_UNUSED until a call lands.
+/* vrun_k() carries the integration's constant operands where the scalar
+ * route is on (ROUND3.md, P5; vmulk() and its kin, below, take today's call
+ * where it is off), and vreduce_seg() the corrector's maximum (P2). Only
+ * --door-selftest calls vrun_ix(): gravity gathers through vprog_ix()
+ * instead (P1). So the library half would warn that it is unused, and it
+ * keeps its DOOR_UNUSED until a call lands.
  *
  * Each counts as ONE call in ncalls, whichever route carries it: calls=
  * in the trailer is the integrator's operation count, and it has to
@@ -575,25 +576,50 @@ static void vrun_k(cft_op op, V d, const V a, const V b, const V c, size_t n,
     note(st, fl, what);
 }
 
-/* A constant as ONE element, in the position vmul() and vfma() call b.
- * The K in the name is a promise about k: it is the same for every lane
+/* A constant operand. With the scalar route on it goes to the library as
+ * ONE element, through vrun_k(). With the route off it is today's call on
+ * the whole K vector, with no copy and no scratch, so a route that is off
+ * costs nothing to have. That is one call in calls= and one fallback, as
+ * vrun_k() would count it; its own fallback is --door-selftest's alone now.
+ *
+ * vmulk() and vfmak() take the constant as b, vkmul() as a, and vaddk() as
+ * vadd()'s second operand, which cft_run calls c.
+ *
+ * The K in the names is a promise about k: it is the same for every lane
  * of every system. So it may be a K vector, or H, which is one, and never
  * a vector bcast_sys() fills. DTB, DTDB and RB hold one value a SYSTEM,
- * and D1B and D2B are built from DTB. With one system, or systems
- * that happen to share a step, each of them looks exactly like a scalar.
- * In any other ensemble element 0 is system 0's step, applied to every
- * system.
+ * and D1B and D2B are built from DTB. With one system, or systems that
+ * happen to share a step, each of them looks exactly like a scalar. In any
+ * other ensemble the new route reads element 0, system 0's step, for every
+ * system, and today's route reads each lane's own.
  *
- * Both routes would compute that same wrong answer, because vrun_k()'s
- * fallback broadcasts element 0 as well. So comparing the routes cannot
- * see it, and tools/check_scalar.py holds an ensemble to its members run
- * alone, where element 0 is each system's own.
+ * So the two routes differ exactly there, and that is one of the two
+ * things tools/check_scalar.py holds an ensemble to. The other is its
+ * members run alone. Only that gate can see this: every other gate takes
+ * today's route, which stays right.
  *
  * Nothing here ever writes a K vector, so no site's result overlaps its
  * scalar: the door's read-once rule is never what makes a site correct.
  * d may alias a, as cft_run allows. */
-static void vmulk(V d, const V a, const V k, size_t n){ vrun_k(CFT_MUL, d, a, k, NULL, n, 2u, "mul"); }
-static void vfmak(V d, const V a, const V k, const V c, size_t n){ vrun_k(CFT_FMA, d, a, k, c, n, 2u, "fma"); }
+static void vmulk(V d, const V a, const V k, size_t n){
+    if (!route_on[ROUTE_SCALAR]){ route_fallbacks[ROUTE_SCALAR]++; vmul(d, a, k, n); return; }
+    vrun_k(CFT_MUL, d, a, k, NULL, n, 2u, "mul");
+}
+static void vfmak(V d, const V a, const V k, const V c, size_t n){
+    if (!route_on[ROUTE_SCALAR]){ route_fallbacks[ROUTE_SCALAR]++; vfma(d, a, k, c, n); return; }
+    vrun_k(CFT_FMA, d, a, k, c, n, 2u, "fma");
+}
+#ifndef IAS15_CFT_LIBRARY
+/* energy_all()'s alone, which the library half does not have. */
+static void vkmul(V d, const V k, const V b, size_t n){
+    if (!route_on[ROUTE_SCALAR]){ route_fallbacks[ROUTE_SCALAR]++; vmul(d, k, b, n); return; }
+    vrun_k(CFT_MUL, d, k, b, NULL, n, 1u, "mul");
+}
+static void vaddk(V d, const V a, const V k, size_t n){
+    if (!route_on[ROUTE_SCALAR]){ route_fallbacks[ROUTE_SCALAR]++; vadd(d, a, k, n); return; }
+    vrun_k(CFT_ADD, d, a, NULL, k, n, 4u, "add");
+}
+#endif
 
 /* d = op(a[ia], b[ib], c[ic]) over n elements. An operand with a table
  * is read through it from a source of src elements; an operand without
@@ -2957,15 +2983,15 @@ static void step_attempt(void){
 /* ------------------------------------------------------------------ */
 #ifndef IAS15_CFT_LIBRARY
 static void energy_all(V out){
-    static V bvx, bvy, bvz, bt, bu, ekin, epot, half, tt, uu;
+    static V bvx, bvy, bvz, bt, bu, ekin, epot, half, halfb, tt, uu;
     if (!bvx){ bvx = valloc(NB); bvy = valloc(NB); bvz = valloc(NB); bt = valloc(NB); bu = valloc(NB);
-               ekin = valloc(E); epot = valloc(E); half = valloc(1); tt = valloc(P); uu = valloc(P); }
-    vdiv(half, K1, K2, 1);
+               ekin = valloc(E); epot = valloc(E); half = valloc(1); halfb = valloc(NB); tt = valloc(P); uu = valloc(P); }
+    vdiv(half, K1, K2, 1); vbcast(halfb, half, NB);
     /* 0.5 * m * (vx*vx + vy*vy + vz*vz), every body at once */
     for (size_t i = 0; i < NB; i++){ memcpy(E(bvx, i), E(v, 3 * i), ESZ); memcpy(E(bvy, i), E(v, 3 * i + 1), ESZ); memcpy(E(bvz, i), E(v, 3 * i + 2), ESZ); }
     vmul(bt, bvx, bvx, NB); vmul(bu, bvy, bvy, NB); vadd(bt, bt, bu, NB);
     vmul(bu, bvz, bvz, NB); vadd(bt, bt, bu, NB);
-    vrun_k(CFT_MUL, bu, half, mass, NULL, NB, 1u, "mul"); vmul(bu, bu, bt, NB);
+    vkmul(bu, halfb, mass, NB); vmul(bu, bu, bt, NB);
     /* - G m_i m_j / r for every pair at once (the pair list is (i > j);
      * the energy loop's (i < j) gives the same dx up to sign, and the
      * square is the same bits) */
@@ -2979,7 +3005,7 @@ static void energy_all(V out){
         vmul(tt, pdx, pdx, P); vmul(uu, pdy, pdy, P); vadd(tt, tt, uu, P); vmul(uu, pdz, pdz, P); vadd(tt, tt, uu, P); vsqrt(tt, tt, P);
         /* G*m_j*m_i with j the larger index, as reb_simulation_energy
          * multiplies it; the list's pair_i IS the larger index */
-        vrun_k(CFT_MUL, uu, G, pmi, NULL, P, 1u, "mul"); vmul(uu, uu, pmj, P); vdiv(uu, uu, tt, P);
+        vkmul(uu, G, pmi, P); vmul(uu, uu, pmj, P); vdiv(uu, uu, tt, P);
     }
     /* the sums, in REBOUND's order within each system, every system at
      * once: element s of each call is the scalar add system s would do */
@@ -2994,7 +3020,7 @@ static void energy_all(V out){
         vsub(epot, epot, gat, E);
     }
     vadd(out, ekin, epot, E);
-    vrun_k(CFT_ADD, out, out, NULL, K0, E, 4u, "add");   /* + energy_offset, which is 0 */
+    vaddk(out, out, K0, E);  /* + energy_offset, which is 0 */
 }
 #endif /* !IAS15_CFT_LIBRARY */
 
