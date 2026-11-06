@@ -26,6 +26,7 @@
 #                sequence removes a body before the save and adds one
 #                back after the load, so gravity's tables are rebuilt on
 #                both sides of the checkpoint.
+#      P5 x P3   scalar, the one-element constants.
 #
 #    ROUND3.md named the P2 x P3 seam "a replay across a checkpoint". The
 #    two do not meet. The replay is the standalone program's (main()'s
@@ -38,18 +39,20 @@
 #    runner and the comparison are check_checkpoint's own, imported, never
 #    copied: a new sequence there reaches this gate unedited.
 #
-# 2. A REPLAYED SCHEDULE OVER GRAVITY'S ROUTES (P1 x P2). The program
-#    records a schedule (--record-iters) with both gravity routes forced
-#    one way, and replays it (--replay-iters) with both forced the other.
+# 2. A REPLAYED SCHEDULE OVER THE OPT-IN ROUTES (P1 x P2, P5 x P2). The
+#    program records a schedule (--record-iters) with every opt-in route
+#    forced one way, and replays it (--replay-iters) with all forced the
+#    other.
 #    The replay must give the recording's record lines and every counter
 #    a route may not move, system by system, and it must have computed no
 #    exit test - reduce_seg carried nothing - so the schedule drove it.
 #
-# 3. THE STEP-CONTROL PROGRAM OVER GRAVITY'S ROUTES (P1 x P4). The program
-#    engine, P4's step control on the device, with both gravity routes
-#    forced on and then off, against the loop engine on today's gravity:
-#    the loop engine's record and counters, and the step-control program
-#    run in both, nextstep_calls above zero and the same in each.
+# 3. THE STEP-CONTROL PROGRAM OVER THE OPT-IN ROUTES (P1 x P4, P5 x P4).
+#    The program engine, P4's step control on the device, with every
+#    opt-in route forced on and then off, against the loop engine with
+#    them off: the loop engine's record and counters, and the
+#    step-control program run in both, nextstep_calls above zero and the
+#    same in each.
 #
 # THE PHYSICS COUNTER, in every part. Each forced route must be the one
 # taken, by=forced, and must have carried its run: calls and no fallback
@@ -81,8 +84,9 @@ import check_checkpoint as CC  # noqa: E402
 
 # The routes a merged parcel carries. Add a name here when its parcel
 # merges.
-ROUTES = ["reduce_seg", "indexed", "pair_gather"]
-GRAVITY = ("indexed", "pair_gather")
+ROUTES = ["reduce_seg", "indexed", "pair_gather", "scalar"]
+# What parts 2 and 3 force: the routes auto leaves off.
+OPT_IN = ("indexed", "pair_gather", "scalar")
 SEQUENCES = CC.SEQUENCES
 # What a route may not move, and a replay must keep, run and system alike.
 SYSTEM = ("steps_done", "iterations_max_exceeded", "steps_rejected", "mean_pc_iterations", "max_pc_iterations")
@@ -117,9 +121,9 @@ def carried(routes, route, forced):
     return True, ("%d calls on the new route" % calls) if forced == "on" else ("%d fallbacks to today's" % falls)
 
 
-def gravity_carried(routes, forced):
-    oks, said = zip(*(carried(routes, g, forced) for g in GRAVITY))
-    return all(oks), ", ".join("%s %s" % (g, s) if ok else s for g, ok, s in zip(GRAVITY, oks, said))
+def opt_in_carried(routes, forced):
+    oks, said = zip(*(carried(routes, g, forced) for g in OPT_IN))
+    return all(oks), ", ".join("%s %s" % (g, s) if ok else s for g, ok, s in zip(OPT_IN, oks, said))
 
 
 def kv(text):
@@ -127,11 +131,11 @@ def kv(text):
 
 
 def program(cmd, forced=None):
-    """One run of the standalone program, the gravity routes forced as
+    """One run of the standalone program, the opt-in routes forced as
     asked: its rc, stderr, record lines, trailer, each system's trailer
     and its route lines."""
     env = dict(os.environ)
-    env.update({door_var(g): forced for g in GRAVITY} if forced else {})
+    env.update({door_var(g): forced for g in OPT_IN} if forced else {})
     p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, cwd=root)
     tail, systems = {}, {}
     for line in p.stdout.splitlines():
@@ -199,7 +203,7 @@ def across_checkpoint(exe, formats, wd, pool, verdict):
 
 
 def replay_over_routes(cft, formats, problems, wd, pool, verdict):
-    """Part 2: a schedule recorded on one side of gravity's routes,
+    """Part 2: a schedule recorded on one side of the opt-in routes,
     replayed on the other."""
     jobs = [(fmt, i, rec, rep) for fmt in formats for i, p in enumerate(problems) if not p[3] or fmt in p[3]
             for rec, rep in (("on", "off"), ("off", "on"))]
@@ -215,15 +219,15 @@ def replay_over_routes(cft, formats, problems, wd, pool, verdict):
         b = program(base + ["--replay-iters", sched], rep)
         if b["rc"]:
             return False, 0, "%s %s: the replay did not run (rc %d): %s" % (fmt, name, b["rc"], b["err"].strip()[-200:])
-        oka, at_rec = gravity_carried(a["routes"], rec)
-        okb, at_rep = gravity_carried(b["routes"], rep)
+        oka, at_rec = opt_in_carried(a["routes"], rec)
+        okb, at_rep = opt_in_carried(b["routes"], rep)
         test = b["routes"].get("reduce_seg")
         no_test = test is not None and test[2:] == (0, 0)
         same = b["recs"] == a["recs"] and len(a["recs"]) > 0 and same_counters(a, b)
         rej = a["tail"].get("steps_rejected", "?")
         physics = not rejects or rej not in ("0", "?")
         return (same and no_test and oka and okb and physics, oka and okb,
-                "%s %s: recorded with gravity %s (%s), replayed %s (%s): %s; %s; steps_rejected=%s%s"
+                "%s %s: recorded with the opt-in routes %s (%s), replayed %s (%s): %s; %s; steps_rejected=%s%s"
                 % (fmt, name, rec, at_rec, rep, at_rep,
                    "%d record lines and every counter a route may not move identical, system by system"
                    % len(a["recs"]) if same else "the replay DIFFERS from its recording",
@@ -231,7 +235,7 @@ def replay_over_routes(cft, formats, problems, wd, pool, verdict):
                    else "IT COMPUTED AN EXIT TEST (reduce_seg %s), so the schedule did not drive it" % (test,),
                    rej, "" if not rejects else (", the rejection the case needs" if physics else ", AND THE CASE NEEDS ONE")))
 
-    print("check_seams 2: a replayed schedule over gravity's routes, formats %s" % ", ".join(formats))
+    print("check_seams 2: a replayed schedule over the opt-in routes, formats %s" % ", ".join(formats))
     n = 0
     for ok, both, text in pool.map(one, jobs):
         verdict(ok, text)
@@ -240,8 +244,8 @@ def replay_over_routes(cft, formats, problems, wd, pool, verdict):
 
 
 def program_over_routes(cft, progs, formats, problems, pool, verdict):
-    """Part 3: the step-control program over each of gravity's routes,
-    against the loop engine on today's gravity."""
+    """Part 3: the step-control program over the opt-in routes, on and
+    off, against the loop engine with them off."""
     jobs = [(fmt, i) for fmt in formats for i, p in enumerate(problems) if not p[3] or fmt in p[3]]
 
     def one(job):
@@ -254,10 +258,10 @@ def program_over_routes(cft, progs, formats, problems, pool, verdict):
                if r["rc"]]
         if bad:
             return False, 0, "%s %s: %s" % (fmt, name, "; ".join(bad))
-        okl, at_loop = gravity_carried(loop["routes"], "off")
+        okl, at_loop = opt_in_carried(loop["routes"], "off")
         said, oks, steps = [], [], []
         for side, r in runs.items():
-            ok, at = gravity_carried(r["routes"], side)
+            ok, at = opt_in_carried(r["routes"], side)
             oks.append(ok)
             said.append("%s (%s)" % (side, at))
             steps.append(r["tail"].get("nextstep_calls", "0"))
@@ -266,7 +270,7 @@ def program_over_routes(cft, progs, formats, problems, pool, verdict):
         rej = loop["tail"].get("steps_rejected", "?")
         physics = not rejects or rej not in ("0", "?")
         return (same and stepped and okl and all(oks) and physics, okl and all(oks),
-                "%s %s: the program engine with gravity %s, against the loop engine with it off (%s): %s; "
+                "%s %s: the program engine with the opt-in routes %s, against the loop engine with them off (%s): %s; "
                 "nextstep_calls %s; steps_rejected=%s%s"
                 % (fmt, name, " and ".join(said), at_loop,
                    "%d record lines and every counter a route may not move identical" % len(loop["recs"])
@@ -274,7 +278,7 @@ def program_over_routes(cft, progs, formats, problems, pool, verdict):
                    " and ".join(steps) + ("" if stepped else ", SO THE STEP CONTROL PROGRAM DID NOT RUN IN BOTH"),
                    rej, "" if not rejects else (", the rejection the case needs" if physics else ", AND THE CASE NEEDS ONE")))
 
-    print("check_seams 3: the step-control program over gravity's routes, formats %s" % ", ".join(formats))
+    print("check_seams 3: the step-control program over the opt-in routes, formats %s" % ", ".join(formats))
     n = 0
     for ok, both, text in pool.map(one, jobs):
         verdict(ok, text)
@@ -325,8 +329,8 @@ def main():
                   program_over_routes(cft, progs, formats, problems, pool, verdict)]
     # A gate that crossed nothing passes nothing: every crossing's routes
     # must have carried both of its halves.
-    for (n, want), what in zip(counts, ("route crossings of a checkpoint", "replays across gravity's routes",
-                                        "program-engine pairs over gravity's routes")):
+    for (n, want), what in zip(counts, ("route crossings of a checkpoint", "replays across the opt-in routes",
+                                        "program-engine pairs over the opt-in routes")):
         verdict(n == want and want > 0, "%d of %d %s carried by the forced routes on both sides" % (n, want, what))
     print("RESULT: %s" % ("PASS" if allok else "FAIL"))
     return 0 if allok else 1
