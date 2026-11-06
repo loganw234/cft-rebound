@@ -160,6 +160,25 @@ def record(cft, fmt, problem, extra, extra_env=None):
     return rc, err, samples, tail, routes, identity
 
 
+def route_text(routes):
+    return ", ".join("%s=%s by=%s calls=%d fallbacks=%d" % ((r,) + routes[r]) for r in sorted(routes))
+
+
+def compared(s0, s1, t0, t1, missing, differ):
+    """What a comparison of two runs found, in words true either way. A
+    failing line never opens with the claim it failed (V1, 2026-11-02)."""
+    said = []
+    if not s0:
+        said.append("NO SAMPLE LINES")
+    elif s0 != s1:
+        said.append("THE SAMPLE LINES DIFFER")
+    if missing:
+        said.append("COUNTERS MISSING: %s" % ", ".join(missing))
+    if differ:
+        said.append("COUNTERS DIFFER: %s" % ", ".join("%s %s against %s" % (k, t0[k], t1[k]) for k in differ))
+    return ", ".join(said) or "%d sample lines and all %d counters identical" % (len(s0), len(COUNTERS))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--build", default=os.path.join(root, "build"))
@@ -302,12 +321,11 @@ def main():
             differ = [k for k in COUNTERS if k not in missing and t0[k] != t1[k]]
             same = s0 == s1 and len(s0) > 0 and not missing and not differ
             forced = sorted(r1) == names and all(v[0] == "off" and v[1] == "forced" for v in r1.values())
-            # A failing line names what differed, never the claim it failed.
             verdict(same and forced and sorted(r0) == names,
-                    "%s: %d sample lines and all %d counters identical%s%s%s; forced-off run reports every route off by=forced%s"
-                    % (name, len(s0), len(COUNTERS), " (MISSING: %s)" % ", ".join(missing) if missing else "",
-                       "" if s0 == s1 else " (THE SAMPLE LINES DIFFER)",
-                       "" if not differ else " (DIFFER: %s)" % ", ".join("%s %s against %s" % (k, t0[k], t1[k]) for k in differ),
+                    "%s: %s; %s%s"
+                    % (name, compared(s0, s1, t0, t1, missing, differ),
+                       "forced-off run reports every route off by=forced" if forced and sorted(r0) == names else
+                       "THE ROUTE LINES ARE WRONG: default %s; forced off %s" % (route_text(r0), route_text(r1)),
                        "" if carried else
                        " (vacuous for now: no route carried a call in either run, which is P0's state)"))
             if fmt == f0 and name == runs[0][0]:
@@ -340,16 +358,12 @@ def main():
             forced = all(r in r1 and r1[r][:2] == ("on", "forced") and r1[r][2] > 0 and r1[r][3] == 0 for r in opt)
             others = sorted(r0) == names and sorted(r1) == names and all(r0[r] == r1[r] for r in names if r not in opt)
             verdict(same and dflt and forced and others,
-                    "%s: %d sample lines and all %d counters identical%s%s%s; the default leaves %s off by=opt_in "
-                    "(fallbacks %s), forced on they carry calls %s and no fallback%s"
-                    % (name, len(s0), len(COUNTERS), " (MISSING: %s)" % ", ".join(missing) if missing else "",
-                       "" if s0 == s1 else " (THE SAMPLE LINES DIFFER)",
-                       "" if not differ else " (DIFFER: %s)" % ", ".join("%s %s against %s" % (k, t0[k], t1[k]) for k in differ),
-                       " and ".join(opt), "/".join(str(r0[r][3]) if r in r0 else "?" for r in opt),
-                       "/".join(str(r1[r][2]) if r in r1 else "?" for r in opt),
-                       "" if dflt and forced and others else
-                       " (ROUTES: default %s; forced %s)" % (", ".join("%s=%s by=%s calls=%d fallbacks=%d" % ((r,) + r0[r]) for r in sorted(r0)),
-                                                             ", ".join("%s=%s by=%s calls=%d fallbacks=%d" % ((r,) + r1[r]) for r in sorted(r1)))))
+                    "%s: %s; %s"
+                    % (name, compared(s0, s1, t0, t1, missing, differ),
+                       "the default leaves %s off by=opt_in (fallbacks %s), forced on they carry calls %s and no fallback"
+                       % (" and ".join(opt), "/".join(str(r0[r][3]) for r in opt), "/".join(str(r1[r][2]) for r in opt))
+                       if dflt and forced and others else
+                       "THE ROUTE LINES ARE WRONG: default %s; forced on %s" % (route_text(r0), route_text(r1))))
 
     print("RESULT: %s" % ("PASS" if allok else "FAIL"))
     return 0 if allok else 1
