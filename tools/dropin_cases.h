@@ -111,5 +111,7 @@ void cases_corrector(void); /* tools/cases_corrector.c - which route the correct
                              * exit test took, through ias15_engine_route() */
 void cases_gravity(void); /* tools/cases_gravity.c - gravity's two routes in the
                            * library half, and its tables rebuilt mid-run */
+void cases_scalar(void);  /* tools/cases_scalar.c - the scalar route in the library
+                           * half, and the calls its sites sent */
 
 #endif /* DROPIN_CASES_H */

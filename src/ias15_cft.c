@@ -182,7 +182,9 @@ static int engine_check_format(const char *artifact){
  *     (lead.md, 16:55): the same bits in all four combinations, but each
  *     made a step 22-40% slower at 64 to 512 bodies, and both together
  *     47-74%. Under auto a card publishing CFT_SEQ_FEAT_INDEXED would
- *     have taken both, so the owner made them opt-in;
+ *     have taken both, so the owner made them opt-in. The scalar family is
+ *     opt-in from the start, because no card has measured it (ROUND3.md,
+ *     P5);
  *   - CFT_REBOUND_ROUTE_<NAME>=off takes today's route whatever the
  *     device publishes. That is the fallback's own gate.
  *   - CFT_REBOUND_ROUTE_<NAME>=on demands the new route, and is how an
@@ -204,7 +206,7 @@ static const struct {
     const char *bit_name;
     int opt_in;                  /* auto leaves it off, by=opt_in (above) */
 } route_def[N_ROUTES] = {
-    { "scalar",     "CFT_REBOUND_ROUTE_SCALAR",     CFT_SEQ_FEAT_SCALAR,  "CFT_SEQ_FEAT_SCALAR (CAPS2[7], ABI 0.12)", 0 },
+    { "scalar",     "CFT_REBOUND_ROUTE_SCALAR",     CFT_SEQ_FEAT_SCALAR,  "CFT_SEQ_FEAT_SCALAR (CAPS2[7], ABI 0.12)", 1 },
     { "indexed",    "CFT_REBOUND_ROUTE_INDEXED",    CFT_SEQ_FEAT_INDEXED, "CFT_SEQ_FEAT_INDEXED (CAPS2[9], ABI 0.14)", 1 },
     { "reduce_seg", "CFT_REBOUND_ROUTE_REDUCE_SEG", CFT_FEAT_REDUCE_SEG,  "CFT_FEAT_REDUCE_SEG (CAPS2[8], ABI 0.13)", 0 },
     /* Gravity's second switch (ROUND3.md, P1): who gathers the pair
@@ -489,11 +491,12 @@ static void vaugadd(V r, V e, const V a, const V b, size_t n){
 /* The door's wrappers. Each takes its route where engine_routes()      */
 /* put it, or today's route, which gives the same bits by the contract. */
 /* ------------------------------------------------------------------ */
-/* Nothing in the integration calls these yet. A parcel does that
- * (ROUND3.md: P5 the scalar family, P1 the gather, P2 the segmented
- * maximum). Until then only --door-selftest does, and the library half
- * would warn that they are unused. When a parcel's call lands, its
- * DOOR_UNUSED comes off.
+/* vrun_k() carries the integration's constant operands where the scalar
+ * route is on (ROUND3.md, P5; vmulk() and its kin, below, take today's call
+ * where it is off), and vreduce_seg() the corrector's maximum (P2). Only
+ * --door-selftest calls vrun_ix(): gravity gathers through vprog_ix()
+ * instead (P1). So the library half would warn that it is unused, and it
+ * keeps its DOOR_UNUSED until a call lands.
  *
  * Each counts as ONE call in ncalls, whichever route carries it: calls=
  * in the trailer is the integrator's operation count, and it has to
@@ -522,10 +525,12 @@ static V door_scratch(int k, size_t n){
 /* d = op(a, b, c) over n elements. Each bit of smask (0 a, 1 b, 2 c,
  * as cft_elem_args) marks an operand that is ONE element applying to
  * every element of the run. This goes through cft_run_ex where the
- * device publishes CFT_SEQ_FEAT_SCALAR. Otherwise each such operand is
- * broadcast into scratch and the run is today's cft_run: the same bits,
- * because the contract defines a scalar operand as element 0 applied to
- * the whole run. Timed and counted as the elementwise call it is.
+ * scalar route is on: asked for by CFT_REBOUND_ROUTE_SCALAR=on, on a
+ * device publishing CFT_SEQ_FEAT_SCALAR, since the family is opt-in
+ * (engine_routes()). Otherwise each such operand is broadcast into
+ * scratch and the run is today's cft_run: the same bits, because the
+ * contract defines a scalar operand as element 0 applied to the whole
+ * run. Timed and counted as the elementwise call it is.
  *
  * A scalar is read ONCE, before any element is written: it is copied
  * first, on both routes. If d overlapped it, the two routes would
@@ -533,8 +538,8 @@ static V door_scratch(int k, size_t n){
  * after writing it (cft-fp256 host/src/device.c, 2068-2086), while
  * today's route broadcasts first. V0 measured 3,838 to 4,095 of 4,096
  * lanes differing on 2026-10-31, and nothing refused the call. */
-static DOOR_UNUSED void vrun_k(cft_op op, V d, const V a, const V b, const V c, size_t n,
-                               uint32_t smask, const char *what){
+static void vrun_k(cft_op op, V d, const V a, const V b, const V c, size_t n,
+                   uint32_t smask, const char *what){
     V in[3] = { a, b, c };
     uint64_t once[3][4];               /* each scalar, copied: 32 bytes, the widest element */
     unsigned nops = 0, nscal = 0;
@@ -570,6 +575,51 @@ static DOOR_UNUSED void vrun_k(cft_op op, V d, const V a, const V b, const V c, 
     { double _d = now_s() - _t0; t_elem += _d; if (in_gravity) t_g_lib += _d; }
     note(st, fl, what);
 }
+
+/* A constant operand. With the scalar route on it goes to the library as
+ * ONE element, through vrun_k(). With the route off it is today's call on
+ * the whole K vector, with no copy and no scratch, so a route that is off
+ * costs nothing to have. That is one call in calls= and one fallback, as
+ * vrun_k() would count it; its own fallback is --door-selftest's alone now.
+ *
+ * vmulk() and vfmak() take the constant as b, vkmul() as a, and vaddk() as
+ * vadd()'s second operand, which cft_run calls c.
+ *
+ * The K in the names is a promise about k: it is the same for every lane
+ * of every system. So it may be a K vector, or H, which is one, and never
+ * a vector bcast_sys() fills. DTB, DTDB and RB hold one value a SYSTEM,
+ * and D1B and D2B are built from DTB. With one system, or systems that
+ * happen to share a step, each of them looks exactly like a scalar. In any
+ * other ensemble the new route reads element 0, system 0's step, for every
+ * system, and today's route reads each lane's own.
+ *
+ * So the two routes differ exactly there, and that is one of the two
+ * things tools/check_scalar.py holds an ensemble to. The other is its
+ * members run alone. Only that gate can see this: every other gate takes
+ * today's route, which stays right.
+ *
+ * Nothing here ever writes a K vector, so no site's result overlaps its
+ * scalar: the door's read-once rule is never what makes a site correct.
+ * d may alias a, as cft_run allows. */
+static void vmulk(V d, const V a, const V k, size_t n){
+    if (!route_on[ROUTE_SCALAR]){ route_fallbacks[ROUTE_SCALAR]++; vmul(d, a, k, n); return; }
+    vrun_k(CFT_MUL, d, a, k, NULL, n, 2u, "mul");
+}
+static void vfmak(V d, const V a, const V k, const V c, size_t n){
+    if (!route_on[ROUTE_SCALAR]){ route_fallbacks[ROUTE_SCALAR]++; vfma(d, a, k, c, n); return; }
+    vrun_k(CFT_FMA, d, a, k, c, n, 2u, "fma");
+}
+#ifndef IAS15_CFT_LIBRARY
+/* energy_all()'s alone, which the library half does not have. */
+static void vkmul(V d, const V k, const V b, size_t n){
+    if (!route_on[ROUTE_SCALAR]){ route_fallbacks[ROUTE_SCALAR]++; vmul(d, k, b, n); return; }
+    vrun_k(CFT_MUL, d, k, b, NULL, n, 1u, "mul");
+}
+static void vaddk(V d, const V a, const V k, size_t n){
+    if (!route_on[ROUTE_SCALAR]){ route_fallbacks[ROUTE_SCALAR]++; vadd(d, a, k, n); return; }
+    vrun_k(CFT_ADD, d, a, NULL, k, n, 4u, "add");
+}
+#endif
 
 /* d = op(a[ia], b[ib], c[ic]) over n elements. An operand with a table
  * is read through it from a source of src elements; an operand without
@@ -1540,8 +1590,8 @@ static void predict_positions(int n){
          * fl(dt h/2) and v0, then * fl(dt h) - one rounding per level
          * instead of REBOUND's three */
         vcopy(T1, b[6], N3);
-        for (int lvl = 0; lvl < 6; lvl++) vfma(T1, T1, KHF[n - 1][lvl], b[5 - lvl], N3);
-        vfma(T1, T1, KHF[n - 1][6], a0, N3);
+        for (int lvl = 0; lvl < 6; lvl++) vfmak(T1, T1, KHF[n - 1][lvl], b[5 - lvl], N3);
+        vfmak(T1, T1, KHF[n - 1][6], a0, N3);
         vfma(T1, T1, D2B[n], v0, N3);
         vmul(T1, T1, D1B[n], N3);
         vsub(T1, T1, csx, N3);
@@ -1555,14 +1605,14 @@ static void predict_positions(int n){
      * proves that sentence. */
     /* the b6 level: (b6*7)*h/9; the numerator 1 of the b0 level is a
      * multiply by one, exact, kept so every level is the same code */
-    vmul(T1, b[6], KNUM[0], N3);
+    vmulk(T1, b[6], KNUM[0], N3);
     for (int lvl = 0; lvl < 7; lvl++){
-        if (lvl > 0) vmul(T1, T1, KNUM[lvl], N3);
-        vmul(T1, T1, H, N3); vdiv(T1, T1, KDEN[lvl], N3);
+        if (lvl > 0) vmulk(T1, T1, KNUM[lvl], N3);
+        vmulk(T1, T1, H, N3); vdiv(T1, T1, KDEN[lvl], N3);
         vadd(T1, T1, lvl < 6 ? b[5 - lvl] : a0, N3);
     }
-    vmul(T1, T1, DTB, N3); vmul(T1, T1, H, N3); vdiv(T1, T1, K2, N3); vadd(T1, T1, v0, N3);   /* *dt*h/2 + v0 */
-    vmul(T1, T1, DTB, N3); vmul(T1, T1, H, N3);                                              /* *dt*h */
+    vmul(T1, T1, DTB, N3); vmulk(T1, T1, H, N3); vdiv(T1, T1, K2, N3); vadd(T1, T1, v0, N3);   /* *dt*h/2 + v0 */
+    vmul(T1, T1, DTB, N3); vmulk(T1, T1, H, N3);                                              /* *dt*h */
     vsub(T1, T1, csx, N3);          /* xk = -csx + (...) */
     vadd(x, T1, x0, N3);            /* particle.x = xk + x0 */
 }
@@ -1601,15 +1651,15 @@ static void correct(int n){
     /* g[n-1] = (((gk/rr[base] - g0)/rr[base+1] - g1)/... - g[n-2])/rr[base+n-1] */
     size_t base = (size_t)n * (n - 1) / 2;
     vcopy(told, g[n - 1], N3);
-    if (arith_fma) vmul(gnew, gk, KRINV[base], N3); else vdiv(gnew, gk, KRR[base], N3);
+    if (arith_fma) vmulk(gnew, gk, KRINV[base], N3); else vdiv(gnew, gk, KRR[base], N3);
     for (int m = 1; m < n; m++){
         vsub(gnew, gnew, g[m - 1], N3);
-        if (arith_fma) vmul(gnew, gnew, KRINV[base + m], N3); else vdiv(gnew, gnew, KRR[base + m], N3);
+        if (arith_fma) vmulk(gnew, gnew, KRINV[base + m], N3); else vdiv(gnew, gnew, KRR[base + m], N3);
     }
     vcopy(g[n - 1], gnew, N3);
     vsub(tmp, gnew, told, N3);                 /* tmp = g_new - g_old */
     size_t cbase = (size_t)(n - 1) * (n - 2) / 2;
-    for (int m = 0; m < n - 1; m++){ vmul(prod, tmp, KC[cbase + m], N3); add_cs(b[m], csb[m], prod, N3); }
+    for (int m = 0; m < n - 1; m++){ vmulk(prod, tmp, KC[cbase + m], N3); add_cs(b[m], csb[m], prod, N3); }
     add_cs(b[n - 1], csb[n - 1], tmp, N3);
     if (n == 7 && !sched_in) pc_error(tmp);        /* a replay already knows the answer */
 }
@@ -2080,7 +2130,7 @@ static void predict_next_step_vec(const V rb, V *_e, V *_b, V *eo, V *bo){
         /* e_m = q_{m+1} * (b6*C(7,m+1) + b5*C(6,m+1) + ... + b_{m+1}*C(m+2,m+1) + b_m), left to right */
         int first = 1;
         for (int j = 6; j > m; j--){
-            vmul(u, _b[j], KBIN[m][j], N3);
+            vmulk(u, _b[j], KBIN[m][j], N3);
             if (first){ vcopy(s, u, N3); first = 0; } else vadd(s, s, u, N3);
         }
         if (first) vcopy(s, _b[m], N3); else vadd(s, s, _b[m], N3);
@@ -2537,13 +2587,13 @@ static void predict_velocities(int n){
     V H = KH[n];
     force_constants();
     if (!FVP){ FVP = valloc(N3); FT1 = valloc(N3); }
-    vmul(FT1, b[6], KVNUM[0], N3);
+    vmulk(FT1, b[6], KVNUM[0], N3);
     for (int lvl = 0; lvl < 7; lvl++){
-        if (lvl > 0) vmul(FT1, FT1, KVNUM[lvl], N3);
-        vmul(FT1, FT1, H, N3); vdiv(FT1, FT1, KVDEN[lvl], N3);
+        if (lvl > 0) vmulk(FT1, FT1, KVNUM[lvl], N3);
+        vmulk(FT1, FT1, H, N3); vdiv(FT1, FT1, KVDEN[lvl], N3);
         vadd(FT1, FT1, lvl < 6 ? b[5 - lvl] : a0, N3);
     }
-    vmul(FT1, FT1, DTB, N3); vmul(FT1, FT1, H, N3);   /* *dt*h */
+    vmul(FT1, FT1, DTB, N3); vmulk(FT1, FT1, H, N3);  /* *dt*h */
     vsub(FT1, FT1, csv, N3);                          /* vk = -csv + (...) */
     vadd(FVP, FT1, v0, N3);                           /* particle.v = vk + v0 */
 }
@@ -2741,7 +2791,7 @@ static void step_attempt(void){
     for (int m = 0; m < 6; m++){
         int first = 1;
         for (int j = 6; j > m; j--){
-            vmul(T2, b[j], KD[(size_t)j * (j - 1) / 2 + m], N3);
+            vmulk(T2, b[j], KD[(size_t)j * (j - 1) / 2 + m], N3);
             if (first){ vcopy(T1, T2, N3); first = 0; } else vadd(T1, T1, T2, N3);
         }
         vadd(g[m], T1, b[m], N3);
@@ -2751,7 +2801,7 @@ static void step_attempt(void){
         /* fl(dt h_n) and its exact half, each lane with its system's dt */
         for (int n = 1; n < 8; n++){
             if (!D1B[n]){ D1B[n] = valloc(NMAX); D2B[n] = valloc(NMAX); }
-            vmul(D1B[n], DTB, KH[n], N3); vmul(D2B[n], D1B[n], KHALF, N3);
+            vmulk(D1B[n], DTB, KH[n], N3); vmulk(D2B[n], D1B[n], KHALF, N3);
         }
     }
 
@@ -2850,14 +2900,14 @@ static void step_attempt(void){
     for (size_t s = 0; s < E; s++) if (active[s] && !accepted[s]) save_system(s);
     bcast_sys(DTDB, SDTDONE);
     for (int m = 6; m >= 0; m--){
-        if (arith_fma) vmul(T1, b[m], KPOSR[m], N3); else vdiv(T1, b[m], KPOS[m], N3);
+        if (arith_fma) vmulk(T1, b[m], KPOSR[m], N3); else vdiv(T1, b[m], KPOS[m], N3);
         vmul(T1, T1, DTDB, N3); vmul(T1, T1, DTDB, N3); add_cs(x0, csx, T1, N3);
     }
-    if (arith_fma) vmul(T1, a0, KPOSR[7], N3); else vdiv(T1, a0, KPOS[7], N3);
+    if (arith_fma) vmulk(T1, a0, KPOSR[7], N3); else vdiv(T1, a0, KPOS[7], N3);
     vmul(T1, T1, DTDB, N3); vmul(T1, T1, DTDB, N3); add_cs(x0, csx, T1, N3);
     vmul(T1, v0, DTDB, N3); add_cs(x0, csx, T1, N3);
     for (int m = 6; m >= 0; m--){
-        if (arith_fma) vmul(T1, b[m], KVELR[m], N3); else vdiv(T1, b[m], KVEL[m], N3);
+        if (arith_fma) vmulk(T1, b[m], KVELR[m], N3); else vdiv(T1, b[m], KVEL[m], N3);
         vmul(T1, T1, DTDB, N3); add_cs(v0, csv, T1, N3);
     }
     vmul(T1, a0, DTDB, N3); add_cs(v0, csv, T1, N3);
@@ -2941,7 +2991,7 @@ static void energy_all(V out){
     for (size_t i = 0; i < NB; i++){ memcpy(E(bvx, i), E(v, 3 * i), ESZ); memcpy(E(bvy, i), E(v, 3 * i + 1), ESZ); memcpy(E(bvz, i), E(v, 3 * i + 2), ESZ); }
     vmul(bt, bvx, bvx, NB); vmul(bu, bvy, bvy, NB); vadd(bt, bt, bu, NB);
     vmul(bu, bvz, bvz, NB); vadd(bt, bt, bu, NB);
-    vmul(bu, halfb, mass, NB); vmul(bu, bu, bt, NB);
+    vkmul(bu, halfb, mass, NB); vmul(bu, bu, bt, NB);
     /* - G m_i m_j / r for every pair at once (the pair list is (i > j);
      * the energy loop's (i < j) gives the same dx up to sign, and the
      * square is the same bits) */
@@ -2955,7 +3005,7 @@ static void energy_all(V out){
         vmul(tt, pdx, pdx, P); vmul(uu, pdy, pdy, P); vadd(tt, tt, uu, P); vmul(uu, pdz, pdz, P); vadd(tt, tt, uu, P); vsqrt(tt, tt, P);
         /* G*m_j*m_i with j the larger index, as reb_simulation_energy
          * multiplies it; the list's pair_i IS the larger index */
-        vmul(uu, G, pmi, P); vmul(uu, uu, pmj, P); vdiv(uu, uu, tt, P);
+        vkmul(uu, G, pmi, P); vmul(uu, uu, pmj, P); vdiv(uu, uu, tt, P);
     }
     /* the sums, in REBOUND's order within each system, every system at
      * once: element s of each call is the scalar add system s would do */
@@ -2970,7 +3020,7 @@ static void energy_all(V out){
         vsub(epot, epot, gat, E);
     }
     vadd(out, ekin, epot, E);
-    vadd(out, out, K0, E);   /* + energy_offset, which is 0 */
+    vaddk(out, out, K0, E);  /* + energy_offset, which is 0 */
 }
 #endif /* !IAS15_CFT_LIBRARY */
 

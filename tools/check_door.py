@@ -38,15 +38,15 @@
 #   4. A run with every route forced off gives the same record as the
 #      default run, with every counter present on both sides. That is
 #      the fallback's own gate. The route lines say how many calls each
-#      family carried, so a comparison that nothing exercised shows up as
-#      one. In P0 nothing calls the door yet.
+#      family carried, and a comparison that nothing exercised fails: the
+#      integration has called the door since P1 and P2 landed.
 #      The opt-in routes are off by default, so that comparison no longer
 #      reaches them, and the opposite one does: a run with every opt-in
 #      route forced on, against the default, compared the same way, with
 #      each forced route on by=forced and carrying calls, and each off in
 #      the default by=opt_in and carrying fallbacks. Where the device does
-#      not publish an opt-in route's bit, forcing it on is refused, and the
-#      comparison is skipped and says so.
+#      not publish an opt-in route's bit, forcing it on is refused, so that
+#      route is left out and the gate says so. The rest are still forced.
 #   5. The record's `# identity` line names the library build.
 #
 # The route names, variables, bits and refusal cases are read from the
@@ -76,11 +76,12 @@ TRAILER_ROUTE = re.compile(r"^# route (\w+)=(on|off) by=(\w+) calls=(\d+) fallba
 COUNTERS = ("steps_done", "iterations_max_exceeded", "steps_rejected", "mean_pc_iterations",
             "max_pc_iterations", "flags_seen", "calls", "divsqrt_calls", "program_calls")
 # The opt-in routes: auto leaves each off even where the device publishes
-# its bit, by=opt_in, and CFT_REBOUND_ROUTE_<NAME>=on takes it. They are
-# gravity's two switches (ROUND3.md, P1). On the rev8a tile each made a
-# step 22-40% slower at 64 to 512 bodies with the same bits (lead.md,
-# 2026-11-02 16:55), so the owner made them opt-in.
-OPT_IN = ("indexed", "pair_gather")
+# its bit, by=opt_in, and CFT_REBOUND_ROUTE_<NAME>=on takes it. Two are
+# gravity's switches (ROUND3.md, P1). On the rev8a tile each made a step
+# 22-40% slower at 64 to 512 bodies with the same bits (lead.md,
+# 2026-11-02 16:55), so the owner made them opt-in. The third is the scalar
+# family (P5), opt-in from the start because no card has measured it.
+OPT_IN = ("indexed", "pair_gather", "scalar")
 # What each --door-refuse case must say, and which route it belongs to.
 # The cases themselves are read from the program's own refusal of an
 # unknown one.
@@ -321,13 +322,12 @@ def main():
             differ = [k for k in COUNTERS if k not in missing and t0[k] != t1[k]]
             same = s0 == s1 and len(s0) > 0 and not missing and not differ
             forced = sorted(r1) == names and all(v[0] == "off" and v[1] == "forced" for v in r1.values())
-            verdict(same and forced and sorted(r0) == names,
+            verdict(same and forced and sorted(r0) == names and carried > 0,
                     "%s: %s; %s%s"
                     % (name, compared(s0, s1, t0, t1, missing, differ),
                        "forced-off run reports every route off by=forced" if forced and sorted(r0) == names else
                        "THE ROUTE LINES ARE WRONG: default %s; forced off %s" % (route_text(r0), route_text(r1)),
-                       "" if carried else
-                       " (vacuous for now: no route carried a call in either run, which is P0's state)"))
+                       "" if carried else " (VACUOUS: no route carried a call in either run)"))
             if fmt == f0 and name == runs[0][0]:
                 verdict(ident is not None and "libcft_build=" in ident and (" image=none" in ident or " image_sha256=" in ident),
                         "the record names its library build: %s" % (ident or "no # identity line"))
@@ -335,17 +335,19 @@ def main():
     # 4b. The opt-in routes forced on against the default. The default
     # leaves them off, so part 4 compares today's route with today's route
     # for them; this is the comparison that reaches the new one. The other
-    # routes must say the same in both runs.
-    opt = [r for r in names if r in OPT_IN]
+    # routes must say the same in both runs. A route the device does not
+    # publish cannot be forced on, and says so, and the routes it does
+    # publish are still compared: entry 37's f128 image has the scalar bit
+    # and not gravity's, and that comparison is what door-f128s is for.
+    unpublished = [r for r in names if r in OPT_IN and routes[r]["by"] == "absent"]
+    opt = [r for r in names if r in OPT_IN and r not in unpublished]
     on_env = {routes[r]["env"]: "on" for r in opt}
-    unpublished = [r for r in opt if routes[r]["by"] == "absent"]
-    for fmt in formats if opt else []:
+    for fmt in formats if opt or unpublished else []:
         print("check_door at %s: every opt-in route forced on against the default" % fmt)
         if unpublished:
             print("  note %s: not published on this device, so forcing on is refused, and today's route is all "
                   "there is to compare" % ", ".join(unpublished))
-            continue
-        for name, prob, extra in runs:
+        for name, prob, extra in runs if opt else []:
             rc0, err0, s0, t0, r0, _ = record(cft, fmt, prob, extra)
             rc1, err1, s1, t1, r1, _ = record(cft, fmt, prob, extra, on_env)
             if rc0 or rc1:

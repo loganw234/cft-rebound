@@ -256,6 +256,7 @@ int main(int argc, char **argv){
     cases_pairs();
     cases_corrector();
     cases_gravity();
+    cases_scalar();
     /* Last of the topics, because a seam case needs the things it
      * crosses to have been exercised on their own first: if one of
      * them is broken, its own file says so before this one does. */

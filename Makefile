@@ -476,7 +476,7 @@ CASES_SRC := tools/check_dropin.c tools/dropin_common.c \
              tools/cases_core.c tools/cases_wide.c \
              tools/cases_forces.c tools/cases_modes.c \
              tools/cases_pairs.c tools/cases_seam.c tools/cases_corrector.c \
-             tools/cases_gravity.c
+             tools/cases_gravity.c tools/cases_scalar.c
 
 $(B)/check_dropin$(EXE): $(CASES_SRC) tools/dropin_cases.h src/cft_supported.h $(DROPIN_OBJ) $(B)/librebound.a $(CFTLIB)
 	$(CC) $(CSTD) $(CFLAGS) $(WARN) $(REB_USEFLAGS) -Isrc -I$(CFT)/include -I$(REB) \
@@ -620,6 +620,11 @@ IN_CORRECTOR := --input tools/check_corrector.py $(IN_PROGRAM) $(IN_PROB) $(IN_P
 # the body cap from; --library adds the drop-in gate it runs.
 IN_GRAVITY  := --input tools/check_gravity.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) \
                --input tools/make_nbody.py --input tools/make_ensemble.py --input src/ias15_limits.h
+# tools/check_scalar.py: the program on every problem, on both engines, the
+# ensembles it generates, the source it recounts the sites from, and with
+# --library the drop-in gate and gate_real, the route forced on.
+IN_SCALAR   := --input tools/check_scalar.py --input src/ias15_cft.c $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) \
+               --input tools/make_ensemble.py $(IN_DROPIN) $(IN_REAL)
 # tools/check_seams.py: gate_real through check_checkpoint's runner, and
 # the program on the problems, the program images and an ensemble
 IN_SEAMS    := --input tools/check_seams.py --input tools/check_checkpoint.py $(IN_REAL) \
@@ -643,6 +648,7 @@ check: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_door --mode full --input tools/check_door.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_door.py --build $(B)
 	$(GATE_CACHE) --leg check_corrector --mode full $(IN_CORRECTOR) -- $(PYTHON) tools/check_corrector.py --build $(B)
 	$(GATE_CACHE) --leg check_gravity --mode full $(IN_GRAVITY) $(IN_DROPIN) -- $(PYTHON) tools/check_gravity.py --build $(B) --library
+	$(GATE_CACHE) --leg check_scalar --mode full $(IN_SCALAR) -- $(PYTHON) tools/check_scalar.py --build $(B) --library
 	$(GATE_CACHE) --leg check_records --mode full --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B)
 	$(GATE_CACHE) --leg check_ensemble --mode full --input tools/check_ensemble.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_ensemble.py --build $(B)
 	$(GATE_CACHE) --leg check_archive --mode full --input tools/check_archive.py $(IN_ARCHIVE) -- $(PYTHON) tools/check_archive.py --build $(B)
@@ -671,6 +677,7 @@ check-quick: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_door --mode quick --input tools/check_door.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_door.py --build $(B) --formats fp64
 	$(GATE_CACHE) --leg check_corrector --mode quick $(IN_CORRECTOR) -- $(PYTHON) tools/check_corrector.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_gravity --mode quick $(IN_GRAVITY) $(IN_DROPIN) -- $(PYTHON) tools/check_gravity.py --build $(B) --quick --library
+	$(GATE_CACHE) --leg check_scalar --mode quick $(IN_SCALAR) -- $(PYTHON) tools/check_scalar.py --build $(B) --quick --library
 	$(GATE_CACHE) --leg check_records --mode quick --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_ensemble --mode quick --input tools/check_ensemble.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_ensemble.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_archive --mode quick --input tools/check_archive.py $(IN_ARCHIVE) -- $(PYTHON) tools/check_archive.py --build $(B)
@@ -702,6 +709,7 @@ check-light: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_door --mode quick --input tools/check_door.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_door.py --build $(B) --formats fp64
 	$(GATE_CACHE) --leg check_corrector --mode quick $(IN_CORRECTOR) -- $(PYTHON) tools/check_corrector.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_gravity --mode quick $(IN_GRAVITY) $(IN_DROPIN) -- $(PYTHON) tools/check_gravity.py --build $(B) --quick --library
+	$(GATE_CACHE) --leg check_scalar --mode quick $(IN_SCALAR) -- $(PYTHON) tools/check_scalar.py --build $(B) --quick --library
 	$(GATE_CACHE) --leg check_records --mode quick --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_ensemble --mode quick --input tools/check_ensemble.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_ensemble.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_archive --mode quick --input tools/check_archive.py $(IN_ARCHIVE) -- $(PYTHON) tools/check_archive.py --build $(B)
