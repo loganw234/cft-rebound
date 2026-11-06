@@ -152,6 +152,10 @@
 #                tile, at a quarter of check_dropin's card time.
 #   dropin-wide  check_dropin --wide, gates-rev8a's binary128 gate on its
 #                own.
+#   dropin-forced  check_dropin --light with all four routes forced on.
+#                They are opt-in, so an unforced run takes none of them,
+#                and this is the one run that holds the device's routes
+#                through the library half, against REBOUND, on a tile.
 # shellcheck disable=SC1091
 set -u
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -165,7 +169,7 @@ GUARD_WAIT=${GUARD_WAIT:-600}
 UNTIL=${UNTIL:-}
 SESSION_A=(probe pin-f128s split-f128s door-rev8a door-f128s split-rev8a tiles gates-rev8a mixed deep)
 LEGS=("${SESSION_A[@]}" p4-program p3-identity p2-corrector p2-bench p2-replay p1-gate p1-gravity p5-scalar
-      ensemble dropin-light dropin-wide)
+      ensemble dropin-light dropin-wide dropin-forced)
 # Minutes each leg takes on one tile, on the generous side. Where a leg
 # has run, this is its time on 2026-11-02 and a margin; those days' legs
 # ran up to four times the first estimates.
@@ -173,7 +177,7 @@ declare -A EST=([probe]=2 [pin-f128s]=10 [split-f128s]=45 [door-rev8a]=15 [door-
                 [split-rev8a]=45 [tiles]=10 [gates-rev8a]=300 [mixed]=60 [deep]=8
                 [p4-program]=65 [p3-identity]=35 [p2-corrector]=150 [p2-bench]=55 [p2-replay]=20
                 [p1-gate]=70 [p1-gravity]=130 [p5-scalar]=55
-                [ensemble]=90 [dropin-light]=80 [dropin-wide]=150)
+                [ensemble]=210 [dropin-light]=80 [dropin-wide]=150 [dropin-forced]=100)
 log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 die() { echo "FATAL: $*" >&2; exit 2; }
 last() { tail -n "${2:-1}" "$1" 2>/dev/null | tr '\n' ' ' | cut -c1-"${3:-300}"; }
@@ -501,6 +505,15 @@ leg_ensemble() {
 leg_dropin_light() {
     CFT_REBOUND_ARTIFACT=$REV8A build/check_dropin --light > "$1/check_dropin-light.txt" 2>&1
     log "check_dropin --light (rc=$?): $(tally "$1/check_dropin-light.txt"); $(last "$1/check_dropin-light.txt" 2); $(grep -h -E 'route (indexed|pair_gather|reduce_seg)=' "$1/check_dropin-light.txt" | tail -n 3 | cut -c1-120 | tr '\n' ';')"
+}
+
+leg_dropin_forced() {
+    (
+        export CFT_REBOUND_ROUTE_SCALAR=on CFT_REBOUND_ROUTE_INDEXED=on \
+               CFT_REBOUND_ROUTE_REDUCE_SEG=on CFT_REBOUND_ROUTE_PAIR_GATHER=on
+        CFT_REBOUND_ARTIFACT=$REV8A build/check_dropin --light > "$1/check_dropin-forced.txt" 2>&1
+        log "check_dropin --light, all four routes forced on (rc=$?): $(tally "$1/check_dropin-forced.txt"); $(last "$1/check_dropin-forced.txt" 2); $(grep -h -E 'route (scalar|indexed|pair_gather)=|reduce_seg=on by=forced' "$1/check_dropin-forced.txt" | tail -n 4 | cut -c1-130 | tr '\n' ';')"
+    )
 }
 
 leg_dropin_wide() {
