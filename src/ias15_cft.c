@@ -595,8 +595,10 @@ static void vrun_k(cft_op op, V d, const V a, const V b, const V c, size_t n,
  *
  * So the two routes differ exactly there, and that is one of the two
  * things tools/check_scalar.py holds an ensemble to. The other is its
- * members run alone. Only that gate can see this: every other gate takes
- * today's route, which stays right.
+ * members run alone. Only a run with the route forced on can see this,
+ * because today's route stays right. tools/check_seams.py forces it on an
+ * adaptive ensemble too, but never on --engine loop --arith fma, where
+ * D1B and D2B are read, so those two have tools/check_scalar.py alone.
  *
  * Nothing here ever writes a K vector, so no site's result overlaps its
  * scalar: the door's read-once rule is never what makes a site correct.

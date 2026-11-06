@@ -21,20 +21,21 @@
 # What it asserts, and what lets each assertion fail:
 #   1. THE RECOUNT, from the source. Every site that hands the door a
 #      constant, by function, constant and width, must be a row of SITES
-#      below, and every row must be a site. A site's scalar must be a
-#      constant: a name make_constants() fills or vbcast() broadcasts, and
+#      below, and each row must be as many sites as it says. A site's scalar
+#      must be a constant: a name make_constants() fills or vbcast() broadcasts, and
 #      never one bcast_sys() fills, which holds one value a SYSTEM. Its
 #      result must not be its scalar, which is the door's read-once rule
 #      made moot. A constant left on a plain call must be one of the kinds
 #      this parcel leaves, each of which is printed: a divide, a compare, or
 #      a site in dtnew_*() and choose_timestep(), which are nobody's this
 #      round. Anything else is a site the conversion missed.
-#      And each helper must take today's call with the route off, count the
-#      fallback, and call vrun_k() only with the route on, with no site
-#      calling vrun_k() itself. Its fallback copies element 0 into scratch.
-#      So a site through it would cost the default route that copy, and would
-#      blind the comparison below, and no run could tell: the bits, the counts
-#      and the bytes are the same either way.
+#      And each helper must be exactly its two statements: today's call on its
+#      own arguments with the route off, counting the fallback, then vrun_k(),
+#      with no site calling vrun_k() itself. Its fallback copies element 0 into
+#      scratch. So a site through it, or a helper that copied first, would
+#      cost the default route that copy and blind the comparison below, and no
+#      run could tell: the bits, the counts and the bytes are the same either
+#      way. That is why the text is held whole (V5's H4, H6 and H7, 2026-11-06).
 #   2. THE MATRIX. Every problem, at every format, on both engines and both
 #      forms of the arithmetic, on three routes: default, forced off and
 #      forced on.
@@ -67,9 +68,10 @@
 #        - The members. Forced on, each system must equal itself run alone
 #          (--member k), where element 0 is its own. This one also holds
 #          what the two routes share.
-#      Nothing else in the suite can see it. Every other leg takes today's
-#      route, which stays right under this defect, so this is the only gate
-#      that runs an ensemble with the route forced on.
+#      Only a run with the route forced on can see it, because today's route
+#      stays right under this defect. check_seams forces it on an adaptive
+#      ensemble and fails DTDB, DTB and RB's powers. It never runs --engine
+#      loop --arith fma with the route on, so D1B and D2B have this gate alone.
 #      The case that exists for the trap must SHOW its systems' steps
 #      differing, and a mixed attempt. The fixed-step ensemble must show them
 #      equal: it is the inert case (METHOD.md 5), there so that it is not
@@ -86,6 +88,16 @@
 # Neither oracle sees a site given the wrong constant, which both routes and
 # E = 1 share. The suite's REBOUND gates do, because they run the same sites
 # on today's route.
+#
+# Stated, not closed: a route that says it is on and is not passes every tier.
+# A vrun_k() whose on branch ran today's cft_run, still counting route_calls and
+# tallying one element, gives the same records, the same `# route` line and the
+# same fall in staged_bytes, in either half or both. On software both routes
+# compute the same bits, and calls= and staged_bytes are the door's own tallies,
+# not anything libcft reports, so nothing here reads whether cft_run_ex ran.
+# (V5's m4_lie_both, measured on 2026-11-06: check_scalar --quick --library 32 ok,
+# check_door 50 ok. It is P1's m4_lie for this route. The M4 forms this gate
+# does fail leave a counter or the route line honest.)
 #
 # A device without the bit refuses the route forced on, here as in
 # check_gravity.py, so this gate needs one that publishes it.
@@ -117,8 +129,8 @@ NODE = range(1, NODES + 1)
 TRIANGLE = sum(LEVELS - 1 - m for m in range(LEVELS))     # j > m over the levels: KD's and KBIN's pairs
 
 # Every site, by the function it is in and the constant it passes:
-#   (function, constant, width, arithmetic, engine, once per, calls then)
-# The arithmetic is rebound, fma or both. The engine is loop, or both where
+#   (function, constant, width, arithmetic, engine, once per, calls then, sites)
+# The last is how many call sites in the source make those calls. The arithmetic is rebound, fma or both. The engine is loop, or both where
 # the code is outside the programs. library is the library half alone, which
 # has no program engine, and standalone is the standalone program alone, on
 # either engine.
@@ -127,22 +139,22 @@ TRIANGLE = sum(LEVELS - 1 - m for m in range(LEVELS))     # j > m over the level
 #   per predict    an attempt that predicts the next step's e and b
 #   per energy     an energy evaluation, one per sample
 SITES = (
-    ("predict_positions", "KHF", "N3", "fma", "loop", "pass", NODES * LEVELS),
-    ("predict_positions", "KNUM", "N3", "rebound", "loop", "pass", NODES * LEVELS),
-    ("predict_positions", "KH", "N3", "rebound", "loop", "pass", NODES * (LEVELS + 2)),      # each level, dt*h/2 and dt*h
-    ("correct", "KRINV", "N3", "fma", "loop", "pass", sum(NODE)),                            # n of them at node n
-    ("correct", "KC", "N3", "both", "loop", "pass", sum(n - 1 for n in NODE)),               # n - 1
-    ("predict_next_step_vec", "KBIN", "N3", "both", "loop", "predict", TRIANGLE),
-    ("predict_velocities", "KVNUM", "N3", "rebound", "library", "pass", NODES * LEVELS),
-    ("predict_velocities", "KH", "N3", "rebound", "library", "pass", NODES * (LEVELS + 1)),  # each level and dt*h
-    ("step_attempt", "KD", "N3", "both", "both", "attempt", TRIANGLE),
-    ("step_attempt", "KH", "N3", "fma", "both", "attempt", NODES),                           # fl(dt h_n)
-    ("step_attempt", "KHALF", "N3", "fma", "both", "attempt", NODES),                        # and its half
-    ("step_attempt", "KPOSR", "N3", "fma", "both", "attempt", LEVELS + 1),                   # with a0's
-    ("step_attempt", "KVELR", "N3", "fma", "both", "attempt", LEVELS),
-    ("energy_all", "halfb", "NB", "both", "standalone", "energy", 1),
-    ("energy_all", "G", "P", "both", "standalone", "energy", 1),
-    ("energy_all", "K0", "E", "both", "standalone", "energy", 1),
+    ("predict_positions", "KHF", "N3", "fma", "loop", "pass", NODES * LEVELS, 2),
+    ("predict_positions", "KNUM", "N3", "rebound", "loop", "pass", NODES * LEVELS, 2),
+    ("predict_positions", "KH", "N3", "rebound", "loop", "pass", NODES * (LEVELS + 2), 3),      # each level, dt*h/2 and dt*h
+    ("correct", "KRINV", "N3", "fma", "loop", "pass", sum(NODE), 2),                            # n of them at node n
+    ("correct", "KC", "N3", "both", "loop", "pass", sum(n - 1 for n in NODE), 1),               # n - 1
+    ("predict_next_step_vec", "KBIN", "N3", "both", "loop", "predict", TRIANGLE, 1),
+    ("predict_velocities", "KVNUM", "N3", "rebound", "library", "pass", NODES * LEVELS, 2),
+    ("predict_velocities", "KH", "N3", "rebound", "library", "pass", NODES * (LEVELS + 1), 2),  # each level and dt*h
+    ("step_attempt", "KD", "N3", "both", "both", "attempt", TRIANGLE, 1),
+    ("step_attempt", "KH", "N3", "fma", "both", "attempt", NODES, 1),                           # fl(dt h_n)
+    ("step_attempt", "KHALF", "N3", "fma", "both", "attempt", NODES, 1),                        # and its half
+    ("step_attempt", "KPOSR", "N3", "fma", "both", "attempt", LEVELS + 1, 2),                   # with a0's
+    ("step_attempt", "KVELR", "N3", "fma", "both", "attempt", LEVELS, 1),
+    ("energy_all", "halfb", "NB", "both", "standalone", "energy", 1, 1),
+    ("energy_all", "G", "P", "both", "standalone", "energy", 1, 1),
+    ("energy_all", "K0", "E", "both", "standalone", "energy", 1, 1),
 )
 ENGINES = (("loop", "rebound"), ("loop", "fma"), ("program", "fma"))
 WORKERS = 1 if os.environ.get("CFT_REBOUND_ARTIFACT") else 4      # on a card the runs go one at a time
@@ -150,9 +162,14 @@ WORKERS = 1 if os.environ.get("CFT_REBOUND_ARTIFACT") else 4      # on a card th
 # The parts of the source this recount does not read: the door's own
 # wrappers and their self-test, and the reference gravity that every record
 # before P1 was made with, which --door-selftest holds gravity to.
-# The helpers: each one's plain call with the route off, its mask with the
-# route on, and which of its arguments is the constant.
-HELPERS = {"vmulk": ("vmul", "2u", 2), "vfmak": ("vfma", "2u", 2), "vkmul": ("vmul", "1u", 1), "vaddk": ("vadd", "4u", 2)}
+# The helpers, whole: each one's parameters, today's call with the route off,
+# vrun_k()'s arguments with it on, and which argument at a site is the constant.
+HELPERS = {
+    "vmulk": ("V d, const V a, const V k, size_t n", "vmul(d, a, k, n)", 'CFT_MUL, d, a, k, NULL, n, 2u, "mul"', 2),
+    "vfmak": ("V d, const V a, const V k, const V c, size_t n", "vfma(d, a, k, c, n)", 'CFT_FMA, d, a, k, c, n, 2u, "fma"', 2),
+    "vkmul": ("V d, const V k, const V b, size_t n", "vmul(d, k, b, n)", 'CFT_MUL, d, k, b, NULL, n, 1u, "mul"', 1),
+    "vaddk": ("V d, const V a, const V k, size_t n", "vadd(d, a, k, n)", 'CFT_ADD, d, a, NULL, k, n, 4u, "add"', 2),
+}
 NOT_SITES = {"vrun_k", "door_k", "door_selftest", "gravity_reference"} | set(HELPERS)
 # energy_all()'s 1/2, a quotient of two constants broadcast one line above its site.
 LOCAL_CONSTANTS = {"energy_all": {"halfb"}}
@@ -243,6 +260,10 @@ def base(token):
     return m.group(1) if m else ""
 
 
+def squeezed(text):
+    return re.sub(r"\s+", "", text)
+
+
 def recount(path):
     """Everything the source says about the sites."""
     with open(path, encoding="utf-8") as f:
@@ -261,15 +282,13 @@ def recount(path):
     per_system = set(re.findall(r"\bbcast_sys\(\s*(\w+)\s*,", src))
     sites, left, bad = [], [], []
     aliased = 0
-    # Each helper: today's call with the route off, and vrun_k() only with it on.
-    for name, (plain, mask, _) in HELPERS.items():
-        body = bodies.get(name, "")
-        call = re.search(r"\bvrun_k\(([^;]*)\);", body)
-        off_branch = re.search(r"if\s*\(\s*!route_on\[ROUTE_SCALAR\]\s*\)\s*\{\s*route_fallbacks\[ROUTE_SCALAR\]\+\+;\s*%s\([^;]*\);\s*return;\s*\}" % plain, body)
-        if not off_branch or not call or mask not in call.group(1) or body.find("vrun_k(") < off_branch.end():
-            bad.append("%s() does not take %s() and count one fallback with the route off, then vrun_k() with mask %s: "
-                       "a site through it would copy into scratch on the default route, and read element 0 on both"
-                       % (name, plain, mask))
+    # Each helper, whole, whitespace aside: its parameters and two statements.
+    for name, (params, plain, door, _) in HELPERS.items():
+        head = re.search(r"\bstatic\s+void\s+%s\s*\(([^)]*)\)\s*\{" % name, src)
+        want = "{ if (!route_on[ROUTE_SCALAR]){ route_fallbacks[ROUTE_SCALAR]++; %s; return; } vrun_k(%s); }" % (plain, door)
+        if not head or squeezed(head.group(1)) != squeezed(params) or squeezed(bodies.get(name, "")) != squeezed(want):
+            bad.append("%s() is not (%s) %s: anything else can copy on the default route, or read element 0 on both, "
+                       "and no run would show it" % (name, params, want))
     for name, off, body in funcs:
         if name in NOT_SITES:
             continue
@@ -284,7 +303,7 @@ def recount(path):
                            "must be today's call, through a helper" % (name, line))
                 continue
             if call in HELPERS:
-                pos = HELPERS[call][2]
+                pos = HELPERS[call][3]
                 k, d, width = args[pos], args[0], args[-1]
                 b = base(k)
                 konst = alias.get(b, b)
@@ -615,18 +634,22 @@ def main():
     print("check_scalar: the recount, from %s" % os.path.relpath(args.source, root))
     sites, left, bad, consts, per_system, aliased = recount(args.source)
     have = collections.Counter((s[0], s[1], s[2]) for s in sites)
-    model = {(r[0], r[1], r[2]) for r in SITES}
-    missing = sorted(model - set(have))
-    strange = sorted(set(have) - model)
-    held = not bad and not missing and not strange
-    verdict(held, ("%d sites: every site is a row of the gate's table, each scalar a constant and never its own result, and no "
-                   "constant left on a call that could take it" if held else "%d sites, and the recount found:")
+    model = {(r[0], r[1], r[2]): r[7] for r in SITES}
+    missing = sorted(set(model) - set(have))
+    strange = sorted(set(have) - set(model))
+    uneven = sorted(k for k in set(model) & set(have) if have[k] != model[k])
+    held = not bad and not missing and not strange and not uneven
+    verdict(held, ("%d sites: each row of the gate's table as many as it says, each scalar a constant and never its own result, "
+                   "each helper its two statements, and no constant left on a call that could take it" if held
+                   else "%d sites, and the recount found:")
             % len(sites) + " (%d constants; per system, so never a scalar: %s; %d sites' results alias their vector operand, "
-            "which cft_run allows)%s%s%s"
+            "which cft_run allows)%s%s%s%s"
             % (len(consts), ", ".join(sorted(per_system)) or "none", aliased,
                "".join("\n         " + b for b in bad),
                "".join("\n         the gate's table has %s in %s at %s, and the source does not" % (k, f, w) for f, k, w in missing),
-               "".join("\n         the source has %s in %s at %s, and the gate's table does not" % (k, f, w) for f, k, w in strange)))
+               "".join("\n         the source has %s in %s at %s, and the gate's table does not" % (k, f, w) for f, k, w in strange),
+               "".join("\n         the source has %d sites of %s in %s at %s, and the gate's table says %d" % (have[(f, k, w)], k, f, w, model[(f, k, w)])
+                       for f, k, w in uneven)))
     for engine, arith in ENGINES:
         rows = rows_for(engine, arith)
         n = sum(have[(r[0], r[1], r[2])] for r in rows)
