@@ -420,11 +420,17 @@ leg_p4_program() {
 
 leg_p3_identity() {
     local fmt
-    grep -q cft_identity src/cft_ias15_fields.h 2>/dev/null || { log "FAIL this build is not P3's: no cft_identity field"; return; }
+    grep -q CFT_FD_IDENTITY src/cft_ias15_fields.h 2>/dev/null || { log "FAIL this build is not P3's: no identity field"; return; }
     for fmt in fp64 fp128 fp256; do
         CFT_REBOUND_ARTIFACT=$REV8A build/gate_real --$fmt > "$1/gate_real-$fmt.txt" 2>&1
-        log "gate_real --$fmt on REV8A (rc=$?): $(tally "$1/gate_real-$fmt.txt"); $(grep -m1 -o 'identity "[^"]*"' "$1/gate_real-$fmt.txt" | cut -c1-240)"
+        log "gate_real --$fmt on REV8A (rc=$?): $(tally "$1/gate_real-$fmt.txt"); $(last "$1/gate_real-$fmt.txt" 1)"
     done
+    # gate_real holds the words to a 64-digit digest, and prints them only
+    # when a run resumes. So one save and resume puts them in the log,
+    # beside the image file's own digest.
+    CFT_REBOUND_ARTIFACT=$REV8A build/gate_real --fp128 --save "$1/ckpt.bin" > "$1/save.txt" 2>&1
+    CFT_REBOUND_ARTIFACT=$REV8A build/gate_real --fp128 --resume "$1/ckpt.bin" > /dev/null 2> "$1/resume.txt"
+    log "a card-written archive (rc=$?): $(grep -m1 -o 'written on "[^"]*"' "$1/resume.txt" | cut -c1-220); the image file's sha256 $(sha256sum "$REV8A" | cut -c1-64)"
 }
 
 leg_p2_corrector() {
