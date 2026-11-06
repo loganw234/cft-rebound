@@ -7,7 +7,7 @@
  * is on, through the door's vrun_k(), and is today's call on the whole
  * vector where it is off (src/ias15_cft.c, vmulk() and vfmak()). The family
  * is opt-in: unforced it is off, by=opt_in, even where the device publishes
- * the bit, because no card has measured it. So every case in check_dropin
+ * the bit, because a card measured it neutral. So every case in check_dropin
  * holds the sites to REBOUND's own ias15 on the route this process opened
  * with: today's in the suite's own run, and the new one in
  * tools/check_scalar.py --library, which runs this whole suite with the

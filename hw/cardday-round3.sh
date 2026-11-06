@@ -128,10 +128,9 @@
 #                card-written archive, whose identity names the image.
 #   p2-corrector P2's tools/check_corrector.py on the card, its runs one
 #                at a time.
-#   p2-bench     A bench with the device test forced off, then on. The
-#                second is also the merged tree's default route on a
-#                card, so it is the round's "after" beside split-rev8a's
-#                "before".
+#   p2-bench     A bench with the device test forced off, then on, each
+#                with the other routes at their default. Beside
+#                split-rev8a it is the round's "before" and "after".
 #   p2-replay    A schedule recorded on the card and replayed there, and
 #                one recorded on the software backend and replayed on
 #                the card, each held to the card's recording.

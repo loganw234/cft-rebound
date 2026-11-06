@@ -85,7 +85,8 @@ import check_checkpoint as CC  # noqa: E402
 # The routes a merged parcel carries. Add a name here when its parcel
 # merges.
 ROUTES = ["reduce_seg", "indexed", "pair_gather", "scalar"]
-# What parts 2 and 3 force: the routes auto leaves off.
+# What parts 2 and 3 force. reduce_seg is opt-in too, but a replay computes
+# no exit test, so forced on it carries nothing; check_corrector holds it.
 OPT_IN = ("indexed", "pair_gather", "scalar")
 SEQUENCES = CC.SEQUENCES
 # What a route may not move, and a replay must keep, run and system alike.

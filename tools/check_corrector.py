@@ -7,9 +7,9 @@
 #
 #   python tools/check_corrector.py [--build build] [--exe ias15_cft]
 #                                   [--formats fp64,fp128,fp256] [--quick]
-#                                   [--keep DIR]
+#                                   [--library] [--keep DIR]
 #   (`make check-quick` and `make check-light` pass --quick: binary64 only,
-#    and shorter runs)
+#    and shorter runs. Every tier passes --library.)
 #
 # What it asserts, and what lets each assertion fail:
 #   1. --corrector-selftest at every format. pc_error() on both routes
@@ -64,6 +64,19 @@
 #      every other field the key carries, read from the key - is refused by
 #      name, and a field that no case moves fails by name (V2's M3, M3s,
 #      M3v, M3m and M3dt).
+#   7. --library: the drop-in's whole suite (check_dropin --light) with the
+#      route forced on passes against REBOUND, and tools/cases_corrector.c
+#      reads the route on by=forced through ias15_engine_route(). The route
+#      is opt-in, so this is the one run of the suite that takes the
+#      device's test in the library half, and the only state in which a
+#      library half silently on today's route (M4) differs from a correct
+#      one.
+#
+# Stated, not closed: a route that says it is on and is not passes every
+# tier. A route whose on branch runs the host's loop while counting calls
+# gives the same bits and the same counters, because route_calls and
+# staged_bytes are the door's own tallies (V5's m4_lie, as P1's and P5's).
+# Nothing derives this route's rise in staged_bytes.
 #
 # Each run works in <build>/corrector/<pid>, so two runs sharing a --build
 # directory do not clobber each other; a passing run removes it, a failing
@@ -82,10 +95,10 @@ from concurrent.futures import ThreadPoolExecutor
 here = os.path.dirname(os.path.abspath(__file__))
 root = os.path.dirname(here)
 
-# check_door.py's eight, and program_calls: the card-day normalisers keep
-# it, so a route must not move it either (the normalabs run is not one)
+# check_door.py's: the card-day normalisers keep program_calls, so a route
+# must not move it either (the normalabs run is not one)
 COUNTERS = ("steps_done", "iterations_max_exceeded", "steps_rejected", "mean_pc_iterations",
-            "max_pc_iterations", "flags_seen", "calls", "divsqrt_calls", "program_calls")
+            "max_pc_iterations", "flags_seen", "calls", "divsqrt_calls", "program_calls", "nextstep_calls")
 SYSTEM = ("steps_done", "iterations_max_exceeded", "steps_rejected", "mean_pc_iterations", "max_pc_iterations")
 ok_all = True
 
@@ -195,7 +208,7 @@ def main():
         if not m or not s:
             verdict(False, "--corrector-selftest did not run (rc %d): %s" % (rc, (err or out)[-400:].strip()))
             continue
-        route, env, by = m.group(1), m.group(4), m.group(3)
+        route, state, env, by = m.group(1), m.group(2), m.group(4), m.group(3)
         same, differ, skipped, fbad, cbad, cok, cn = (int(g) for g in s.groups())
         for line in out.splitlines():
             if line.startswith(("DIFF ", "COUNT ", "CONTROL FAILED", "skip ")):
@@ -216,9 +229,9 @@ def main():
             published = False
             print("  note %s: the device does not publish it, so only today's route was compared" % route)
         else:
-            verdict(skipped == 0 and (by == "opt_in" or not software),
-                    "%s by=%s, and nothing left uncompared%s"
-                    % (route, by, " (the software backend publishes every bit, and auto leaves this route off)"
+            verdict(skipped == 0 and ((state == "off" and by == "opt_in") or not software),
+                    "%s=%s by=%s, and nothing left uncompared%s"
+                    % (route, state, by, " (the software backend publishes every bit, and auto leaves this route off)"
                        if software else ""))
             g = re.search(r"^corrector image (\S+) sha256=([0-9a-f]{64})$", out, re.M)
             name = (g.group(1) + ".cftp") if g else None

@@ -182,13 +182,13 @@ static int engine_check_format(const char *artifact){
  *     (lead.md, 16:55): the same bits in all four combinations, but each
  *     made a step 22-40% slower at 64 to 512 bodies, and both together
  *     47-74%. Under auto a card publishing CFT_SEQ_FEAT_INDEXED would
- *     have taken both, so the owner made them opt-in. The scalar family is
- *     opt-in from the start, because no card has measured it (ROUND3.md,
- *     P5). The reduce_seg family is opt-in too. Measured on the same tile
- *     on 2026-11-06 (lead.md, 09:06): the same bits, and the device's exit
- *     test slower than the host's loop on all 12 rows of the bench, by a
- *     few percent. So today auto takes none of the four, and a family
- *     leaves this list when a card measures it winning;
+ *     have taken both, so the owner made them opt-in. The reduce_seg family
+ *     is opt-in too. Measured on the same tile on 2026-11-06 (lead.md,
+ *     09:06): the same bits, and the device's exit test slower than the
+ *     host's loop on all 12 rows of the bench, by a few percent. The scalar
+ *     family (ROUND3.md, P5) measured neutral there (lead.md, 11:15). So
+ *     today auto takes none of the four, and a family leaves this list
+ *     when a card measures it winning;
  *   - CFT_REBOUND_ROUTE_<NAME>=off takes today's route whatever the
  *     device publishes. That is the fallback's own gate.
  *   - CFT_REBOUND_ROUTE_<NAME>=on demands the new route, and is how an
@@ -721,7 +721,9 @@ static DOOR_UNUSED void vrun_ix(cft_op op, V d, const V a, const uint32_t *ia, s
 
 /* d[s] = op over a[s*seg] .. a[(s+1)*seg - 1], for s < n/seg. b is as
  * cft_reduce's: NULL except for the two-operand reductions. This goes
- * through cft_reduce_seg where the device publishes CFT_FEAT_REDUCE_SEG.
+ * through cft_reduce_seg where the route is on: asked for by
+ * CFT_REBOUND_ROUTE_REDUCE_SEG=on, on a device publishing
+ * CFT_FEAT_REDUCE_SEG, since the family is opt-in (engine_routes()).
  * Otherwise it issues one cft_reduce per segment. That IS
  * cft_reduce_seg's definition (cft.h: the same tree on each slice), so
  * the bits are the same by construction, and today's route costs n/seg
@@ -1689,8 +1691,8 @@ static void correct(int n){
  *     everywhere else - zero, subnormal, infinity, NaN - read off the
  *     encoding with integer instructions, so it raises nothing;
  *   - CFT_MAXALL over each system's L lanes, through the door's
- *     vreduce_seg(), which is cft_reduce_seg where the device publishes
- *     CFT_FEAT_REDUCE_SEG.
+ *     vreduce_seg(), which is cft_reduce_seg where the route is asked
+ *     for, on a device publishing CFT_FEAT_REDUCE_SEG.
  * A maximum over those values is REBOUND's exactly. A masked lane is +0
  * and cannot raise it; a system with no normal coordinate gets +0, which
  * is REBOUND's maxak = 0; and 754's maximum selects an operand, so over
@@ -1812,9 +1814,10 @@ static cft_status corrector_load(void){
 }
 
 /* Where the routes are decided, in main() and ias15_engine_open() alike.
- * A device that publishes CFT_FEAT_REDUCE_SEG but refuses the program
- * the route needs is refused here, by name, as a forced route the device
- * lacks is - not at the first corrector pass. */
+ * With the route forced on, a device that publishes CFT_FEAT_REDUCE_SEG
+ * but refuses the program the route needs is refused here, by name, as a
+ * forced route the device lacks is - not at the first corrector pass.
+ * Under auto the route is off, and no program is asked for. */
 static int corrector_open(const char *artifact){
     cft_status st;
     if (!route_on[ROUTE_REDUCE_SEG]) return 0;

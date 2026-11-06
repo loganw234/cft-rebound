@@ -4,11 +4,12 @@
  * The corrector's exit test through the drop-in (ROUND3.md, P2).
  *
  * The library half takes the exit test's route as the program does,
- * through the door: on a device that publishes CFT_FEAT_REDUCE_SEG - and
- * the software backend always does - pc_error()'s maxima are the
- * normalabs program and cft_reduce_seg, and every other case in this gate
- * already holds that route to REBOUND's own ias15, bit for bit. What no
- * other case can see is WHICH route ran, because the drop-in has no
+ * through the door. The route is opt-in: forced on, pc_error()'s maxima
+ * are the normalabs program and cft_reduce_seg, and tools/check_corrector.py
+ * --library runs this whole suite that way, which holds that route to
+ * REBOUND's own ias15, bit for bit, in every case. Unforced, every case
+ * holds today's. What no other case can see is WHICH route ran, because
+ * the drop-in has no
  * trailer. So this reads ias15_engine_route() around integrations of its
  * own, in each of REBOUND's four modes (INDIVIDUAL takes the route's
  * other shape), and asserts that the route the engine says it took is

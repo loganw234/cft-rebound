@@ -478,8 +478,8 @@ convention for a fixed step.
   - `auto`, the default, lets the device decide, except on an opt-in
     route. All four are opt-in today: they stay off under `auto`,
     saying `by=opt_in`. `indexed`, `pair_gather` and `reduce_seg` each
-    made a step slower on a card, and `scalar` is waiting for its
-    measurement (docs/VALIDATION.md).
+    made a step slower on a card, and `scalar` measured neutral
+    (docs/VALIDATION.md).
   - `off` always takes today's route; `on` demands the new one.
   - `on` against a device that does not publish the bit is refused by
     name, and so is a misspelled variable, with two exceptions.

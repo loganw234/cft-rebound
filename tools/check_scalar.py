@@ -8,7 +8,7 @@
 # value. With the scalar route on it goes to the library as ONE element,
 # through the door's vrun_k(). The route is opt-in (src/ias15_cft.c,
 # route_def[]): unforced it is off, by=opt_in, even where the device publishes
-# the bit, because no card has measured it, and each site is then today's
+# the bit, because a card measured it neutral, and each site is then today's
 # call on the whole vector (vmulk() and its kin). So nothing but a forced run
 # takes the new route, and every run here says which one it wants.
 #
