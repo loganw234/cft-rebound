@@ -80,8 +80,10 @@ COUNTERS = ("steps_done", "iterations_max_exceeded", "steps_rejected", "mean_pc_
 # gravity's switches (ROUND3.md, P1). On the rev8a tile each made a step
 # 22-40% slower at 64 to 512 bodies with the same bits (lead.md,
 # 2026-11-02 16:55), so the owner made them opt-in. The third is the scalar
-# family (P5), opt-in from the start because no card has measured it.
-OPT_IN = ("indexed", "pair_gather", "scalar")
+# family (P5), opt-in from the start because no card has measured it. The
+# fourth is the corrector's exit test (P2): on the same tile it was slower
+# than the host's loop on all 12 bench rows (lead.md, 2026-11-06 09:06).
+OPT_IN = ("indexed", "pair_gather", "scalar", "reduce_seg")
 # What each --door-refuse case must say, and which route it belongs to.
 # The cases themselves are read from the program's own refusal of an
 # unknown one.

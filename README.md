@@ -476,9 +476,10 @@ convention for a fixed step.
   each choose between a route libcft added for this port and the route
   the port already takes. The contract makes both give the same bits.
   - `auto`, the default, lets the device decide, except on an opt-in
-    route. `indexed` and `pair_gather` are opt-in: they stay off under
-    `auto`, saying `by=opt_in`, because each made a step slower on a
-    card (docs/VALIDATION.md).
+    route. All four are opt-in today: they stay off under `auto`,
+    saying `by=opt_in`. `indexed`, `pair_gather` and `reduce_seg` each
+    made a step slower on a card, and `scalar` is waiting for its
+    measurement (docs/VALIDATION.md).
   - `off` always takes today's route; `on` demands the new one.
   - `on` against a device that does not publish the bit is refused by
     name, and so is a misspelled variable, with two exceptions.

@@ -646,7 +646,7 @@ check: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_equivalence --mode full --input tools/check_equivalence.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_equivalence.py --build $(B)
 	$(GATE_CACHE) --leg check_program_engine --mode full --input tools/check_program_engine.py --input tools/check_equivalence.py --input tools/make_ensemble.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) -- $(PYTHON) tools/check_program_engine.py --build $(B)
 	$(GATE_CACHE) --leg check_door --mode full --input tools/check_door.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_door.py --build $(B)
-	$(GATE_CACHE) --leg check_corrector --mode full $(IN_CORRECTOR) -- $(PYTHON) tools/check_corrector.py --build $(B)
+	$(GATE_CACHE) --leg check_corrector --mode full $(IN_CORRECTOR) $(IN_DROPIN) -- $(PYTHON) tools/check_corrector.py --build $(B) --library
 	$(GATE_CACHE) --leg check_gravity --mode full $(IN_GRAVITY) $(IN_DROPIN) -- $(PYTHON) tools/check_gravity.py --build $(B) --library
 	$(GATE_CACHE) --leg check_scalar --mode full $(IN_SCALAR) -- $(PYTHON) tools/check_scalar.py --build $(B) --library
 	$(GATE_CACHE) --leg check_records --mode full --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B)
@@ -675,7 +675,7 @@ check-quick: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_equivalence --mode quick --input tools/check_equivalence.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_equivalence.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_program_engine --mode quick --input tools/check_program_engine.py --input tools/check_equivalence.py --input tools/make_ensemble.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) -- $(PYTHON) tools/check_program_engine.py --build $(B) --formats fp64
 	$(GATE_CACHE) --leg check_door --mode quick --input tools/check_door.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_door.py --build $(B) --formats fp64
-	$(GATE_CACHE) --leg check_corrector --mode quick $(IN_CORRECTOR) -- $(PYTHON) tools/check_corrector.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_corrector --mode quick $(IN_CORRECTOR) $(IN_DROPIN) -- $(PYTHON) tools/check_corrector.py --build $(B) --quick --library
 	$(GATE_CACHE) --leg check_gravity --mode quick $(IN_GRAVITY) $(IN_DROPIN) -- $(PYTHON) tools/check_gravity.py --build $(B) --quick --library
 	$(GATE_CACHE) --leg check_scalar --mode quick $(IN_SCALAR) -- $(PYTHON) tools/check_scalar.py --build $(B) --quick --library
 	$(GATE_CACHE) --leg check_records --mode quick --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B) --quick
@@ -707,7 +707,7 @@ check-light: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_equivalence --mode quick --input tools/check_equivalence.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_equivalence.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_program_engine --mode quick --input tools/check_program_engine.py --input tools/check_equivalence.py --input tools/make_ensemble.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) -- $(PYTHON) tools/check_program_engine.py --build $(B) --formats fp64
 	$(GATE_CACHE) --leg check_door --mode quick --input tools/check_door.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_door.py --build $(B) --formats fp64
-	$(GATE_CACHE) --leg check_corrector --mode quick $(IN_CORRECTOR) -- $(PYTHON) tools/check_corrector.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_corrector --mode quick $(IN_CORRECTOR) $(IN_DROPIN) -- $(PYTHON) tools/check_corrector.py --build $(B) --quick --library
 	$(GATE_CACHE) --leg check_gravity --mode quick $(IN_GRAVITY) $(IN_DROPIN) -- $(PYTHON) tools/check_gravity.py --build $(B) --quick --library
 	$(GATE_CACHE) --leg check_scalar --mode quick $(IN_SCALAR) -- $(PYTHON) tools/check_scalar.py --build $(B) --quick --library
 	$(GATE_CACHE) --leg check_records --mode quick --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B) --quick

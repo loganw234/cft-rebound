@@ -156,6 +156,7 @@ def main():
     ap.add_argument("--exe", default="ias15_cft")
     ap.add_argument("--formats", default="fp64,fp128,fp256")
     ap.add_argument("--quick", action="store_true", help="binary64 only, shorter runs")
+    ap.add_argument("--library", action="store_true", help="also run check_dropin --light with the route forced on")
     ap.add_argument("--keep", default=None, help="directory for schedules and ensembles, kept "
                     "(default <build>/corrector/<pid>, removed after a pass)")
     args = ap.parse_args()
@@ -215,9 +216,10 @@ def main():
             published = False
             print("  note %s: the device does not publish it, so only today's route was compared" % route)
         else:
-            verdict(skipped == 0 and (by == "device" or not software),
-                    "%s by=%s, and nothing left uncompared%s" % (route, by, " (the software backend publishes every bit)"
-                                                                  if software else ""))
+            verdict(skipped == 0 and (by == "opt_in" or not software),
+                    "%s by=%s, and nothing left uncompared%s"
+                    % (route, by, " (the software backend publishes every bit, and auto leaves this route off)"
+                       if software else ""))
             g = re.search(r"^corrector image (\S+) sha256=([0-9a-f]{64})$", out, re.M)
             name = (g.group(1) + ".cftp") if g else None
             verdict(g and name in pinned and pinned[name] == g.group(2),
@@ -644,6 +646,21 @@ def main():
     missing = sorted(fields - moved_all)
     verdict(fields and not missing, "every field of the run key is held by a case: %d of %d%s"
             % (len(fields) - len(missing), len(fields), " (UNHELD: %s)" % ", ".join(missing) if missing else ""))
+
+    # 7. The library half on the device route, forced on. The route is
+    # opt-in, so the suite's own check_dropin leg runs today's, and this is
+    # the one run that takes the device's test there. It is also the only
+    # state in which a library half silently on today's route differs from
+    # a correct one. tools/cases_corrector.c asserts the route and its counts.
+    if args.library and published:
+        print("check_corrector: the drop-in's suite with the exit test forced onto the device")
+        rc, out, err = run([os.path.join(args.build, "check_dropin" + exe), "--light"], {env: "on"})
+        maxima = [int(c) for c in re.findall(r"^\s+ok\s+.*%s=on by=forced.*carried this case's (\d+) maxima" % re.escape(route),
+                                             out, re.M)]
+        passed = "check_dropin: every case passed" in out
+        verdict(rc == 0 and passed and maxima and all(maxima),
+                "check_dropin --light, the exit test forced onto the device: rc %d, %s; %d cases carried %d maxima on it"
+                % (rc, "every case passed" if passed else "NOT every case passed", len(maxima), sum(maxima)))
 
     if ok_all and not args.keep:
         shutil.rmtree(work, ignore_errors=True)

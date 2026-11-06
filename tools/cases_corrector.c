@@ -24,12 +24,14 @@
  *   - CFT_REBOUND_ROUTE_REDUCE_SEG=on or =off: that state, by=forced;
  *   - otherwise CFT_REBOUND_HIDE_FEATURES naming reduce_seg: off,
  *     by=hidden;
- *   - otherwise the software backend: on, by=device. It publishes every
- *     bit, so off there - whatever its by= - is a door that fell back
- *     without saying so (V2's M4, 2026-11-02);
- *   - otherwise a card: on by=device, or off by=absent.
- * Accepting whichever route opened would pass a library half silently on
- * today's route. tools/check_corrector.py runs both routes explicitly, and
+ *   - otherwise the software backend: off, by=opt_in. It publishes every
+ *     bit, and the route is opt-in (src/ias15_cft.c, engine_routes());
+ *   - otherwise a card: off by=opt_in, or off by=absent.
+ * `off by=device` is never right anywhere: a door that fell back without
+ * saying so (V2's M4, 2026-11-02). Accepting whichever route opened would
+ * pass a library half silently on today's route, and with the route
+ * opt-in only a run that forces it on can tell: tools/check_corrector.py
+ * --library runs this case so. It also runs both routes explicitly, and
  * derives each count, through the program's `# route` lines.
  *
  * Its steps are a count, scaled under --light: the property needs one
@@ -74,8 +76,8 @@ static void expected(int *on, const char **by, const char **by_card_off){
     *by_card_off = NULL;
     if (want && (!strcmp(want, "on") || !strcmp(want, "off"))){ *on = !strcmp(want, "on"); *by = "forced"; }
     else if (hide && list_names(hide, route)){ *on = 0; *by = "hidden"; }
-    else if (!art || !art[0]){ *on = 1; *by = "device"; }
-    else { *on = 1; *by = "device"; *by_card_off = "absent"; }
+    else if (!art || !art[0]){ *on = 0; *by = "opt_in"; }
+    else { *on = 0; *by = "opt_in"; *by_card_off = "absent"; }
 }
 
 static void case_route(const char *label, const struct body *bs, size_t n, double dt, double epsilon,

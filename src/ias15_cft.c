@@ -184,7 +184,11 @@ static int engine_check_format(const char *artifact){
  *     47-74%. Under auto a card publishing CFT_SEQ_FEAT_INDEXED would
  *     have taken both, so the owner made them opt-in. The scalar family is
  *     opt-in from the start, because no card has measured it (ROUND3.md,
- *     P5);
+ *     P5). The reduce_seg family is opt-in too. Measured on the same tile
+ *     on 2026-11-06 (lead.md, 09:06): the same bits, and the device's exit
+ *     test slower than the host's loop on all 12 rows of the bench, by a
+ *     few percent. So today auto takes none of the four, and a family
+ *     leaves this list when a card measures it winning;
  *   - CFT_REBOUND_ROUTE_<NAME>=off takes today's route whatever the
  *     device publishes. That is the fallback's own gate.
  *   - CFT_REBOUND_ROUTE_<NAME>=on demands the new route, and is how an
@@ -208,7 +212,7 @@ static const struct {
 } route_def[N_ROUTES] = {
     { "scalar",     "CFT_REBOUND_ROUTE_SCALAR",     CFT_SEQ_FEAT_SCALAR,  "CFT_SEQ_FEAT_SCALAR (CAPS2[7], ABI 0.12)", 1 },
     { "indexed",    "CFT_REBOUND_ROUTE_INDEXED",    CFT_SEQ_FEAT_INDEXED, "CFT_SEQ_FEAT_INDEXED (CAPS2[9], ABI 0.14)", 1 },
-    { "reduce_seg", "CFT_REBOUND_ROUTE_REDUCE_SEG", CFT_FEAT_REDUCE_SEG,  "CFT_FEAT_REDUCE_SEG (CAPS2[8], ABI 0.13)", 0 },
+    { "reduce_seg", "CFT_REBOUND_ROUTE_REDUCE_SEG", CFT_FEAT_REDUCE_SEG,  "CFT_FEAT_REDUCE_SEG (CAPS2[8], ABI 0.13)", 1 },
     /* Gravity's second switch (ROUND3.md, P1): who gathers the pair
      * program's six inputs, the device through a table or the host. The
      * first is `indexed`, which carries gravity's accumulate fold. The two
