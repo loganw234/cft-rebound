@@ -577,9 +577,9 @@ static void vrun_k(cft_op op, V d, const V a, const V b, const V c, size_t n,
 
 /* A constant as ONE element, in the position vmul() and vfma() call b.
  * The K in the name is a promise about k: it is the same for every lane
- * of every system. So it may be a K vector of make_constants(), or H, and
- * never a vector bcast_sys() fills. DTB, DTDB and RB hold one value a
- * SYSTEM, and D1B and D2B are built from DTB. With one system, or systems
+ * of every system. So it may be a K vector, or H, which is one, and never
+ * a vector bcast_sys() fills. DTB, DTDB and RB hold one value a SYSTEM,
+ * and D1B and D2B are built from DTB. With one system, or systems
  * that happen to share a step, each of them looks exactly like a scalar.
  * In any other ensemble element 0 is system 0's step, applied to every
  * system.

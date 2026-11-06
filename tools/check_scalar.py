@@ -133,7 +133,7 @@ SITES = (
     ("energy_all", "K0", "E", "both", "standalone", "energy", 1),
 )
 ENGINES = (("loop", "rebound"), ("loop", "fma"), ("program", "fma"))
-WORKERS = 4
+WORKERS = 1 if os.environ.get("CFT_REBOUND_ARTIFACT") else 4      # on a card the runs go one at a time
 
 # The parts of the source this recount does not read: the door's own
 # wrappers and their self-test, and the reference gravity that every record
@@ -242,7 +242,7 @@ def recount(path):
     consts = set()
     for fn in ("make_constants", "force_constants"):
         consts |= set(re.findall(r"\b([A-Z]\w*)(?:\[[^\]]*\])*\s*=[^=;][^;]*?\b(?:kderived|kint|kdec|valloc)\(", bodies[fn]))
-    consts |= {n for n in re.findall(r"\bvbcast\(\s*(\w+)", src) if n[0].isupper()}
+    consts |= {n for n in re.findall(r"\bvbcast\(\s*(\w+)\s*[,\[]", src) if n[0].isupper()}
     per_system = set(re.findall(r"\bbcast_sys\(\s*(\w+)\s*,", src))
     sites, left, bad = [], [], []
     aliased = 0
@@ -529,7 +529,9 @@ def check_case(cft, fmt, engine, arith, case, env_name, want_default, work, prog
                 continue
             same += 1
         said.append("%d of %d systems equal themselves run alone, forced on" % (same, E))
-    said.append("the route carried %d calls and staged_bytes fell by %d, both as derived" % (calls, s_off - s_on))
+    # A failing line says what the run did, never the claim it failed.
+    derived = calls == want_calls and falls == want_calls and s_off - s_on == want_fall
+    said.append("the route carried %d calls and staged_bytes fell by %d%s" % (calls, s_off - s_on, ", both as derived" if derived else ""))
     return bad, "; ".join(said)
 
 
@@ -592,11 +594,12 @@ def main():
     model = {(r[0], r[1], r[2]) for r in SITES}
     missing = sorted(model - set(have))
     strange = sorted(set(have) - model)
-    verdict(not bad and not missing and not strange,
-            "%d sites: every site is a row of the gate's table, each scalar a constant and never its own result, and no "
-            "constant left on a call that could take it (%d constants; per system, so never a scalar: %s; %d sites' results "
-            "alias their vector operand, which cft_run allows)%s%s%s"
-            % (len(sites), len(consts), ", ".join(sorted(per_system)) or "none", aliased,
+    held = not bad and not missing and not strange
+    verdict(held, ("%d sites: every site is a row of the gate's table, each scalar a constant and never its own result, and no "
+                   "constant left on a call that could take it" if held else "%d sites, and the recount found:")
+            % len(sites) + " (%d constants; per system, so never a scalar: %s; %d sites' results alias their vector operand, "
+            "which cft_run allows)%s%s%s"
+            % (len(consts), ", ".join(sorted(per_system)) or "none", aliased,
                "".join("\n         " + b for b in bad),
                "".join("\n         the gate's table has %s in %s at %s, and the source does not" % (k, f, w) for f, k, w in missing),
                "".join("\n         the source has %s in %s at %s, and the gate's table does not" % (k, f, w) for f, k, w in strange)))
