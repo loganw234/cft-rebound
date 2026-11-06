@@ -15,7 +15,9 @@
 # device's gather runs only where a variable asks for it.
 #
 #   python tools/check_gravity.py [--build build] [--quick] [--library]
-#   (`make check` passes --library; check-quick and check-light pass --quick)
+#   (`make check` passes --library; check-quick and check-light pass --quick
+#   --library. The routes are opt-in, so --library is the one leg in any tier
+#   that can see a library half silently on today's route.)
 #
 # What it asserts, and what lets each assertion fail:
 #   1. The programs this binary carries are the ones programs/out/ holds,
