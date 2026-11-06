@@ -200,11 +200,9 @@ Nothing is vendored by hand.
     src/cft_ias15_state.h    the width helper, and the include that reaches the
                              state struct in cft_ias15.h
     src/cft_archive.h/.c     Simulationarchive: the cft_ fields, the probe, the load
-    src/cft_ias15_fields.h/.c  the ONE definition of the field descriptors, and
-                             CFT_N_BLOBS - a literal beside the list it
-                             counts, checked against it by the selftest.
-                             CFT_N_ALIAS_BLOBS and CFT_N_SCALARS are two
-                             more on the same terms
+    src/cft_ias15_fields.h/.c  the ONE definition of the field descriptors.
+                             CFT_N_BLOBS, CFT_N_ALIAS_BLOBS and CFT_N_SCALARS
+                             are derived from the lists they count
     tests/cft_shim_stub.c    a stand-in integrator, for four of the archive gates
     tests/gate_restart.c     gate 1: checkpoint and restart, bit for bit
     tests/gate_write.c       gate 2a: write a binary128 archive, and record the
@@ -220,8 +218,18 @@ Nothing is vendored by hand.
     tools/make_problems.py   the problems as exact binary64 bit patterns
     tools/make_ensemble.py   E perturbed copies of a problem as one ensemble file
     tools/make_nbody.py      a deterministic N-body problem of any size
+    tools/embed_programs.py  compiles sequencer images into the binary, for the
+                             library half, which loads nothing from disk
     tools/check_equivalence.py     the gate: binary64 port == REBOUND, bit for bit
     tools/check_program_engine.py  the gate: programs == host loop, bit for bit
+    tools/check_door.py            the gate: each route against a reference, and
+                                   every misuse refused by name
+    tools/check_corrector.py       the gate: the device's exit test == the host's,
+                                   and a replayed schedule == its recording
+    tools/check_gravity.py         the gate: gravity's routes, every combination,
+                                   the same record
+    tools/check_seams.py           the gate: routes across a checkpoint, under a
+                                   replay, and under the step-control program
     tools/check_ensemble.py        the gate: ensemble == its members run alone, bit for bit
     tools/check_records.py         the gate: the committed records, recomputed, bit for bit
     tools/check_archive.py         the gates: an archive round trip, and both readers
@@ -238,7 +246,7 @@ Nothing is vendored by hand.
     tools/state_to_problem.py      a record's sample as a problem file, bit for bit
     tools/sweep.py           the precision-versus-error measurement
     tools/tabulate.py        its tables and figure
-    programs/*.cfta          GENERATED: 27 orbit-sequencer programs
+    programs/*.cfta          GENERATED: 66 orbit-sequencer programs
     data/problems/           kepler.txt (e = 1/2), kepler_e09.txt, kepler_e099.txt,
                              pythagorean.txt (Burrau's problem), outer.txt
     data/ias15_constants.json
@@ -463,12 +471,15 @@ convention for a fixed step.
 - `--format fp64|fp128|fp256`; `--artifact PATH` opens a tile instead
   of the software backend, and `$CFT_REBOUND_ARTIFACT` is the same
   thing for a program that takes no flag of its own.
-- `$CFT_REBOUND_ROUTE_SCALAR`, `$CFT_REBOUND_ROUTE_INDEXED` and
-  `$CFT_REBOUND_ROUTE_REDUCE_SEG` each choose between a route libcft
-  added for this port and the route the port already takes. The
-  contract makes both give the same bits.
-  - `auto`, the default, lets the device decide; `off` always takes
-    today's route; `on` demands the new one.
+- `$CFT_REBOUND_ROUTE_SCALAR`, `$CFT_REBOUND_ROUTE_INDEXED`,
+  `$CFT_REBOUND_ROUTE_REDUCE_SEG` and `$CFT_REBOUND_ROUTE_PAIR_GATHER`
+  each choose between a route libcft added for this port and the route
+  the port already takes. The contract makes both give the same bits.
+  - `auto`, the default, lets the device decide, except on an opt-in
+    route. `indexed` and `pair_gather` are opt-in: they stay off under
+    `auto`, saying `by=opt_in`, because each made a step slower on a
+    card (docs/VALIDATION.md).
+  - `off` always takes today's route; `on` demands the new one.
   - `on` against a device that does not publish the bit is refused by
     name, and so is a misspelled variable, with two exceptions.
     - A typo inside the `CFT_REBOUND_ROUTE_` or `CFT_REBOUND_HIDE`
