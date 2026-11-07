@@ -25,9 +25,9 @@
 #   2. Both routes, run explicitly, on every problem in data/problems/ in
 #      every mode at binary64, on a set at the wider formats, and on an
 #      ensemble and the program engine. The route forced on and forced off
-#      must give the same record lines, the same counters (the eight
-#      check_door.py holds, program_calls, and each system's), the same passes in
-#      every step attempt: their schedules, byte for byte. Each run's
+#      must give the same record lines, the same counters (the ten
+#      check_door.py holds, and each system's), the same passes in every
+#      step attempt: their schedules, byte for byte. Each run's
 #      `# route` line is asserted: on by=forced with no fallback, off
 #      by=forced with no call, and the maxima one carried as calls the
 #      other carried as fallbacks - a count DERIVED from the schedule, its

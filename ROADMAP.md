@@ -14,16 +14,17 @@ Written 2026-09-10, after the port ran on the FP256 tile.
 > | C. scope, limits, packaging | the README's scope table, the 1024-body cap, `examples/roundtrip.c`, `make install` |
 > | D. Python | `make python-lib`, `make check-python`, `python/cft_rebound.py`, `cft_ias15_configure()` - closed, except Windows |
 >
-> One thing in the body is **still open** and is marked where it
-> appears: the `provenance` member (see "Corrections to the state
-> struct"). `max_iter` by format in the shim, listed here as open until
+> The `provenance` member the body calls open is not: it has existed as
+> `cft_provenance` since `7fbbd1f` (2026-09-11), and entry 42 added the
+> value that says a clock came from binary64. `max_iter` by format in the
+> shim, listed here as open until
 > 2026-09-14, is not: `reb_integrator_cft.c` sets it from
 > `cft_ias15_default_max_iter(format)` when the caller leaves it at 0
 > (see "A footgun found by building on it" for why it once was not).
-> The last section, "What integration found",
-> is the newest text in this file and is the one to read first if you
-> only read one. docs/VALIDATION.md entries 25 through 28 are the
-> measurements.
+> The last section, "What round 3 measured", is the newest text in this
+> file and the one to read first if you only read one. docs/VALIDATION.md
+> entries 39 through 45 are its measurements, and 25 through 28 are the
+> first round's.
 
 The hard part is done and it is the part that is normally hard:
 **correctness**. At binary64 this is REBOUND's own IAS15 bit for bit;
@@ -73,6 +74,12 @@ Everything else in REBOUND - particles, outputs, callbacks, the
 archive - keeps working, because we are not replacing any of it.
 
 ### 2. The Simulationarchive is extensible, by name, and tolerates strangers
+
+*(With a qualifier, measured 2026-11-02 in entry 42: an older build loads
+a newer archive, and REBOUND prints `Error! Could not find field
+descriptor for name.` once it reaches the first unknown field. Past one
+snapshot, an older build has three stated limits, and should never
+append to these archives.)*
 
 The on-disk record is:
 
@@ -423,11 +430,10 @@ deliberately; do not assume there is behaviour to wrap.
 ignored. `src/reb_integrator_cft.c` stops the integration with a named
 REBOUND error for any `adaptive_mode` but PRS23 (2) and for a non-zero
 `min_dt`. The members stay in the struct because they are archived and
-removing them would change the on-disk field list. `provenance` was
-**not** added and is still owed: nothing in the state records that it
-was promoted from binary64 rather than restored exactly, and only the
-return value of `cft_archive_finish_load()` carries that, which a
-caller may discard.
+removing them would change the on-disk field list. `provenance` is the
+state's `cft_provenance`, from `7fbbd1f` (2026-09-11): the state records
+that it was promoted from binary64 rather than restored exactly. This
+paragraph said otherwise until round 3 found it (entry 42).
 
 ## Two REBOUND defaults that will bite the refusal checks
 
@@ -558,6 +564,12 @@ is bit-identical and gated.
 
 ## What round 2 leaves open: the wide clock
 
+**Closed by round 3 (docs/VALIDATION.md entry 42).** The archive carries
+the engine's `t`, `t_hi`, `t_lo`, `dt` and `dt_last`, and the 40 splits
+are in the suite: a checkpoint after s = 1..40 steps, then 40 more after
+each. "Only its clock differs", below, understated it: above binary64
+`dt` and `dt_last` are wide too, and an adaptive resume moved a particle.
+
 `t` is carried across a checkpoint as the binary64 view and as the
 unevaluated pair the record prints, but **the engine's wide clock is
 not archived**. Measured while verifying parcel P4: a plain checkpoint
@@ -612,6 +624,10 @@ only that the calls the port already makes return the same bits
 through the new library, which is the precondition for starting item 1
 and not a start on it.
 
+*Round 3 took items 1, 2 and 3 and the item 4 measurement. "What round 3
+measured", at the end of this file, says what each came to. The text
+below is the plan as it stood, and two of its statements were wrong.*
+
 ### 1. Cut the call count (the biggest lever, rebound-side)
 
 172,000 elementwise calls of six elements in a 200-step Kepler run, at
@@ -634,10 +650,12 @@ few dozen scalar-width calls a step, `pc_error()` and `dtnew_*()`).
   device (a cft-fp256 sequencer ask: an indexed operand read, or an
   in-program cross-lane reduction, both already on cft-fp256's asks
   list from the workload round).
-- The step control as a program: `predict_next_step`'s sixteen
-  compensated additions per coordinate are named in the design as "one
-  more program over the scratch block" and are still elementwise calls.
-  Mechanical; the same shape as `correct_n`.
+- The step control as a program: `predict_next_step` is named in the
+  design as "one more program over the scratch block" and is still
+  elementwise calls. Mechanical; the same shape as `correct_n`. *(This
+  said "sixteen compensated additions per coordinate". It has none; the
+  17 `add_cs` a coordinate are `step_attempt()`'s end-of-step update, as
+  docs/HARDWARE.md says. Entry 40.)*
 
 ### 2. Adopt `cft_run_ex` with `scalar_mask` (delivered, unadopted)
 
@@ -654,7 +672,9 @@ copies of one value. Adopting it: a `vmulk(d, a, k)` family that calls
 same bits (a scalar operand applies element 0 to the whole run), so the
 gates hold it. Worth the ~300 staged vectors a step the design counted,
 which entry 37 prices at a few percent - bytes are not the wall. Do it
-for the memory and the honesty of having asked, not for speed.
+for the memory and the honesty of having asked, not for speed. *(Entry
+44: on the card's engine it is 50 an attempt, and these 24 sites are not
+the 24 P5 converted. The memory turned out to need no route at all.)*
 
 ### 3. The recorded corrector schedule (prototype exists)
 
@@ -668,9 +688,12 @@ identity is the proof the optimisation is exact - it is a claim only a
 bit-reproducible integrator can make. Entry 37's measurement says what
 it is worth: `pc_error` is inside the elementwise bucket at small N and
 is 13-19% of calls; on the card that is 4-9% of a step. Port the
-prototype's four hunks to the current tree (its anchors are the
+prototype's hunks to the current tree (its anchors are the
 `if (n == 7) pc_error(...)` lines, the corrector loop and the argument
-parser; all four still exist), gate it on the identity, and record it.
+parser), gate it on the identity, and record it. *(This said four
+anchors, all present. The prototype has seven, three were gone at
+`af2f400`, and its replay never counted `iterations_max_exceeded`.
+Entry 41.)*
 
 ### 4. The measurement before the next round (running as this is written)
 
@@ -681,9 +704,8 @@ scatter loop as `t_g_copy`, the accumulate half as `t_g_accum`, and
 every library call inside gravity as `t_g_lib` with `t_g_divsqrt`
 separately; the decomposition pass was to re-run with them and entry 38
 to carry the table. Whether item 1 starts with the pair program or with
-the device gather depends on it. *As of 2026-10-30 no entry carries the
-table, and entry 38 is the re-pin: if the pass ran on amd-arc-box, its
-output was never folded in here, and the table is still owed.*
+the device gather depends on it. *Entry 45 carries the table, from
+2026-11-02.*
 
 ### 5. Residency, demoted to last, still real
 
@@ -693,15 +715,113 @@ HARDWARE.md's "Moving the state onto the card" has the byte accounting
 and the library side is verified done; entry 37 prices the whole item
 at 1-10% of a step. Worth doing after 1 and 3, not before.
 
-### Still owed from before this round, unchanged
+### Still owed from before this round
 
-- The `provenance` member (this file, "Corrections to the state struct
-  above"; PARCELS.md's parcel-C note).
-- The wide clock `t` across a checkpoint: 1 ulp on 2 of 40 splits
-  ("What round 2 leaves open: the wide clock").
-- The full software suite on Linux, entry 29's open item: `make check`
-  on amd-arc-box, 2026-09-14; no result recorded as of 2026-10-30.
-- docs/HARDWARE.md "What to do first" items 1 and 4: the ensemble gate
-  with an artifact, and the mixed-pass-count ensemble that prices idle
-  lanes - both in the chain running as this is written; no result
-  recorded as of 2026-10-30.
+*Round 3 found the `provenance` member long done, and closed the wide
+clock. See above.*
+
+- The full software suite on amd-arc-box, entry 29's open item. Entry 39
+  answered it for Linux, in WSL at `ebaeaa1`, and no merge since has run
+  it on either.
+- docs/HARDWARE.md "What to do first" item 1, the ensemble gate with an
+  artifact, is closed: 27 ok on a tile (entry 45). Item 4, idle lanes, is
+  half closed: at the spread the bench reached they cost no measurable
+  time, and the mix it names, 10 and 23 passes in one step, has not run.
+
+## What round 3 measured
+
+*Written 2026-11-06, as the round ended. ROUND3.md was the plan, and
+docs/VALIDATION.md entries 39 to 45 are the record. Everything here is
+measured unless it says believed, and every card row is one U50's.*
+
+**No bit moved.** Every merge kept the six digests, and every card row
+of every bench is identical to software.
+
+**A default run on a tile is cheaper, up to 256 bodies.** Against
+`af2f400`, on the rev8a single tile, a bench row is 21-36% cheaper up to
+64 bodies and about 8% cheaper at 256. At 512 it is no better: the rows
+move +0.2% to +2.6%. Two runs of one configuration differ by up to 6% on
+the small problems and 2% on the n-body rows. A third to a half of the
+256 and 512 rows at binary64 is the bench's two energy evaluations, which
+no step pays. Estimated without them, a step moves -9% to -12% at 256
+bodies and +0.4% to +5.5% at 512. Believed: the gain is gravity as a
+program and the step control as a program. No bench holds one of them
+fixed.
+
+**The software backend paid for it.** On a few-body problem a run with no
+card is 13-21% slower than at `af2f400` in REBOUND's form, and 26-40% on
+`--engine program`, on this desktop. From 64 bodies up it is -3% to +8%.
+
+**Every new route lost or tied.**
+
+| route | what it carries | on a tile, against today's route |
+|---|---|---|
+| `indexed` | gravity's accumulate fold | 22-40% slower at 64 to 512 bodies |
+| `pair_gather` | the pair program's gather | 22-38% slower, and 47-74% with `indexed` |
+| `reduce_seg` | the corrector's exit test | slower on 12 rows of 12: 1-5% on the n-body rows, up to 11% on the small ones |
+| `scalar` | a constant operand | neutral: median -1.5%, neither winning nor losing measurably |
+
+All four give software's bits, so `auto` takes none of them. Each stays
+on the door, opt-in, and leaves the list when a card measures it winning.
+Off is not the code from before the round: gravity with both switches
+off is still the program form, with the host gathering.
+
+**The items above, as they closed.**
+- **Item 1.** The pair program and the step control landed, and are
+  believed to be the gain. The device gather was built, and lost.
+- **Item 2.** `scalar_mask` is adopted, on an opt-in route.
+- **Item 3.** `--record-iters` and `--replay-iters` landed. A replay's
+  byte-identical record is the proof that skipping the exit test is
+  exact, on a tile. What it saves, 1-6.5% up to 64 bodies and nothing
+  measurable at 256, one run per row cannot separate from noise.
+- **Item 4.** Entry 45 has the table. The host's gather is at most 2.8% of
+  a step. Inside gravity the divide and square root are the largest cost
+  from 256 bodies up.
+- **The wide clock.** Closed, and a record and an archive now say which
+  library build and image made them (entry 42).
+
+**A tile beats the software backend on long vectors, and loses on short
+ones.** On the rev8a single at `e90d5df`, with every record identical, it
+is 3.7-5.8x software at 64 to 512 bodies, and at `e830230` on an ensemble
+1.8-2.2x at 64 members and 4.7-4.8x at 512. On the three small problems
+software is 1.9-3.7x the tile. Members converging apart moved lane
+efficiency by at most 2.6 points and raised no card time past the noise.
+
+### What the next round starts with
+
+In the order the measurements rank them.
+
+1. **The K vectors, N3 wide.** V5 measured it on the default route: 66 of
+   66 integrations the same in every record line, and the peak falling
+   80.6% at 256 bodies and 90-95% from 512 up, 1,206 MB to 97 MB at 1,024
+   bodies at binary64. It needs no route. The library half is not built.
+2. **What the program form costs without a card.** On the software
+   backend a few-body run is 13-21% slower than at `af2f400` in REBOUND's
+   form, the drop-in's, and 26-40% slower on `--engine program`. From 64
+   bodies up it is -3% to +8% (entry 45). No switch restores the 22-call
+   gravity, which survives as the self-test's reference. A choice by
+   backend would, at the price of a second path.
+3. **The divide and square root in gravity.** Estimated without the
+   energy evaluations, about 73% of a step at 256 and 512 bodies as the
+   round ends, at both formats. `divfull` is priced at 212, 214 and 216
+   instructions and `sqrtfull` at 189, 192 and 195. Neither is built.
+4. **What a bench reads at 256 bodies and up.** `energy_all()` sums with
+   one width-one call a pair, so a row's two evaluations are 94-99% of its
+   calls there. Time a step apart from them first. Then why 512 bodies
+   does not gain: at binary64 elementwise calls fall by 7.8 s, and program
+   runs rise by 6.3 s and the same 268 divides and roots by 2.9 s (entry
+   45). Why those two rise is not measured.
+5. **The end-of-step update and `dtnew_*()`.** They are still elementwise:
+   17 `add_cs` a coordinate in `step_attempt()`, and `dtnew_prs23()`'s 5
+   sites and 17 calls an attempt, `KY4` and `KY5` among them.
+6. **Residency,** item 5 above, unchanged.
+7. **A body-count change truncates the wide clock and steps to binary64.**
+   Believed by P3: at `accurate = 1` with an adaptive step above binary64,
+   it costs `dt`'s tail at every merge. The fix is for the guard to keep
+   the wide values when only the count changed.
+8. **The drop-in's refusal path.** The sentence prints twice and
+   `steps_done` becomes 1, and from Python REBOUND's message store cuts
+   the sentence at 254 characters (entry 39).
+9. **The identity is formatted in two places,** the program's `main()` and
+   the shim. Their equality was measured once, not gated.
+10. **What the card did not reach.** Entry 45 lists it.

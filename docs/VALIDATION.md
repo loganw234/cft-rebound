@@ -4167,3 +4167,1270 @@ it.
 - **amd-arc-box's Linux**, as against WSL's.
 - **UCRT64**, which docs/PYTHON.md reasons would give the Windows
   library one heap and one environment. It has not been built.
+
+## 40. Round 3's P4: `predict_next_step` as one program run on `--engine program`, in the elementwise route's bits at every format; and the plan's compensated additions, which were never there
+
+**2026-11-02.** Two hosts: this desktop, as in entry 39, on the software
+backend; and amd-arc-box's U50, for the card row, with the rev8a
+single-tile image. Pins: REBOUND at bdfda4bd and cft-fp256 at 922c2ad
+(ABI 0.18).
+
+P4 branched from `af2f400`. Its commits on `round3-p4` are `cae9916` and
+the follow-up `0c7ad74`. Merge 1 is `00f89b2`, on `32dc962`, which
+merges the card tooling. `0c7ad74` came in with merge 2, as `3159d92`.
+The card ran `c3471bc`, which is `0c7ad74` merged with `round3-cardday`.
+
+### What P4 is, in one paragraph
+
+Under `--engine program`, `predict_next_step_vec()` now runs
+`nextstep-<fmt>` and returns. That is one program run where there were
+69 elementwise calls (34 `vmul`, 28 `vadd`, 7 `vsub`).
+- `programs/nextstep-{fp64,fp128,fp256}.cfta` are checked in like the
+  other 27: 119 instructions, 11 external constants, scratch 14 in and
+  14 out, no deposits.
+- Stream a is `rb`, each lane's own ratio. The scratch block holds
+  e0..e6 and b0..b6 in, and the predicted e and b out, in place.
+- The 21 binomial products use only 11 distinct values. Deduplicating
+  them keeps the bank inside the port's 16-slot allocation.
+- A new trailer key, `nextstep_calls`, counts these runs.
+- The elementwise body is unchanged. `--engine loop` and the library
+  half still run it: `ias15_engine_alloc()` sets `engine_program = 0`.
+
+### What the plan had wrong
+
+`predict_next_step` has no "sixteen compensated additions", and neither
+has REBOUND's. The compensated additions are the end-of-step update in
+`step_attempt()`: 17 `add_cs` a coordinate, 9 into x0/csx and 8 into
+v0/csv. ROADMAP.md and ROUND3.md ran the two together, and
+docs/HARDWARE.md:147 keeps them apart. P4 read this at `af2f400`, and
+the lead checked it there. So the brief's negative control could not
+exist, and the lead amended it to one plain addition or multiplication
+dropped. The end-of-step update stays elementwise, filed for the next
+round.
+
+### The gate, and the controls that show it can fail
+
+`tools/check_program_engine.py` compares `--engine program` with
+`--engine loop`, both at `--arith fma`, at fp64, fp128 and fp256. The
+brief's trap is that the step ratio is per system. A program that took
+it from the bank would be right for one system and wrong for an
+ensemble, and no existing case could see that. So the gate gained:
+- **the "spread" Kepler ensemble**, E=5, adaptive, dt0 = 0.6, unscaled
+  in every tier, which asserts that the systems' ratios differ by more
+  than 2^-40 relative and that the first attempt is mixed;
+- **on every case**, the step counters and `flags_seen` held to the
+  loop's, the ratio stated and asserted (exactly 1 for fixed steps, not
+  1 somewhere for adaptive), and `nextstep_calls`: 0 on the loop engine,
+  and on the program engine between the most steps any system accepted
+  and the total attempts;
+- **from `0c7ad74`**, a Kepler e = 0.99 case at epsilon 1e-2 whose 11
+  rejections all predict from er and br (V4's finding, below).
+
+The ensemble case reads the same at every format:
+
+```
+ok   kepler spread E=5 adaptive from dt0=0.6 (mixed rejection): 20 record lines identical, 5 systems x 4 samples
+     counters and flags the loop's; nextstep ran 121 times; the systems' ratios differ at 3 of 3 sampled steps (1.078295 to 1.112737 at the last); a mixed attempt: steps_rejected=[1, 1, 1, 1, 0]
+```
+
+| sabotage | property | with it |
+|---|---|---|
+| N1: level 0's `mul en, q1, s` replaced by a copy, all formats | a dropped multiplication changes the record | FAIL on Kepler adaptive and the ensemble; inert on Kepler fixed and outer fixed, where every ratio is exactly 1 |
+| N1a: level 0's `+ be` dropped, fp64 | a dropped addition changes the record | FAIL on Kepler adaptive and the ensemble; on Kepler fixed only `mean_pc_iterations` catches it, 2.455 against 2.460; inert on outer fixed |
+| N2: the ratio taken from the bank, lane 0's, all formats | the per-system ratio | the three single-system cases pass; the ensemble FAILs at system 1 |
+| N3: the program never runs, fp64 | the program route ran | records identical in all 4 cases; caught only by `nextstep_calls` (0, must be 200 to 200) |
+| N4: the bank's order reversed, fp64 | the host's bank order is the generator's | FAIL; on outer fixed only through the counters, 2.283 against 3.933 |
+| N5: the copy-in reads `eo`/`bo`, the state's e and b, not `_e`/`_b` | a prediction from er and br | the rejection case FAILs at all three formats, and the older four stay `ok` |
+
+Each passes without its sabotage. N2, N3 and N4 each pass the plan's
+existing comparison somewhere, which is why the gate holds the counters
+and `nextstep_calls` as well.
+
+### No record line moved
+
+- **P4's A/B against `af2f400`.** 12 problems on both engines at all
+  three formats, run twice: 72 of 72 integrations identical in every
+  record line, every step counter and `flags_seen`.
+- **The accounting is the change.** On `--engine program`, `calls=`
+  falls by exactly 68 and `program_calls=` rises by exactly 1 for each
+  run of the program. On `--engine loop` neither moves.
+- **Merge 1's suite.** The full `make check`, from clean at `00f89b2`,
+  read from its log:
+  - 15 legs, all in full mode, **281 `ok`, 0 FAIL**;
+  - the only skip is the deliberate `body_count`;
+  - every `RESULT: PASS`, `check_dropin` every case passed, and
+    `gate_real` passing at all three formats;
+  - the six wide-state digests unchanged: fp64 `e08541bc0af9b3ec` and
+    `56bacf3bf63f19a7`; fp128 `5d7cf4588fad050e` and
+    `cd16e6dc29aa0589`; fp256 `a1052750e206bebe` and
+    `ba4d447c8e58bd20`;
+  - `check_door`'s forced-off comparison still "vacuous", as it must be
+    with no routed call merged.
+- **`0c7ad74` is not in that suite.** Its diff is one file,
+  `tools/check_program_engine.py`, so no record can move. It went into
+  merge 2's tree (entry 41).
+
+### The verifier
+
+V4 has its own worktree and builds, as V0 did (entry 39). It found no
+blocking defect: READY on `cae9916`, and READY on `0c7ad74`.
+
+**On `cae9916`.**
+- **Records against `af2f400`.** 184 pairs, 368 integrations over 32
+  configurations, on both engines and at `--arith rebound`. They
+  include mid-run rejections, a `--dt-file` with varying steps so that q
+  is not 1 in a fixed run, and ensembles of 3 to 64 systems. 180 pairs
+  are identical. The other 4, the two loosest ensembles at fp64, stop on
+  the flag abort (`mul raised 0x18`) on both builds and both engines,
+  with the same rc, stderr and record lines.
+- **The program against the elementwise route, directly.** An
+  instrumented engine ran the elementwise route after every nextstep
+  run, on the same inputs, and compared all 14 x N3 outputs. Over 80
+  integrations: 34,338 program runs, 0 elements different. N1's programs
+  give 6,408 differing elements over 581 runs, and N4's 12,960 over 60
+  runs of outer fixed, whose records stay identical.
+- **P4's five controls** reproduce with P4's numbers.
+- **13 sabotages of its own, at fp64: 12 fail the gate.** One of the 12,
+  the copy-back skipping the last lane, is caught only on outer fixed,
+  through `mean_pc_iterations`, 2.283 against 3.067. Both Kepler
+  problems are planar, so their last lane is a z whose b is 0. The
+  thirteenth, V11, passes (below).
+- **The finding.** P4 had stated that no case predicts after a mid-run
+  rejection, and that none of seven longer runs reached one. V4 showed
+  the path is reachable: Kepler e = 0.99, dt0 1e-4, epsilon 1e-4 gives
+  93 rejections in 1,500 steps, and `nextstep_calls` is 1,593 = 1,500 +
+  93. Those runs are among the identical pairs.
+
+Both (b) findings went back to P4 as one commit, `0c7ad74`: the
+rejection case, and V11 stated as a limit in the gate's header.
+
+**On `0c7ad74`.** Rebuilt from clean, the gate passes at all three
+formats. N5 fails the new case and nothing else. The case's own
+assertion fails when its premise is removed. No earlier sabotage's
+verdict changes.
+
+### On the card
+
+The leg `p4-program` ran `tools/check_program_engine.py` at `c3471bc`,
+with `CFT_REBOUND_ARTIFACT` set to the rev8a single: rc 0, **15 ok, 0
+FAIL, `RESULT: PASS`**, in 56 minutes. That is `--engine program`
+against `--engine loop` at all three formats on a tile, with the
+nextstep, corrector and predictor programs and the rejection case.
+
+`c3471bc` is P4's code and the card tooling only, not a commit on main.
+Believed by the lead: the merge changes only shared one-liners.
+
+### Stated limits, not closed
+
+- **Program engine only.** A drop-in or Python user always gets the
+  elementwise route, and no library-path gate can exercise this program.
+- **Fixed-step cases cannot see a fault in q's powers.** The ratio is
+  exactly 1 there, and the gate prints that on each fixed case.
+- **The "it ran" check is exact only on the single-system cases.** On
+  the ensemble it is a range, 120 to 604, holding 121. An ensemble that
+  fell back to the elementwise route on some predicting attempts would
+  pass, with the same bits.
+- **`outer fixed dt=40`'s records cannot see a wrong corrector start.**
+  With the bank reversed all 160 record values stay identical. Believed
+  by P4: on that problem the corrector reaches its fixed point bit for
+  bit from any reasonable start.
+- **V11: the nextstep run's flags are not held.** Dropping them passes
+  the gate. Believed by V4: inert by construction, since the program
+  issues the elementwise route's 69 operations, and on every problem V4
+  ran their flags are inexact alone, which other calls raise every step.
+- **`staged_bytes` over-counts this program.** Nothing compares it.
+
+### What this does not establish
+
+- **Speed.** P4 made no speed claim, and the card leg compares bits.
+- **The merged tree on a card,** as against `c3471bc`.
+
+## 41. Round 3's P2: the corrector's exit test on the device, and a recorded schedule that replays without it; sent back twice, and changed in no record line
+
+**2026-11-02.** Two hosts, as in entry 40. Pins: REBOUND at bdfda4bd and
+cft-fp256 at 922c2ad (ABI 0.18). P2 branched from `af2f400`. Its commits
+on `round3-p2` are `0b5e17e`, then `faa9f22` and `53ffd5f`, then
+`8006820`, then `9539f1d`. Merge 2 is `42b4863`, which merges `8006820`,
+after P4's `3159d92` and with the lead's `ce593f7` on top. `9539f1d`
+came in with merge 3, as `ea8d690`. The card ran `aa3aa7e`, which is
+`53ffd5f` merged with `round3-cardday`.
+
+### What P2 is, in one paragraph
+
+cft-fp256 measured removing the corrector's exit test at 4-9% of a card
+step. P2 builds two mechanisms aimed at that share.
+- **The recorded schedule.** `--record-iters FILE` writes the pass
+  count of each step attempt. `--replay-iters FILE` runs exactly those
+  counts, and skips `pc_error()` and the exit test. A schedule carries
+  a run key, and one from any other run is refused by name.
+- **The device test.** Each maximum in `pc_error()` is now cft-fp256's
+  `normalabs-<fmt>` program followed by `CFT_MAXALL` through
+  `vreduce_seg()`: `cft_reduce_seg` where the device publishes CAPS2[8],
+  and today's host loop as the fallback. All four modes take it. Each
+  maximum costs two library calls on either route, and counts as one
+  `reduce_seg` operation.
+- **The images.** At `af2f400` the library half had no program loader.
+  `build/normalabs_images.h` is assembled from the pinned tree by the
+  pinned `cft-asm`, and both halves compile it in.
+- **`--corrector-selftest`** holds `pc_error()` on both routes against
+  a reference built from REBOUND's definition with libcft's own calls:
+  11 crafted systems and 53 random ones.
+
+### The gate, and the controls that show it can fail
+
+`tools/check_corrector.py` is a new leg, and `tools/cases_corrector.c`
+its library-path case. The brief's trap is a replay that reproduces the
+state but not the counters, or keys on the wrong unit. At fp256, from
+`0b5e17e`'s full suite:
+
+```
+ok   it computed no test: reduce_seg carried nothing; divsqrt_calls 87 fewer (87 passes x 1); calls 495 fewer (wanted 495: 3 a pass, and two compares at each of 117 tests); flags 0x11 within 0x11
+ok   fp256: the replays crossed 4 runs with a rejected step, 4 with a capped attempt (each counted as iterations_max_exceeded), 1 ensembles whose systems left at different passes, 1 with some members rejecting and some not
+```
+
+Each control ran through the full gate at `0b5e17e`, which gives 243
+`ok` and 0 FAIL without one:
+
+| sabotage | property | FAIL lines |
+|---|---|---|
+| S0: the replay ignores its counts and runs the test | a replay runs the recorded counts | 59 (38 + 10 + 11, one count per format) |
+| S1a, S1b: masked lanes become -0, or -inf | no normal coordinate gives +0 | 6 each, at the self-test and the image digest |
+| S2: the exponent-zero test dropped | subnormals are masked | 6: `0x1.3028p-1027 where the reference is 0x0p+0` |
+| S3, S3b: the 1/1 removed from the device branch, or from INDIVIDUAL's shared lane | a system out of the corrector is given 1/1 | 3 each: `nan where the reference is 0x1p+0` |
+| S4: the prototype's bug | a replay counts a recorded cap | 14 |
+| S5: keyed on accepted steps | the schedule is per step attempt | 47; V2's copy, keyed on any system accepting, 39 |
+| S6: the `normalabs` run counts as a program call | `program_calls` does not move | 50 |
+
+S1a to S3b each left all 237-240 integration-level checks passing.
+Records, counters and replays cannot see those properties, which is why
+the self-test exists.
+
+**ROUND3.md's replay control, one count moved by one, is inert on most
+attempts.** 0 of 122 such moves changed a record line, over the first 8
+attempts of 8 configurations. It does bite: 4 of 60 moves at fp128, at
+attempts 25 and 28. So P2's first reading, that an attempt's last pass
+changes no record bit, was false as a general statement, and the lead
+withdrew it. The lead accepted P2's replacements: the first attempt cut
+to one pass, a capped count refused by name, and the counters moving by
+exactly the change.
+
+**`check_door` holds `program_calls` from merge 2.** S6 passed it until
+the lead's `ce593f7`, and then fails, "(DIFFER: program_calls 344
+against 0)".
+
+### No record line moved
+
+- **P2's A/B against `af2f400`.** 87 of 87 integrations identical at
+  all three formats: every record line, every counter, and each
+  system's trailer. Its control saw 2 of 3 lines differ.
+- **`check_door`'s forced-off comparison** no longer says vacuous, and
+  passes at all three formats.
+- **The library path.** All 5 corrector cases in `check_dropin` were
+  bit for bit REBOUND's ias15, on the device route with no fallback.
+- **P2's own suite** at `0b5e17e`: 16 legs, 531 `ok`, 0 FAIL, the six
+  `gate_real` digests equal to P0's.
+- **Merge 2's suite.** The full `make check`, from clean at `ce593f7`,
+  with P4's `0c7ad74` and P2's `8006820`, read from its log:
+  - rc 0, 16 legs, all in full mode, with no cache skips;
+  - **571 `ok`, 0 FAIL**, no DIFFER;
+  - the six wide-state digests unchanged;
+  - `check_door`'s forced-off comparison at every format: "all 9
+    counters identical".
+- **`9539f1d` is not in that suite.** It changes one file,
+  `tools/check_corrector.py`, and went into merge 3's (entry 42).
+
+### The verifier, four times
+
+**On `0b5e17e`: SENT BACK, 2.** V2 held 258 pairs against `af2f400`, all
+identical: 129 on the default route and 129 with
+`CFT_REBOUND_ROUTE_REDUCE_SEG=off`. Its comparator's controls moved 38
+of 43 and 7 of 43 fp64 pairs. P2's seven controls reproduced.
+- **(a) M2.** A replay that keeps every system in the corrector to the
+  attempt's last count, still counting each system's passes exactly,
+  passed at every format: passes past a system's exit land on its fixed
+  point. V2's control cuts one system that is not the longest to 1 pass.
+  Over 30 cuts the real replay changed only that system's lines in 28,
+  was refused by name in 1 and was inert in 1. M2 changed nothing in 30
+  of 30. Believed by V2: M2 gives a wrong record where extra passes miss
+  a fixed point. It found no ensemble where that shows.
+- **(a) M4.** A library half silently on today's route passed
+  `check_dropin --light`, reading `off by=device`, a state a correct
+  door cannot reach on software with no door variable.
+- **(b) M3, M3s.** A run key without epsilon or the state hash passed.
+
+`faa9f22` holds each system's own exit and all 20 run-key fields, and
+`53ffd5f` makes the library case derive the state the door must be in.
+
+**On `53ffd5f`: SENT BACK, 1.** M2, M3, M3s and M4 fail where meant.
+- **(a) M2b.** A system at its count rides one more pass, uncounted. It
+  passed at every format, since a system frozen after 2 passes still
+  moves. An exact reference sees it: the member alone with the same cut.
+- **(b) M3v, M3m, M3dt.** `state` is one hash, and a hash without the
+  velocities, masses or dt-file passed.
+
+`8006820` closes both, in `tools/check_corrector.py`.
+
+**On `8006820`: READY,** with one should-fix, Rboth: a replay that
+refuses every uncapped count of 1, by name, passed at every format,
+because all three cut controls took their refusal branch. `9539f1d`
+requires a cut replay to run.
+
+**On `9539f1d`: READY.** The clean gate gives 277 `ok`, 0 FAIL at all
+three formats, and every cut replay runs. Rboth gives 268 `ok`, 9 FAIL.
+M2b gives 274 `ok`, 3 FAIL: 12 of 13, 2 of 3 and 2 of 3 lines differ
+from the member reference, where the clean tree differs in none. M2
+gives 271 `ok`, 6 FAIL. Since `0b5e17e` only `tools/cases_corrector.c`
+and `tools/check_corrector.py` have changed.
+
+### On the card
+
+The leg `p2-replay` ran at `aa3aa7e`, on the rev8a single, each run
+binary128, `--engine program --arith fma`. `53ffd5f` is not what merged,
+but the engine has not changed since `0b5e17e` (V2, above).
+
+| problem | card recording | its replay | change | replay against recording | software recording replayed on the card |
+|---|---|---|---|---|---|
+| kepler, 200 steps | 55.64 s | 53.95 s | -3.0% | data identical; counters equal | data identical |
+| outer, 100 steps | 34.48 s | 32.24 s | -6.5% | data identical; counters equal | data identical |
+| nbody64, 20 steps | 25.77 s | 25.45 s | -1.2% | data identical; counters equal | data identical |
+| nbody256, 5 steps | 50.46 s | 50.92 s | +0.9% | data identical; counters equal | data identical |
+
+- Measured: the replay's byte-identical record is the proof that
+  skipping the exit test is exact, on a tile. A schedule recorded on the
+  software backend replays on the card to the card's own recording.
+- Believed: the saving, 1 to 6.5% on the small problems and nothing
+  measurable at 256 bodies, is the exit test's share of a step. One run
+  per row; timing noise is not measured.
+- On 2026-11-02 the leg `p2-corrector` was skipped: its estimate, 60
+  minutes, would have ended past the card's window.
+
+On 2026-11-06 the leg `p2-corrector` ran at `85fd0aa`, `e47b04e`'s
+engine, on the rev8a single, its runs one at a time:
+`tools/check_corrector.py` rc 0, **277 ok, 0 FAIL, `RESULT: PASS`**, in
+3,467 s. That is the count software gives. So the device's exit test is
+held against the host loop on every configuration, on a tile, with the
+replays, the cuts and the run key's refusals.
+
+The leg `p2-bench` ran at `e90d5df`. The device's test gave software's
+bits and was slower than the host's loop on all 12 rows; entry 45 has
+them. So `eb6976a` put the route on the opt-in
+list, and from there a default run takes the host's loop even where a
+device publishes the bit. "The route" in this entry is now the forced-on
+one.
+
+### Stated limits, not closed
+
+- **A replay's `flags_seen` can be narrower than its recording's,** by
+  flags only the test raises. The gate asserts within.
+- **A device that publishes CAPS2[8] but refuses the image is refused
+  at open, not fallen back.** The library half's path has not been run.
+- **INDIVIDUAL's data movement stays host work on both routes.**
+- **A schedule names its run but not the backend or the library
+  build.** That is how a software recording replays on a card.
+- **The wide formats.** The gate's route comparison there leaves modes
+  1 and 3 to the self-test. V2's A/B covers every mode.
+- **The member reference is held at one cut per format.**
+- **M1as2, a count of 1 replayed as 2 passes, passes.** No recording
+  holds a 1: none in the gate's, and none in six more runs.
+
+### What this does not establish
+
+- **Why the device's test is slower.** Entry 45 measures that it is.
+  Nothing here separates the launch from the reduction.
+- **What either mechanism saves.** The 4-9% is cft-fp256's, for
+  removing the test outright. This port's replay rows are one run each.
+
+## 42. Round 3's P3: a checkpoint resumes bit for bit at binary128 and binary256, adaptive runs included, and the archive says who made it; sent back once; and the seam test
+
+**2026-11-02, this desktop, as in entry 39, on the software backend
+only.** Pins: REBOUND at bdfda4bd and cft-fp256 at 922c2ad (ABI 0.18).
+P3 branched from `af2f400`. Its commits on `round3-p3` are `d492c32`,
+the lead's accessor, a cherry-pick of `9b1744ea`; `a8d7a63`, the gate
+alone; `3861a7b`, the fix; `dd51e21` and `d8ae085`, after V3; and
+`c957eb2`, after V3's READY. Merge 3 is `4291740`. It holds `ea8d690`
+(P2's `9539f1d`), `9103ab6` (P3 at `d8ae085`), `b231398` (the lead's
+seam test), and `c957eb2`.
+
+### What P3 is, in one paragraph
+
+One on-disk change, with three items.
+- **The wide clock and steps.** The archive now carries the engine's
+  `t`, `t_hi`, `t_lo`, `dt` and `dt_last`, one wide element each.
+- **The restore field.** A new value, `CFT_PROV_EXACT_CLOCK_STEPS64`,
+  says "restored exactly, its clock and steps from binary64".
+- **Identity.** The archive carries the record's `# identity` words:
+  `libcft_build=commit=922c2ade78fad995a0871bf07cebf8b9fbcb2b9f,tracked=clean,untracked=none image=none`.
+
+A load adopts each wide value only where its binary64 view still equals
+REBOUND's field, and promotes the field otherwise, because
+`reb_simulation_integrate()` rewrites `r->dt` and zeroes `r->dt_last_done`.
+
+### What the plan had wrong
+
+- **The restore field exists,** as `cft_provenance`, from `7fbbd1f`
+  (2026-09-11). The name stays: a rename costs every archive since.
+- **The clock alone was not enough above binary64.** At `af2f400`,
+  binary128, epsilon 1e-9, 20 steps, a save and 20 more, 4 of 18 dump
+  lines differ, because `dt` and `dt_last` are wide too.
+- **The 2-of-40 setup was never recorded.** The case is now gate_real's
+  four bodies, fixed dt 0.01, a checkpoint after s = 1..40 steps, then
+  40 more after each. 180 steps split at 1..40 gives 0 of 40.
+- **Entry 38's cross-pin check compared dumps,** which carry no
+  identity, so nothing there needed excluding.
+
+### The gate, watched failing and then passing
+
+`tests/gate_real.c` now compares the engine's clock and steps as bytes.
+`wide_digest()` is unchanged, so the six recorded digests stay
+comparable. Before the fix, at `a8d7a63`:
+
+```
+fp64   splits   FAIL  35 of 40 resumes DIFFER (r->t differs on 0 [], the clock or steps on 35, other lines on 0)
+fp128  splits   FAIL  34 of 40 resumes DIFFER (r->t differs on 2 [29, 30], the clock or steps on 34, other lines on 0)
+fp256  splits   FAIL  34 of 40 resumes DIFFER (r->t differs on 2 [29, 30], the clock or steps on 34, other lines on 0)
+fp128  adaptive FAIL  the continued run DIFFERS - line 5: straight 'p1 x  0x1.ef3d04630a0acp-1 0x1.1181227b2e8f4p-2 0x0p+0', resumed '... 0x1.1181227b2e8f5p-2 ...'
+```
+
+At binary128 and binary256 only t and t_hi differ, below binary64's
+reach: at split 30, binary128, `3ffe6666666666666880000000000000`
+against `...6600000000000000`. At binary64 only t_lo differs, because a
+resume zeroes it.
+
+With the fix, 40 of 40 resumes are identical at every format, and the
+adaptive case gives 17 values identical. **The named control,**
+`CFT_REBOUND_NO_CLOCK`, the clock's load removed, brings back 35, 34 and
+34 of 40, with r->t on [29, 30] at fp128 and fp256. `CFT_REBOUND_NO_STEP`
+gives binary128's wide digest as `85173733207ae8fd` straight against
+`7bebb83a206f476b` restarted. Nine more sabotages were all caught.
+
+### An older archive, and an older build
+
+- **An `af2f400` archive here:** 6 of 6 load, and say "restored exactly,
+  its clock and steps from binary64".
+- **One snapshot of this build's archive in `af2f400`, no function
+  pointers set:** 9 of 9 load and say "restored exactly", and continue
+  as `af2f400` continues its own. REBOUND prints `Error! Could not find
+  field descriptor for name.`, because the old reader stops at `cft_t`.
+- **Past that, V3 measured three behaviours, and P3 reproduced them.**
+  `af2f400` appending to this build's archive writes a snapshot no build
+  can read. A snapshot this build appended after a particle removal is
+  refused by `af2f400`. REBOUND's function-pointer warning is lost when
+  `af2f400` reads this build's archive with a force or merge set.
+
+`tools/check_archive.py` states these, with "never append to these
+archives with a pre-round-3 build". Believed by P3 and V3: any appended
+field costs a pre-existing build these three.
+
+### The verifier, three times
+
+**On `3861a7b`, the lead's `d492c32` included: SENT BACK, 2.** Nothing
+moved: 312 library-half integrations against `af2f400`, and 9 of 9
+records from the standalone program. `d492c32` is tree-identical to
+`9b1744ea`.
+- **(a) A1: `dt_last`'s restore was ungated.** S4 (the `r->dt_last_done`
+  guard dropped), S4b (`dt_last` not restored) and S22
+  (`put_dt_last_wide()` a no-op) passed every leg. `dt_last` is read
+  only after a rejected attempt, and no case rejected the first attempt
+  after a load. S4 and S4b give a resume that is not REBOUND's own,
+  where P3's build matches it at fp64.
+- **(a) A2: four shipped sentences understated the older-build limit,**
+  by the three behaviours above.
+- **(b) B1:** no case triggered the clock's "reached memory" refusal (S11).
+- **(b) B2:** the 2-of-40 count was printed, not asserted.
+
+`dd51e21` adds sequence 6, a rejected first attempt after a load;
+sequence 7, the "reached memory" refusals; and the asserted sweep.
+`d8ae085` states the limit by its three behaviours.
+
+**On `d8ae085`: READY.** Its library objects are `3861a7b`'s.
+- S4 and S4b fail at all three formats. S22 fails at fp128 only, "wide
+  state 5168967c5e8aa99c against df037a7d75397f63": at fp64 `dt_last` is
+  binary64, and at fp256 the corrector re-converges. The sequence had to
+  lift body 2 out of gate_real's plane (vz 0.001), or S22 passed at
+  fp128 too. Believed by P3: a control that only rounds a wide value can
+  be inert where the corrector converges past it.
+- S11 fails at all three formats. With AFTER = 1, 39 and 41 the sweep
+  fails "NOT THE 2-OF-40 CASE".
+- Two should-fixes: two phrasings of the limit, and sequence 6's
+  rejection counter, which S5 (adopt's `r->dt` guard dropped) fooled.
+
+**On `c957eb2`: READY.** S5 now fails that counter at every format: "the
+resumed run took the step with no request - it never saw the request".
+The six library objects are byte-identical to `d8ae085`'s, and the
+rewritten sentences match V3's A/B, 39 of 39 pairs.
+
+### The seam: `tools/check_seams.py` and `gate_real --routes`
+
+The plan's P2 x P3 seam, "a replay across a checkpoint", cannot exist:
+the replay is the program's and the checkpoint the drop-in's. So the
+seam saves with `reduce_seg` forced one way, resumes with it forced the
+other, and requires the straight run's dump.
+- `tools/check_seams.py` imports `check_checkpoint`'s sequences. Its
+  control is `CFT_REBOUND_NO_ADOPT`, and it is a leg from merge 3.
+- **It needed a physics counter.** Comparing dumps alone, a crossing
+  whose forced route carried nothing would compare two runs of today's
+  route. `gate_real --routes` prints, on stderr after each phase, each
+  family's route from `ias15_engine_route()`. `check_seams` asserts the
+  forced route was taken, by=forced, and carried the run: calls and no
+  fallback when on, fallbacks and no call when off.
+- **Measured on the merged tree:** 12 of 12 crossings at all three
+  formats, each carried on both sides. At binary256 the plain sequence
+  carried 1,214 calls at the save and 2,400 fallbacks at the resume.
+  Every resume gave the straight run's values, and every control differed.
+- **What it cannot see.** `reduce_seg` keeps no state from one step to
+  the next, so the route has nothing for an archive to drop. The seam
+  can catch only a restore that depends on the route that wrote it. No
+  such sabotage was built, so that it would show is believed, not measured.
+
+### Merge 3's `make check`
+
+From clean at `4291740`, read from its log:
+- rc 0, 17 legs, all `--mode full`, with no cache skips;
+- **584 `ok`, 0 FAIL**, no DIFFER and no traceback;
+- 9 `RESULT: PASS` lines, and `gate_real: PASS` three times;
+- the six digests unchanged: `e08541bc0af9b3ec`/`56bacf3bf63f19a7`,
+  `5d7cf4588fad050e`/`cd16e6dc29aa0589`,
+  `a1052750e206bebe`/`ba4d447c8e58bd20`;
+- `check_door` at every format: "all 9 counters identical";
+- `check_seams`: "12 route crossings carried by the route on both sides,
+  of 12".
+
+### On the card
+
+On 2026-11-02 the leg `p3-identity` was never chained, because P3 was
+sent back at 12:45. The card branch of the identity check, that an
+xclbin must yield a 64-digit image digest, was written and had not run.
+
+On 2026-11-06 the leg ran at `85fd0aa`, `e47b04e`'s engine, on the rev8a
+single tile, in 3,111 s:
+- `gate_real: PASS` at binary64, binary128 and binary256, `identity_ok()`'s
+  card branch among what it holds;
+- a binary128 save and resume on the card reads `written on
+  "libcft_build=commit=922c2ade78fad995a0871bf07cebf8b9fbcb2b9f,tracked=clean,untracked=none
+  image_sha256=0639248e9c66f779e7c126f4449062af646d3d7e8abd0173926812790bc80450
+  image_bytes=40076366 image_version=0xb00`;
+- `sha256sum` of the xclbin gives the same digest.
+
+So a card-written archive names the image it ran on, and the name is the
+image file's own digest.
+
+### Stated limits, not closed
+
+- **A particle add or remove truncates the wide clock and steps to
+  binary64,** in a straight run and a resumed one alike, so no gate can
+  see it. Believed by P3: at `accurate = 1` with an adaptive step above
+  binary64, it costs `dt`'s tail at every merge. Filed for the next round.
+- **The identity is formatted in two places,** the program's `main()`
+  and the shim. Their equality was measured once, not gated.
+- **S10, the clock count check removed, passes:** the memory check
+  refuses the same files.
+
+### What this does not establish
+
+- **A second image.** The digest is measured on rev8a only. A software
+  archive records `image=none`.
+- **Python.** Nothing in python/ loads a cft archive.
+
+## 43. Round 3's P1: gravity as a handful of program runs a force evaluation, on two switches of the door, both opt-in because each made a card step slower at 64 to 512 bodies; sent back once, and changed in no record line
+
+**2026-11-02.** Two hosts, as in entry 40. Pins: REBOUND at bdfda4bd and
+cft-fp256 at 922c2ad (ABI 0.18). P1 branched from `af2f400`, and its
+commits on `round3-p1` are `d4e710b`, `3a00e18` after V1, and `0a0d96d`,
+the opt-in. Merge 4 is `e47b04e`: `5c525b4` merges P1 at `3a00e18`,
+`2b497a6` is the lead's seams, `e77486e` merges `0a0d96d`, and `e47b04e`
+is the lead's fix to `hw/cardday-round3.sh`. The card ran `afc83d8`,
+which is `d4e710b` merged with `round3-cardday`.
+
+### What P1 is, in one paragraph
+
+A force evaluation was 22 elementwise calls plus one add per partner. It
+is now `gravity-pair`, `cft_sqrt`, `gravity-cube`, `cft_div` and
+`gravity-force`, then one fold run per 256 partners.
+- **Two switches.** `indexed` is the accumulate fold. `pair_gather`, a
+  new row, `CFT_REBOUND_ROUTE_PAIR_GATHER`, is the pair program's six
+  inputs. Both read `CFT_SEQ_FEAT_INDEXED`, so the hide hook hides both.
+- **Off is not the old gravity.** The off route of each switch is the
+  host's gather into the same program, run dense. So `calls=` and
+  `program_calls=` are equal on all four combinations.
+- **Every mode, both halves.** Neither route needs `--engine program`.
+- **The fold.** libcft only gathers. The order and the +0 start are the
+  program's: its slot order, from a zero stream.
+
+### On the card, and why both switches are opt-in
+
+The leg `p1-gravity` ran at `afc83d8` on the rev8a single tile.
+`check_gravity` there: rc 0, **23 ok, 0 FAIL**. `bench-workload.py` ran
+once per route combination, each route forced, and every card row of
+all four is **identical to software**: 12, 12, 12 and 6 rows. The both-on
+bench dropped the three small problems to fit the card's window. Card
+seconds, and the change against both off; one run per row, so noise is
+not measured:
+
+| problem | format | both off, s | indexed only | pair_gather only | both on (what auto then picked on rev8a) |
+|---|---|---|---|---|---|
+| kepler | fp64 | 22.44 | -5.6% | +0.9% | not run |
+| kepler | fp128 | 44.06 | -7.4% | -2.2% | not run |
+| outer | fp64 | 11.08 | +3.7% | -0.3% | not run |
+| outer | fp128 | 22.72 | +3.7% | -0.4% | not run |
+| pythagorean | fp64 | 10.92 | +1.3% | +5.6% | not run |
+| pythagorean | fp128 | 19.39 | +4.5% | -0.5% | not run |
+| nbody64 | fp64 | 6.57 | +22.2% | +22.7% | +47.2% |
+| nbody64 | fp128 | 15.93 | +25.2% | +24.5% | +52.1% |
+| nbody256 | fp64 | 23.14 | +40.0% | +37.7% | +73.7% |
+| nbody256 | fp128 | 47.45 | +32.8% | +31.7% | +62.2% |
+| nbody512 | fp64 | 64.86 | +29.6% | +28.2% | +60.5% |
+| nbody512 | fp128 | 118.29 | +30.3% | +29.8% | +59.3% |
+
+Measured: each gravity route costs 22-40% at 64 to 512 bodies, and with
+both on the costs about add, to 47-74%. On two and three bodies, each is
+within -7% to +6%.
+
+`d4e710b` is not what merged. V1 measured that engine the same as
+`3a00e18` (below), and measured no integration function changed at
+`0a0d96d`. On 2026-11-02 `0a0d96d` had not run on a card.
+
+On a card that published the bit, auto turned both routes on. So P1
+merged as it stood would have made a default card run at 64 to 512
+bodies 47-74% slower, with identical bits. Given that table, the owner
+chose opt-in first. In `0a0d96d`, `route_def[]` gains `opt_in`, set for
+`indexed` and `pair_gather`. Under auto both stay off even where the bit
+is published, and say `by=opt_in`. `on` and `off` are unchanged, and
+`scalar` and `reduce_seg` keep auto as it was.
+
+On 2026-11-06 the leg `door-rev8a` ran at `e90d5df`, `e47b04e`'s engine,
+on the rev8a single tile: `check_door` rc 0, **77 ok, 0 FAIL**, in 766 s,
+"164 of 164 cases identical to the reference on both routes" at each
+format. The opt-in branches, right by reading until then, are measured.
+At binary64: "the default leaves indexed and pair_gather off by=opt_in
+(fallbacks 1254/1254), forced on they carry calls 1254/1254 and no
+fallback". Entry 45 has the same gate on the final tree.
+
+**"Both off" is not the gravity from before P1.** The table above compares
+P1's two device gathers with P1's host gather. The 22-call gravity
+survives only as the self-test's reference. So the lead's word to the
+owner on 2026-11-02, that opt-in keeps a default card step as fast as
+before, undersold it and was not measured. Against `af2f400`, the round's
+"before", `d4e710b`'s both-off rows are -16% to -35% up to 64 bodies, -8%
+to -10% at 256, and +1.5% to +6.3% at 512. Entry 45 has the merged tree's.
+
+### The gate, and the controls that show it can fail
+
+`tools/check_gravity.py` runs every combination the switches allow, at
+every format, with route lines asserted. `tools/cases_gravity.c` is the
+library half's gate, through `ias15_engine_route()`, and asserts physics
+counters: "a merge removed one: 4 particles became 3, on both sides".
+`--door-selftest` holds 164 cases at each format.
+
+| control | sabotage | with it |
+|---|---|---|
+| Order | body 0's 2nd and 3rd addends swapped in the fold table | outer's binary64 record differs: fixed 3 of 230 fields, adaptive 126 of 230, program engine 85 of 184; `check_equivalence` FAILs 3 outer cases, first at step 25 |
+| Route | one index given to libcft points at the wrong partner, new route only, on either table | outer fixed: 148 of 230 fields differ when the route is on, 0 when off; `check_door` and `check_gravity` FAIL |
+| Trap 1, the fold's zero | the fold started from -0 | the self-test's signed-zero case, 2 of 15 lanes |
+| Trap 2, loud | tables never rebuilt | refused by name: "idx_scratch_in[1] = 9 ... is at or past the 6 elements" |
+| Trap 2, silent | `set_active` skips the rebuild | `cases_pairs`: 155 of 198 configurations disagree with REBOUND |
+
+Each passes without its sabotage. The order-sensitive problem is the
+outer solar system. One force evaluation rarely shows one swapped pair,
+so the order is held by the REBOUND gates over integrations.
+
+### No record line moved
+
+- **P1's A/B against `af2f400`.** 34 integrations at all three formats,
+  each on the default route and the four forced combinations: 170 of
+  170 identical.
+- **`calls=` and `program_calls=` do move against `af2f400`.** Kepler
+  fixed, fp64: 321,432 becomes 269,956, and 0 becomes 12,112.
+- **The opt-in, against `3a00e18`.** Every forced combination identical,
+  136 of 136. The default identical to the both-off run, 34 of 34.
+
+### The verifier, three times
+
+**On `d4e710b`: SENT BACK, 1.** No record moved: 108 of 108 program-half
+pairs on the default routes, 120 of 120 on the forced combinations, and
+56 library-half pairs. P1's six controls reproduced.
+- **(a) `cases_gravity.c` held M4 only on unforced software.** M4 sets
+  `route_on[]` to 0 for both routes after `engine_routes()`. Under
+  `CFT_REBOUND_HIDE_FEATURES=scalar` it passed, reading `off by=device`,
+  a state impossible on any device.
+- **(b)** Three sabotages passed: a read past a table's source,
+  `vprog_ix`'s NULL-source and zero-source refusals removed, and counters
+  reporting the new route. P1's "no automated wide-format gate catches a
+  swapped pair" was false at binary128.
+
+**On `3a00e18`: READY.** `expected()` derives each route's state, six
+`--door-refuse` cases hold `vprog_ix()`'s rules, and the swap limit is
+restated, below. The library object is byte-identical to `d4e710b`'s, 61
+of the program's 62 shared functions are identical, and the 62nd is
+`main()`. 47 of 47 default and 55 of 55 forced pairs are identical. M4
+fails all 10 states that then required on.
+
+**On `0a0d96d`: READY.** No integration function changed: 75 of 78
+functions identical in the library, 60 of 63 in the program. Records:
+115 of 115, 23 of them the default against `3a00e18` forced off.
+- O1 (auto ignores opt_in), O2 (by=opt_in while on) and O3 (forced on
+  silently ignored) each fail `check_door` and `check_gravity`.
+- O4 (a counter that moves only when forced on) fails `check_door`'s new
+  part 4b, "(DIFFER: divsqrt_calls 18245 against 20753)".
+- M4 now fails only `check_gravity --library`, in the full tier, and
+  exactly the 5 of 14 states that force a route on.
+
+### P1's three seams, and merge 4's `make check`
+
+In `tools/check_seams.py` (entry 42), from `2b497a6`:
+- **P1 x P3.** `indexed` and `pair_gather` join `reduce_seg` across a
+  checkpoint, and the regrow sequence now runs too, so gravity's tables
+  are rebuilt on both sides of the save.
+- **P1 x P2.** A schedule recorded with both gravity routes forced one
+  way is replayed with both forced the other, and must give the
+  recording's lines and counters with no exit test computed.
+- **P1 x P4.** The program engine, gravity forced on then off, gives the
+  loop's record and counters, with `nextstep_calls` equal and above zero.
+
+Measured at all three formats on `2b497a6`: **84 ok, 0 FAIL**. At
+binary256 `indexed` carried 4,309 calls at the save and 8,520 fallbacks
+at the resume of the plain sequence. The longest merged trailer found
+is 455 bytes after the "# ", and the subprocess API keeps 511.
+
+The full `make check`, from clean at `e47b04e`, read from its log:
+- rc 0, 18 legs, all full, with no cache skips;
+- **715 `ok`, 0 FAIL**, no DIFFER, traceback or make error;
+- 10 `RESULT: PASS`, `check_gravity`'s now among them;
+- the six digests unchanged: `e08541bc0af9b3ec`/`56bacf3bf63f19a7`,
+  `5d7cf4588fad050e`/`cd16e6dc29aa0589`,
+  `a1052750e206bebe`/`ba4d447c8e58bd20`;
+- `check_seams`: 54 of 54 checkpoint crossings, 18 of 18 replays and 9
+  of 9 program-engine pairs carried.
+
+### Stated limits, not closed
+
+- **A route that says on while today's runs.** V1 built it for valid
+  tables, and it passes: on software both routes compute the same bits.
+- **A swapped pair.** At binary64 `check_records` catches it. At
+  binary128 the catches are in the full tier only. At binary256 nothing
+  automated catches it: `gate_real`'s digests move, but it exits 0.
+- **`make check-light` could not see M4 at `e47b04e`,** and `check_door`'s
+  failing lines opened "all 9 counters identical". The fixes, `e90d5df`
+  and `f9d2187`, landed with merge 5 (entry 44).
+- **One run per force evaluation holds up to 257 bodies.** On a 256-deep
+  device, 1,024 bodies takes 4 runs.
+- **Gravity's images need SCRATCH and SCRATCH_IO.** A device without
+  them is refused by name. Not measured on a real device.
+
+### What this does not establish
+
+- **`check_gravity` on the merged tree, on a tile.** It passed at
+  `afc83d8`. Its leg, `p1-gate`, did not fit the window on 2026-11-06, so
+  its opt-in branches are right by reading only. `check_door` holds the
+  routes on a tile at the final tree.
+- **A route that wins.** Neither was measured faster at 64 to 512 bodies.
+- **128 bodies,** which ROUND3.md's card day named.
+- **The whole-program divide and square root,** priced, not built:
+  `divfull` is 212, 214 and 216 instructions, `sqrtfull` 189, 192 and 195.
+- **Linux.** The ledger records no full `make check` there at these merges.
+
+## 44. Round 3's P5: a constant goes to the library as one element, on an opt-in route; neutral on a card, and the route comparison made able to see its own trap
+
+**2026-11-06.** Two hosts, as in entry 40. Pins: REBOUND at bdfda4bd and
+cft-fp256 at 922c2ad (ABI 0.18). P5 branched from `e47b04e`. Its commits
+on `round3-p5` are `2f42423`, `e98dbb1` and `777f160`. Merge 5 is
+`c785263`: `c893e5a` merges P5 at `777f160`, and `c785263` is the lead's
+`scalar` in `tools/check_seams.py`. The card ran `c785263`.
+
+### What P5 is, in one paragraph
+
+ROADMAP item 2. A constant operand was staged as N3 copies of one value.
+- **24 sites** now pass it through P0's `vrun_k()` as one element, where
+  the route is on, by `vmulk()`, `vfmak()`, `vkmul()` and `vaddk()`.
+- **The route is opt-in from the start,** because a route no card has
+  measured does not go on by default.
+- **Off, each site is today's call on today's vector.** A default run
+  is `e47b04e`'s byte for byte except the `# route scalar=` line: 66
+  integrations at three formats, 1,407 stdout lines, whole stdout with
+  only the wall-clock fields removed.
+- **Left as they are:** 9 divides, because `cft_div` is not an opcode
+  and takes no mask; 14 sites in `dtnew_*()` and `choose_timestep()`,
+  out of scope; 2 E-wide compares, because `vcmplt()` counts no staged
+  bytes.
+
+| run | sites | a pass | an attempt | a prediction | an energy |
+|---|---|---|---|---|---|
+| `--engine loop --arith rebound` | 11 | 133 | 21 | 21 | 3 |
+| `--engine loop --arith fma` | 15 | 98 | 50 | 21 | 3 |
+| `--engine program --arith fma` (the card) | 9 | 0 | 50 | 0 | 3 |
+| library half, REBOUND's form | 12 | 133 (+105 with a velocity-dependent force) | 21 | 21 | 0 |
+
+So on the card's configuration the bytes fall 0.2-0.8% at binary128 for 2
+to 64 bodies, against 2.8-7.4% on `--engine loop --arith fma`.
+
+### What the plan had wrong
+
+- **The route comparison could not see the trap, as first built.** `DTB`,
+  `DTDB`, `RB`, `D1B` and `D2B` hold one value a system. Passed as a
+  scalar, element 0 is system 0's step, right for one system and wrong
+  for an ensemble. But `vrun_k()`'s fallback also broadcasts element 0,
+  so both routes gave the same wrong answer: on T1, forced on against
+  forced off differed in 0 of 15 lines, while 8 of 15 differed from the
+  correct engine. P5 found this, and its gate held each ensemble to its
+  members run alone.
+- **"That is one flag" is four edits:** the flag, `check_door`'s `OPT_IN`,
+  the library case's `expected()`, and the gate's default.
+- **ROADMAP's "~300 staged vectors a step"** is 50 an attempt on the
+  card's engine, and its 24 sites are not these 24.
+- **`KY4` and `KY5`'s only sites are in `dtnew_prs23()`,** out of scope:
+  5 sites and 17 calls an attempt, on the card's engine too.
+
+### The change that closed it
+
+With both routes through `vrun_k()`, the default route copied element 0
+n times at every site, which `e47b04e` did not. `777f160` makes the off
+branch today's call on the prebuilt vector. That gives two things:
+- the default path is `e47b04e`'s exactly, so an opt-in route costs
+  nothing to have merged;
+- the routes can now see the trap, because off reads the whole vector
+  and on reads element 0.
+
+So `tools/check_scalar.py` has two oracles. Forced on must equal forced
+off, and each ensemble's systems must equal themselves run alone.
+
+### The gate, and the controls that show it can fail
+
+At every format, `check_scalar --library` gives 90 ok, 0 FAIL, and
+`check_door` 80 ok, 0 FAIL. Its cases include:
+
+```
+ok   kepler e=0.99, rejections that predict: the same record, schedule and counters on all three routes; 40 steps, 11 rejected, 51 attempts, 1470 passes; 11 rejected attempts predicted; the route carried 2559 calls and staged_bytes fell by 408096, both as derived
+ok   check_dropin --light, forced onto the new route: rc 0, every case passed; scalar=on by=forced calls=5815433 fallbacks=0
+```
+
+| property | sabotage | with it |
+|---|---|---|
+| The trap | T1: `DTDB` as a scalar at 21 sites, count-neutral | every E = 1 case passes; 6 FAIL, on the two adaptive ensembles; every format 68 ok, 18 FAIL, all naming both oracles |
+| The trap | T2 `DTB`, T3 `D1B`, T4 `RB`'s powers | 2, 2 and 4 FAIL, E = 1 all passing |
+| `staged_bytes` derived | T5, R1, R2, R3 | 27, 18, 27 and 27 FAIL: "fell by 0, and the sites derive 689664" |
+| The route's policy | O1 to O4 | `check_scalar` 27, 27, 27, 28; `check_door` 3, 3, 2, 5 |
+| Library half | M4a, M4b | pass unforced `check_dropin`, fail the forced-on leg: 30 ok, 9 FAIL |
+| Library sites | L1: a `predict_velocities()` site out | 2 FAIL: "added 4284 calls, and 68 passes of 105 are 7140" |
+
+The gate's `staged_bytes` fall is derived from the recounted sites, their
+widths and the run's call counts, not transcribed.
+
+### No record line moved
+
+- **P5's A/B against `e47b04e`, at `777f160`:** 66 integrations at three
+  formats, whole stdout, one line differing a run, `# route scalar=`. On
+  P5's first build, before `777f160` changed the default path, 93 of 93
+  on all three routes, across all four adaptive modes, `--cs augmented`,
+  softening and min-dt. V5's 171 rows, below, are at `777f160`.
+- **Merge 5's `make check`,** from clean at `c785263`, read from its log:
+  rc 0, 19 legs, all full, with no cache skips; **840 ok, 0 FAIL**, no
+  DIFFER, traceback or make error; 11 `RESULT: PASS`; the six digests
+  unchanged; `check_seams` 72 of 72 crossings, 18 of 18 replays and 9 of
+  9 program-engine pairs carried.
+
+### The verifier
+
+**On `777f160`: READY, 0 (a), 4 (b).** V5 read all 24 sites. A scan finds
+no write to any constant after it is built. An instrument in every
+helper asserted each constant is one value over the whole run: 32 ok, and
+its control died, `vmulk: the constant differs at lane 6 of 30`. With the
+helpers undone the tip disassembles to `e47b04e`'s code in both halves,
+every object section equal. Held to the base: 171 program rows, 4,272
+lines, 0 differ, and 15 `gate_real` sequences, 1,284 lines. The whole
+`check-light` passes with the route forced on, and `check-python` too.
+
+- **(b) b1.** P5 said the memory half was blocked, every K vector being
+  read whole with the route off. V5 measured otherwise. A K vector is
+  `NMAX` wide, NMAX = max(N3, P), and only `G` is read past N3. See
+  "What this leaves".
+- **(b) b2.** A route that says on and is not passes every tier:
+  `vrun_k()`'s on branch running today's `cft_run` while counting
+  `route_calls`. `staged_bytes` is the door's own tally. Stated below.
+- **(b) b3.** The recount's hold on the off branch was thin: H4, H6 and
+  H7 passed. `9335a59`, in merge 6, tightens it, and V5 measured H4, H6
+  and H7 failing there.
+- **(b) b4.** Two sentences went stale at merge 5. From merge 5,
+  `check_seams` forces `scalar` on an adaptive ensemble and fails T1, T2
+  and T4 too; T3 still has only `check_scalar`.
+
+### On the card
+
+The leg `p5-scalar` ran at `c785263` on the rev8a single tile, where
+`reduce_seg` was still on by device. All 24 card rows are identical to
+software, and `SCALAR=on` carried 106 calls and no fallback on the route
+check.
+
+| problem | format | off, s | on, s | on against off |
+|---|---|---|---|---|
+| kepler | fp64 | 22.15 | 21.67 | -2.2% |
+| kepler | fp128 | 42.68 | 42.33 | -0.8% |
+| outer | fp64 | 9.92 | 10.45 | +5.3% |
+| outer | fp128 | 21.70 | 22.12 | +1.9% |
+| pythagorean | fp64 | 10.93 | 10.65 | -2.6% |
+| pythagorean | fp128 | 20.50 | 18.08 | -11.8% |
+| nbody64 | fp64 | 6.50 | 6.28 | -3.4% |
+| nbody64 | fp128 | 16.21 | 15.89 | -2.0% |
+| nbody256 | fp64 | 24.07 | 23.82 | -1.0% |
+| nbody256 | fp128 | 48.44 | 47.65 | -1.6% |
+| nbody512 | fp64 | 65.58 | 64.62 | -1.5% |
+| nbody512 | fp128 | 118.87 | 119.28 | +0.3% |
+
+One run per row; entry 45 gives the noise. Measured: the route is faster
+on 9 rows of 12, with a median of -1.5%. Two rows stand past what two runs
+of one configuration differ by, pythagorean fp128 at -11.8% and nbody64
+fp64 at -3.4%, and one run a row cannot say whether they are real. So it
+neither wins nor loses measurably, and it stays opt-in, since a route
+leaves the list when a card measures it winning. Of ROADMAP's two reasons
+the honesty of having asked stands. The memory needs no route, below.
+
+### Stated limits, not closed
+
+- **A route that says on and is not** passes every tier (b2).
+- **What both routes share.** A site given the wrong constant has no
+  route or member line; `check_equivalence` catches it directly.
+- **The library FMA form** is held by its call counts only, because the
+  engine opens once a process.
+- **The recount reads only the wrappers it names.**
+
+### What this leaves
+
+The K vectors, measured by V5 on the default route: with them N3 wide, 66
+of 66 integrations are the same in every record line and in
+`staged_bytes`, and the peak falls 80.6% at N = 256 binary64 and 90-95%
+from N = 512 up: 1,206 MB to 97 MB at N = 1024 binary64, and 4,682 MB to
+249 MB at binary256. The library half is not built. Filed for the next
+round.
+
+### What this does not establish
+
+- **A full `make check` on Linux.** The ledger records none at these
+  merges.
+- **The memory variant in the library half.**
+
+## 45. Round 3 on the card: the merged tree gives software's bits on a tile and 21-36% off a run up to 64 bodies; every new route lost or tied, and all four are opt-in
+
+**2026-11-02 and 2026-11-06.** amd-arc-box's U50, one tile at a time. Pins:
+REBOUND at bdfda4bd and cft-fp256 at 922c2ad (ABI 0.18). The images are
+the f128 single (`90457667a76df67b...`, entry 37's), the revision-8
+single, "rev8a" (`0639248e9c66f779...`), the quad (`4f9921a25af65444...`)
+and the deep single, "rev8d" (`bbf08fb3feb60940...`). Three commits ran
+that are not on main, `c3471bc`, `afc83d8` and `aa3aa7e`, each a parcel or
+staging commit with `hw/cardday-round3.sh`. Session r3a ran `63a4e4f`,
+which is `af2f400` with the card script, and this entry calls it
+`af2f400`.
+
+This entry is what the sessions measured across the parcels. Entries 40
+to 44 carry each parcel's own card rows.
+
+### The pin on the card
+
+Entry 38's missing row. At `af2f400`, through libcft 0.18:
+- **The f128 image opens.** `gate_real` passes at binary64 and binary128,
+  and binary256 is refused by name: "carries fp32 fp64 fp128".
+- **On rev8a, what ran passes:** `gate_real` at all three formats, and
+  `check_dropin`, **131 ok, 0 FAIL, "every case passed"**, in 3 h 34 min.
+  That leg's `check_dropin --wide` and `check_ensemble` were left for a
+  later window.
+
+### The round's before and after
+
+`hw/bench-workload.py` on the rev8a single tile, default engine for the
+card (`--engine program --arith fma`), every card row byte-identical to
+software. "Before" is `af2f400`. "After" is the merged engine, at
+`e90d5df`, which has `e47b04e`'s, with the device exit test off, which is
+the default as the round ends. Both columns are `workload.csv`'s
+`seconds`, the bench's clock around the process, one run per row:
+
+| problem | format | before | after | change |
+|---|---|---|---|---|
+| kepler, 200 steps | fp64 | 26.57 | 20.93 | -21.2% |
+| kepler | fp128 | 53.87 | 37.97 | -29.5% |
+| outer, 100 steps | fp64 | 13.66 | 9.45 | -30.8% |
+| outer | fp128 | 31.78 | 21.38 | -32.7% |
+| pythagorean, 100 steps | fp64 | 13.82 | 9.52 | -31.1% |
+| pythagorean | fp128 | 24.96 | 18.01 | -27.8% |
+| nbody64, 20 steps | fp64 | 9.66 | 6.30 | -34.8% |
+| nbody64 | fp128 | 24.45 | 15.55 | -36.4% |
+| nbody256, 5 steps | fp64 | 25.57 | 23.38 | -8.6% |
+| nbody256 | fp128 | 51.33 | 47.48 | -7.5% |
+| nbody512, 3 steps | fp64 | 61.00 | 62.58 | +2.6% |
+| nbody512 | fp128 | 116.56 | 116.84 | +0.2% |
+
+**What the noise is.** Two benches ran one configuration in different
+sessions, `REDUCE_SEG=on` at `e90d5df` and `SCALAR=off` at `c785263`, whose
+off route P5 and V5 measured as `e47b04e`'s calls. Row against row they
+differ by -5.8% to +5.7% on kepler, outer and pythagorean, and by -0.6% to
++1.9% on the n-body rows. Add the deep image, which should cost the same,
+and a small-problem row spans up to 8.3%, outer fp64. So a single row is
+good to about 6-8% and 2% at best. `SCALAR=on` would widen those to 13.4%
+and 3.5%, but it is the route under test (entry 44).
+
+Measured, with that noise: a row is 21-36% cheaper up to 64 bodies, about
+8% cheaper at 256, and no better at 512, where the rows move +0.2% to
++2.6%. Believed: most of the gain is P1's program form and P4's program.
+No bench separates them on one commit. `d4e710b`'s both-off rows, which
+have P1 and not P4 or P2, are -16% to -35% up to 64 bodies, -8% to -10% at
+256, and +1.5% to +6.3% at 512.
+
+**At 256 and 512 bodies a row is not a step.** Each row evaluates the
+energy at its first and last sample, and `energy_all()` sums it with one
+width-one call a pair and one a body. That is 65,792 of the row's 68,584
+calls at 256 bodies and 262,656 of 264,517 at 512. At those rows' 112-119
+us a call it is about 7.4 s of the 256 rows and 31 s of the 512 rows, in
+both columns, and half of the nbody512 fp64 row. Estimated with it taken
+out, at that cost on both sides, a step moves -9% to -12% at 256 bodies
+and +0.4% to +5.5% at 512. That is arithmetic on the rows. No run measured
+a step apart from its energy.
+
+**Where the gain goes at 512 bodies.** The program's own buckets, before
+and after, in seconds:
+
+| bucket | binary64 | binary128 |
+|---|---|---|
+| elementwise calls, `t_elem`, about 31 s of each the energy | 39.24 to 31.47 | 54.71 to 31.23 |
+| program runs, `t_program` | 0.21 to 6.52 | 0.56 to 19.05 |
+| divide and square root, `t_divsqrt` | 19.26 to 22.20 | 56.62 to 62.26 |
+
+So the round moved work from elementwise calls into program runs, and at
+512 bodies the runs and the divides take back what the calls saved.
+Measured, not explained: the same divide and root calls take 10-19%
+longer at 256 and 512 bodies.
+
+### What the software backend paid
+
+The gain is a card's. On this desktop, with nothing else running, `af2f400`
+against the tree this entry lands with, on the software backend, the
+bench's arguments, best of 5 runs and of 3 from 64 bodies up, parent's
+clock:
+
+| problem | REBOUND's form, fp64 | fp128 | `--engine program --arith fma`, fp64 | fp128 |
+|---|---|---|---|---|
+| kepler, 200 steps | 2.44 to 2.94 s, +20.5% | +19.7% | 0.98 to 1.38 s, +39.7% | +37.7% |
+| outer, 100 steps | 3.11 to 3.64 s, +17.0% | +13.1% | 1.47 to 1.91 s, +29.9% | +26.3% |
+| pythagorean, 100 steps | 1.56 to 1.86 s, +19.0% | +15.1% | 0.69 to 0.92 s, +34.1% | +32.7% |
+| nbody64, 20 steps | 17.52 to 18.70 s, +6.8% | +0.6% | 12.48 to 13.50 s, +8.1% | +2.1% |
+| nbody256, 5 steps | 61.36 to 62.91 s, +2.5% | -2.8% | 57.09 to 59.88 s, +4.9% | +2.6% |
+
+Measured: `t_program` is what rises. Kepler in REBOUND's form at binary64
+goes from 0 to 0.53 s of it, while `t_elem` falls from 0.41 to 0.38 s on
+84,915 fewer calls. So on software a program run costs more than the
+calls it replaces, and the gap closes as the pairs grow. REBOUND's form is
+the drop-in's, so a user with no card pays 13-21% on a few-body problem.
+Gravity's off route is the program form too (entry 43), so no switch
+restores the old calls. No entry said this until the docs check at the
+round's end found the bench's software rows had moved.
+
+### The gravity split, ROADMAP item 4's table
+
+At `af2f400`. Each figure is a share of the row's wall clock, and the
+buckets nest: `t_gravity` is about `t_g_lib` plus `t_g_copy`, and
+`t_g_lib` holds `t_g_accum`, `t_g_divsqrt` and the pair arithmetic.
+
+| problem | format | wall s (rev8a / f128) | gravity | host gather | accumulate | divide and sqrt in gravity |
+|---|---|---|---|---|---|---|
+| kepler | fp64 | 25.9 / 22.4 | 58.3% | 0.0% | 2.2% | 11.6% |
+| kepler | fp128 | 53.1 / 46.2 | 69.7% | 0.0% | 2.6% | 14.5% |
+| outer | fp64 | 13.0 / 11.3 | 59.5% | 0.0% | 9.7% | 10.9% |
+| outer | fp128 | 31.0 / 25.4 | 72.2% | 0.1% | 11.6% | 13.9% |
+| pythagorean | fp64 | 13.0 / 10.4 | 57.3% | 0.0% | 4.1% | 11.9% |
+| pythagorean | fp128 | 24.3 / 20.1 | 68.8% | 0.0% | 5.0% | 14.0% |
+| nbody64 | fp64 | 9.0 / 9.1 | 81.2% | 1.2% | 38.8% | 26.4% |
+| nbody64 | fp128 | 23.7 / 24.2 | 88.7% | 1.2% | 38.3% | 33.3% |
+| nbody256 | fp64 | 24.8 / 27.0 | 64.7% | 2.1% | 20.0% | 37.6% |
+| nbody256 | fp128 | 50.6 / 51.9 | 82.2% | 2.1% | 20.4% | 51.0% |
+| nbody512 | fp64 | 60.0 / 69.9 | 46.7% | 2.0% | 10.2% | 31.4% |
+| nbody512 | fp128 | 115.4 / 139.2 | 71.0% | 2.8% | 12.9% | 48.6% |
+
+The wall column is the program's own clock, `wall_seconds`, 0.6 to 1.2 s
+under a bench's `seconds`, so it is not the "before" above. The
+percentages are rev8a's. rev8a is 15-25% slower than the f128 tile on the
+three small problems, about even at 64 bodies, and 14-17% faster at 512.
+Measured: the host's gather is at most 2.8% of a step, so a device gather
+had almost nothing to win, and the device gathers then lost (entry 43).
+Inside gravity the divide and square root are the largest cost from 256
+bodies up, 31-51% of a row. Estimated without the energy evaluations, they
+are 54-67% of a step at 256 and 512 bodies before the round, and 73-74%
+as it ends, at both formats.
+
+### Every new route, on a tile
+
+| route | what it carries | against today's route on rev8a | as the round ends |
+|---|---|---|---|
+| `indexed` | gravity's accumulate fold | +22% to +40% at 64-512 bodies | opt-in |
+| `pair_gather` | the pair program's gather | +22% to +38% at 64-512 bodies; with `indexed`, +47% to +74% | opt-in |
+| `reduce_seg` | the corrector's exit test | slower on 12 rows of 12: +0.8% to +4.8% on the n-body rows, +2.0% to +11.4% on the small ones | opt-in |
+| `scalar` | a constant operand | 9 rows of 12 faster, median -1.5%; neither wins nor loses measurably | opt-in |
+
+All four give software's bits: every card row of every bench is
+identical. `reduce_seg`'s rows are:
+
+| problem | format | off, s | on, s | on against off |
+|---|---|---|---|---|
+| kepler | fp64 | 20.93 | 21.35 | +2.0% |
+| kepler | fp128 | 37.97 | 42.16 | +11.0% |
+| outer | fp64 | 9.45 | 10.53 | +11.4% |
+| outer | fp128 | 21.38 | 22.35 | +4.5% |
+| pythagorean | fp64 | 9.52 | 10.37 | +8.9% |
+| pythagorean | fp128 | 18.01 | 19.40 | +7.7% |
+| nbody64 | fp64 | 6.30 | 6.48 | +2.9% |
+| nbody64 | fp128 | 15.55 | 16.30 | +4.8% |
+| nbody256 | fp64 | 23.38 | 24.22 | +3.6% |
+| nbody256 | fp128 | 47.48 | 47.86 | +0.8% |
+| nbody512 | fp64 | 62.58 | 64.36 | +2.8% |
+| nbody512 | fp128 | 116.84 | 118.72 | +1.6% |
+
+The direction is measured, on 12 rows of 12. The size is less sure. Outer
+fp64's +11.4% is mostly noise: with the test on, the deep image took 9.72 s
+and `SCALAR=off` 9.92 s. Kepler fp128's +11.0% may not be: four runs with
+the test on took 42.16 to 42.68 s, against one run off at 37.97 s.
+
+**So `auto` takes none of the four.** The door keeps each route and its
+switch, and a route leaves the list when a card measures it winning. The
+owner chose this for gravity's two on 2026-11-02 and for `reduce_seg` on
+2026-11-06, and `scalar` was opt-in from the start. `eb6976a` is the
+flip for `reduce_seg`, and V5 verified it:
+- 171 rows, 7 runs a row, 0 differ against `c785263`;
+- the default equals `c785263` forced off in every line but the by=
+  word, `staged_bytes` included;
+- all four forced on equals the default in records and counters;
+- M4, a library half silently on today's route, passes `check_door` and
+  the default drop-in, and fails only the forced-on `check_corrector
+  --library` that the flip added.
+
+### The ensemble on a tile, and what idle lanes cost
+
+`hw/bench-ensemble.sh` at `e830230`, on the rev8a single tile: 20 steps of
+fixed dt 0.05, the FMA form on the program engine. "Together" is members
+one ulp apart. "Apart" is member k's planet faster by k/2000, so they span
+eccentricities. All 8 card rows are identical to software.
+
+| members | format | together: card s, against software, lane efficiency, passes | apart: card s, against software, lane efficiency, passes |
+|---|---|---|---|
+| 64 | fp128 | 6.46, 1.82x, 0.943, 8.062 | 6.32, 1.82x, 0.940, 8.039 |
+| 64 | fp256 | 14.56, 2.21x, 0.976, 18.247 | 14.68, 2.17x, 0.975, 18.180 |
+| 512 | fp128 | 17.77, 4.74x, 0.910, 8.056 | 17.06, 4.84x, 0.907, 7.887 |
+| 512 | fp256 | 50.10, 4.75x, 0.966, 18.258 | 49.25, 4.78x, 0.940, 17.633 |
+
+Measured:
+- **A tile beats software here,** 1.8-2.2x at 64 members and 4.7-4.8x at
+  512. `docs/bench/ensemble.csv`'s binary128 rows on the f128 tile, from
+  2026-09-14, are 10.70 s and 24.66 s, so these are 40% and 28% less.
+  They are a different image and engine, and nothing separates the two.
+- **Idle lanes are 2.4-9.3% of lane-passes.** Apart moved lane efficiency
+  by at most 2.6 points, and card seconds by -4.0% to +0.8%, inside the
+  noise above. No row rose past it.
+
+So this does not price the lane mask at a wide spread. HARDWARE's item 4
+asks for members needing 10 and 23 passes in one step. This perturbation,
+over 20 steps, moved the mean by at most 0.6 of a pass.
+
+### The other images
+
+- **A quad opened as one tile, `CFT_XRT_TILES=1`,** against the rev8a
+  single, on the three small problems: 1-10% slower, every row identical
+  to software. Believed, not separated: some of that may be the two
+  images' kernel clocks.
+- **The deep single, rev8d.** `max_scratch: 8192` against the single's
+  4,096, `seq_features: 0x7ff1f`. 6 of 6 rows identical to software, and
+  5 of them within 2% of rev8a; the sixth, at -7.7%, is inside the span
+  above. The port's widest program, gravity's fold, uses 256 slots, well
+  under the single's 4,096, so the depth has nothing to buy here, and it
+  costs nothing.
+
+### The gates on a tile
+
+| gate | commit | result |
+|---|---|---|
+| `check_door` | `af2f400` | 53 ok; 131 of 131 cases on both routes at each format |
+| `check_door` | `e90d5df` | 77 ok, 0 FAIL; 164 of 164 at each format; the opt-in branches measured |
+| `check_door`, f128 tile | `af2f400` | 33 ok; 98 of 131, with `indexed` and `reduce_seg` absent |
+| `check_program_engine` | `c3471bc` | 15 ok, 0 FAIL, in 56 min |
+| `check_gravity` | `afc83d8` | 23 ok, 0 FAIL, in 59 min |
+| `check_corrector` | `85fd0aa` | 277 ok, 0 FAIL, in 58 min |
+| `gate_real`, identity | `85fd0aa` | PASS at all three formats |
+| `check_ensemble` | `c785263` | 27 ok, 0 FAIL, at all three formats, 3 to 5 members, in 4 h 27 min |
+| `check_door` | `e830230` | 77 ok, 0 FAIL, in 780 s; 164 of 164 at each format; all four routes forced on carry their calls with no fallback, and the records and 9 counters equal the default's |
+| `check_seams --quick` | `e830230` | 36 ok, 0 FAIL, at binary64, in 30 min; 24 of 24 checkpoint crossings, 6 of 6 replays and 3 of 3 program-engine pairs carried |
+| `gate_real --fp64`, all four routes forced on | `e830230` | PASS, in 6 min 46 s; all 8 digest lines software's |
+
+`check_seams` takes each opt-in route through the library half on a tile
+at the final tree, one at a time: forced at a save and off at the resume,
+then the other way, each crossing giving the straight run's 17 values,
+with `CFT_REBOUND_NO_ADOPT` differing. In the plain sequence `scalar`
+carried 19,012 calls at the save and `indexed` 928.
+
+The window's last minutes ran `gate_real --fp64` with all four on at once.
+All 8 digest lines equal software's default in merge 6's suite,
+`e08541bc0af9b3ec` and `56bacf3bf63f19a7` among them, and it printed twice
+"the resume is REBOUND's own ias15 across its own checkpoint, 30 values
+bit for bit". A straight run under `--routes` carried `scalar` 56,105
+calls, `indexed` and `pair_gather` 2,735 each and `reduce_seg` 730, with
+no fallback.
+
+Legs ran from well under their estimates to 3 times them: `check_ensemble`
+took 4 h 27 min against 90 minutes, and `mixed` 15 minutes against 60.
+`seams`, whose 5 minutes was a placeholder, took 30. The Python checkers
+open the device once per case, as docs/HARDWARE.md warns.
+
+### Merge 6, the round's last
+
+`eb6976a` is the flip above. `6b2b5f0` merges P5's `9335a59` (entry 44).
+`e830230` adds the leg `dropin-forced`, after V5 caught that with all four
+routes opt-in an unforced drop-in on a tile takes no device route, and
+would have read as a pass for them. `148bb50` takes V5's follow-ups:
+`check_corrector` reads a route's state as well as its by=, both gates
+hold `nextstep_calls`, so 10 counters, and `check_corrector`'s header
+states the limit below. V5 on `6b2b5f0`: READY, 0 (a), 5 (b); on `148bb50`,
+four of the five closed, and two comments left. The commit that adds this
+entry fixes those two.
+
+The full `make check`, from clean at `148bb50`, read from its log:
+- rc 0, 19 legs, all full, with no cache skips, in **2 h 36 min**, the
+  first time with little else on the host since the suite grew;
+- **841 ok, 0 FAIL**, no DIFFER, traceback or make error;
+- 11 `RESULT: PASS`;
+- the six digests unchanged: `e08541bc0af9b3ec`/`56bacf3bf63f19a7`,
+  `5d7cf4588fad050e`/`cd16e6dc29aa0589`,
+  `a1052750e206bebe`/`ba4d447c8e58bd20`;
+- each route family forced through `check_dropin --light`, against
+  REBOUND, on software: 5 cases carried 574 maxima on the device's exit
+  test, `indexed` carried 236,346 calls and `pair_gather` 236,397, and
+  `scalar` 5,815,433;
+- `check_seams`: 72 of 72 crossings, 18 of 18 replays and 9 of 9
+  program-engine pairs carried.
+
+`make check-light` and `make check-quick`, each from clean with its build,
+on the tree this entry lands with, docs aside: rc 0, 19 legs, **550 ok, 0
+FAIL**, 11 `RESULT: PASS` each, in 31 and 42 minutes, and 13 s warm.
+
+### Stated limits, not closed
+
+- **A route that says on and is not** passes every tier, for all four
+  routes. `route_calls` and `staged_bytes` are the door's own tallies, and
+  nothing derives `reduce_seg`'s rise in `staged_bytes`.
+
+### What this does not establish
+
+**Not run on a tile.** `check_ensemble` took 4 h 27 min of the day's 9
+hours, and a drop-in run cannot stop between cases, so these were left
+rather than risk the card's nightly job:
+- **`check_dropin` at any merged tree.** It last ran on a tile at
+  `af2f400`, so `dropin-forced`, `dropin-light` and `dropin-wide` remain.
+  What a tile has against REBOUND's own ias15 at these trees is `gate_real`
+  at binary64, with all four forced at `e830230` and with `reduce_seg` on
+  at `85fd0aa`: one sequence, not the drop-in's case-by-case comparison.
+  The default the round ends with has not met REBOUND on a tile.
+- **`check_gravity` at the merged tree,** the leg `p1-gate`.
+- **`check_scalar` at all.** The leg `p5-scalar` is two benches and a route
+  check.
+- **`check_program_engine` at a merged tree.** It ran at `c3471bc` only.
+- **`check_seams` above binary64, and `gate_real` at binary128 and
+  binary256 after `85fd0aa`.**
+- **Anything on the f128 tile at a merged tree,** but r3c's probe.
+
+- **Noise beyond two runs.** One configuration ran twice, and its small
+  rows a third time on the deep image. A row's spread is an estimate.
+- **What separates P1 from P4 in the gain.** No bench holds one fixed.
+- **A step apart from its energy.** The figures for that are estimates.
+- **Why the runs and the divides rise at 512 bodies.** The buckets say
+  where the gain goes, and not why.
+- **A second card, or a second host.** Every card row is one U50's.

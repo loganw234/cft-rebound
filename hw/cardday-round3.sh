@@ -66,9 +66,10 @@
 #   DEEP   revision 8's deep single: one tile, the single's seq_features,
 #          and 8,192 scratch slots a lane against the single's 4,096
 #          (cft-fp256 docs/LANGUAGE.md, scratch-capacity). The port's
-#          programs use 10 to 22 slots, so the depth itself should buy
-#          nothing here. The deep leg asks whether the image costs or
-#          saves per call anyway. The owner pointed it out on 2026-11-02.
+#          widest program, gravity's fold, uses 256 slots, so the depth
+#          itself should buy nothing here. The deep leg asks whether the
+#          image costs or saves per call anyway. The owner pointed it out
+#          on 2026-11-02.
 # The probe leg prints what each image publishes on this card, at this
 # pin. Read it before you trust the two readings above, which were taken
 # at older pins.
@@ -151,6 +152,11 @@
 #                tile, at a quarter of check_dropin's card time.
 #   dropin-wide  check_dropin --wide, gates-rev8a's binary128 gate on its
 #                own.
+#   seams        tools/check_seams.py --quick: each opt-in route through
+#                the library half across a checkpoint, under a replay and
+#                under the step-control program, at binary64. Unlike a
+#                drop-in run its processes are short, so a window that
+#                cannot hold dropin-forced can hold this.
 #   dropin-forced  check_dropin --light with all four routes forced on.
 #                They are opt-in, so an unforced run takes none of them,
 #                and this is the one run that holds the device's routes
@@ -168,15 +174,15 @@ GUARD_WAIT=${GUARD_WAIT:-600}
 UNTIL=${UNTIL:-}
 SESSION_A=(probe pin-f128s split-f128s door-rev8a door-f128s split-rev8a tiles gates-rev8a mixed deep)
 LEGS=("${SESSION_A[@]}" p4-program p3-identity p2-corrector p2-bench p2-replay p1-gate p1-gravity p5-scalar
-      ensemble dropin-light dropin-wide dropin-forced)
+      ensemble dropin-light dropin-wide dropin-forced seams)
 # Minutes each leg takes on one tile, on the generous side. Where a leg
 # has run, this is its time on 2026-11-02 and a margin; those days' legs
-# ran up to four times the first estimates.
+# ran up to three times their estimates.
 declare -A EST=([probe]=2 [pin-f128s]=10 [split-f128s]=45 [door-rev8a]=15 [door-f128s]=15
-                [split-rev8a]=45 [tiles]=10 [gates-rev8a]=300 [mixed]=60 [deep]=8
+                [split-rev8a]=45 [tiles]=10 [gates-rev8a]=300 [mixed]=20 [deep]=8
                 [p4-program]=65 [p3-identity]=35 [p2-corrector]=150 [p2-bench]=55 [p2-replay]=20
                 [p1-gate]=70 [p1-gravity]=130 [p5-scalar]=55
-                [ensemble]=210 [dropin-light]=80 [dropin-wide]=150 [dropin-forced]=100)
+                [ensemble]=290 [dropin-light]=80 [dropin-wide]=150 [dropin-forced]=100 [seams]=35)
 log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 die() { echo "FATAL: $*" >&2; exit 2; }
 last() { tail -n "${2:-1}" "$1" 2>/dev/null | tr '\n' ' ' | cut -c1-"${3:-300}"; }
@@ -518,6 +524,11 @@ leg_dropin_forced() {
 leg_dropin_wide() {
     CFT_REBOUND_ARTIFACT=$REV8A build/check_dropin --wide > "$1/check_dropin-wide.txt" 2>&1
     log "check_dropin --wide (rc=$?): $(tally "$1/check_dropin-wide.txt"); $(last "$1/check_dropin-wide.txt" 2)"
+}
+
+leg_seams() {
+    CFT_REBOUND_ARTIFACT=$REV8A "$PY" tools/check_seams.py --build build --quick > "$1/check_seams.txt" 2>&1
+    log "check_seams --quick on REV8A (rc=$?): $(tally "$1/check_seams.txt"); $(last "$1/check_seams.txt" 2)"
 }
 
 leg_mixed() {

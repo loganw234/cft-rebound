@@ -3,17 +3,45 @@
 
 # Round 3: up to date with the library that was built for this port
 
-**Status, 2026-10-31: P0 is built and verified twice, and nothing is
-dispatched.**
-- The re-pin, P0(a), is merged and pushed (`ebaeaa1`).
-- P0's first build is on branch `round3-p0`. V0 sent it back, and the
-  fixes are on `round3-p0-v1`.
-- V0's scoped re-check confirmed those fixes, and found four gaps and
-  one more route divergence. Its second re-check confirmed those fixes
-  too, and found three ways to fool the data's self-check. All of it is
-  fixed on the same branch.
-- P0 lands when its full suite is green and the owner says so.
-- The rest of this plan is the owner's to approve, change or cut.
+**Status, 2026-11-06: the round is finished.** P0 to P5 are merged and
+pushed. docs/VALIDATION.md entries 39 to 45 are the record, and ROADMAP.md,
+"What round 3 measured", is the short form.
+- **On a tile a default run is 21-36% cheaper up to 64 bodies, about 8%
+  at 256, and no better at 512.** Every card row is identical to
+  software (entry 45).
+- **The software backend paid for it:** a few-body run with no card is
+  13-21% slower in REBOUND's form, and 26-40% on `--engine program`.
+- **Every new route lost or tied on a card.** So `auto` takes none of the
+  four. Each stays on the door until a card measures it winning.
+- **What did not run on a card** is listed in entry 45.
+
+The rest of this file is the plan as dispatched, and it stays as that
+record, apart from `opt_in` and `pair_gather` in P0's policy. Where the
+plan was wrong, this list says so.
+
+- **Its P1 ceiling, about 2x at 64 bodies and 1.36x at 256, was for
+  routes that lost.** In a step, each device gather cost 22-40% at 64 to
+  512 bodies (entry 43). The gain came with the host still gathering.
+- **`auto` does not leave it to the device.** "The device decides", in P0
+  below, holds only for a route with no `opt_in`. The word was added on
+  2026-11-02 for gravity's two routes, and by=opt_in now covers all four.
+- **`predict_next_step` has no "sixteen compensated additions".** The 17
+  `add_cs` a coordinate are `step_attempt()`'s end-of-step update (entry
+  40).
+- **One count moved by one is inert on most attempts,** so P2's replay
+  control needed replacing (entry 41).
+- **The P2 x P3 seam, "a replay across a checkpoint", does not exist.**
+  The replay is the program's and the checkpoint is the drop-in's. The
+  route is what they share (`tools/check_seams.py`).
+- **`provenance` already existed,** as `cft_provenance`, from `7fbbd1f`.
+  And the clock alone was not enough above binary64: `dt` and `dt_last`
+  are wide too (entry 42).
+- **P5's memory needed no route.** The K vectors can be N3 wide with the
+  route off, and a card measured the route neutral (entry 44).
+- **The card day's image and estimates.** The one-tile f128 image lacks
+  `indexed` and `reduce_seg`, so the routes ran on the revision-8 single.
+  The long gates ran up to 3 times their estimates, `check_ensemble` 4 h
+  27 min against 90 minutes (entry 45).
 
 Round 2 ([PARCELS.md](PARCELS.md), which stays as that round's record
 because the tree cites it) took the port from correct to usable. Since
@@ -248,9 +276,10 @@ the pinned `third_party/cft-fp256/host/include/cft.h`):
 - `CFT_SEQ_FEAT_INDEXED`, at :974.
 
 The policy is stated once, in `route_def[]`, for the routes `scalar`,
-`indexed` and `reduce_seg`:
+`indexed` and `reduce_seg`, and `pair_gather`, which P1 added:
 - `CFT_REBOUND_ROUTE_<NAME>` takes `auto` (the default: the device
-  decides), `off` (today's route, whatever the device publishes) or `on`.
+  decides, except on an opt-in route, which stays off), `off` (today's
+  route, whatever the device publishes) or `on`.
 - `on` against a device without the bit is **refused by name**. The
   program refuses with `die()`. The library returns `-4` with the
   sentence in `ias15_engine_error()`, as it does for an absent format,
@@ -267,8 +296,8 @@ The policy is stated once, in `route_def[]`, for the routes `scalar`,
   reads it, as the program's gates read the `# route` lines.
 
 Each family's calls and fallbacks are counted, and the trailer prints
-one line per family: `# route <name>=on|off by=device|absent|hidden|forced
-calls=N fallbacks=N`. `--probe` names the three bits as the device
+one line per family: `# route <name>=on|off
+by=device|opt_in|absent|hidden|forced calls=N fallbacks=N`. `--probe` names the three bits as the device
 publishes them.
 
 **(c) The wrappers that the contract alone defines.**

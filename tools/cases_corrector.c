@@ -9,13 +9,13 @@
  * --library runs this whole suite that way, which holds that route to
  * REBOUND's own ias15, bit for bit, in every case. Unforced, every case
  * holds today's. What no other case can see is WHICH route ran, because
- * the drop-in has no
- * trailer. So this reads ias15_engine_route() around integrations of its
- * own, in each of REBOUND's four modes (INDIVIDUAL takes the route's
- * other shape), and asserts that the route the engine says it took is
- * the one that carried the maxima: calls on the device route and no
- * fallback, or fallbacks and no call, and never neither. Each integration
- * is held to REBOUND's own as well, as every case here is.
+ * the drop-in has no trailer. So this reads ias15_engine_route() around
+ * integrations of its own, in each of REBOUND's four modes (INDIVIDUAL
+ * takes the route's other shape), and asserts that the route the engine
+ * says it took is the one that carried the maxima: calls on the device
+ * route and no fallback, or fallbacks and no call, and never neither.
+ * Each integration is held to REBOUND's own as well, as every case here
+ * is.
  *
  * The engine opens once a process, so the route is whatever the
  * environment chose at the first bind. The case DERIVES which state that

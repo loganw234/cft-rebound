@@ -81,9 +81,9 @@ COUNTERS = ("steps_done", "iterations_max_exceeded", "steps_rejected", "mean_pc_
 # gravity's switches (ROUND3.md, P1). On the rev8a tile each made a step
 # 22-40% slower at 64 to 512 bodies with the same bits (lead.md,
 # 2026-11-02 16:55), so the owner made them opt-in. The third is the
-# corrector's exit test (P2): on the same tile it was slower than the
-# host's loop on all 12 bench rows (lead.md, 2026-11-06 09:06). The fourth
-# is the scalar family (P5), neutral there (lead.md, 2026-11-06 11:15).
+# scalar family (P5), neutral there (lead.md, 2026-11-06 11:15). The fourth
+# is the corrector's exit test (P2): on the same tile it was slower than
+# the host's loop on all 12 bench rows (lead.md, 2026-11-06 09:06).
 OPT_IN = ("indexed", "pair_gather", "scalar", "reduce_seg")
 # What each --door-refuse case must say, and which route it belongs to.
 # The cases themselves are read from the program's own refusal of an
@@ -314,9 +314,9 @@ def main():
     off = {routes[r]["env"]: "off" for r in names}
     for fmt in formats:
         # With every route opt-in this compares today's route with today's
-        # route, so it holds that auto takes nothing new, and only that. A
-        # route that ran while saying by=opt_in passes here; part 1 and
-        # part 4b are what catch it.
+        # route, so it holds only that forcing every route off moves nothing,
+        # and that the forced run says so. A route that ran while saying
+        # by=opt_in passes here; part 1 and part 4b are what catch it.
         print("check_door at %s: every route forced off against the default" % fmt)
         for name, prob, extra in runs:
             rc0, err0, s0, t0, r0, ident = record(cft, fmt, prob, extra)

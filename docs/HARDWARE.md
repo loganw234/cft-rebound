@@ -26,6 +26,14 @@ which ask became which call - and that nothing in this port calls any
 of them yet. Where this document says a mechanism does not exist, read
 "was not in the pinned library when this was written".*
 
+*2026-11-06: round 3 called the device gather, the per-system reduction
+and `scalar_mask`, each on a route of its own, and nothing here calls the
+lane mask. On a tile each route gave software's bits and lost or tied on
+time, so all four are opt-in, and a default run takes none of them. The
+gain the round measured is on the default route, and believed to be the
+program form of gravity and the step control: docs/VALIDATION.md entry 45,
+and ROADMAP.md, "What round 3 measured".*
+
 ## Why IAS15 is unusually favourable, and where it is not
 
 An IAS15 step is seven substeps, each a prediction of every
@@ -368,7 +376,9 @@ card, and what needs the card to confirm:
   behind `CAPS2[7]`), and as of 2026-09-14 nothing in this port uses
   it: the ask is delivered and unadopted. Adopting it is on the work
   list, ranked by what "Measured, later the same day" found - it
-  removes bytes, and bytes are not the wall.*
+  removes bytes, and bytes are not the wall.* *Round 3 adopted it on an
+  opt-in route, and a card measured it neutral (entry 44). The 300 are
+  50 an attempt on the card's engine.*
 
 ## What to do first, if a card is available
 
@@ -389,7 +399,11 @@ card, and what needs the card to confirm:
    yet. Note that the python checkers spawn a fresh `ias15_cft` per
    case and pay a device open every time, so they are the expensive way
    to use a card; `build/check_dropin` and `build/gate_real` open the
-   engine once per process.
+   engine once per process. *Done 2026-11-06, on a tile at all three
+   formats: `check_ensemble`, each ensemble of 3 to 5 members against
+   its members run alone, 27 ok, 0 FAIL, in 4 h 27 min (entry 45). The
+   large record is `docs/bench/ensemble.csv`'s: 4,096 members identical
+   to software at binary64 and binary128 on the f128 tile.*
 2. Time the same Kepler ensemble at E = 1, 8, 64, 512, 4,096 members,
    fp256, `--engine program`, 20 steps, card against software backend,
    which is the ledger's throughput entry with the card column filled
@@ -400,7 +414,10 @@ card, and what needs the card to confirm:
    numbers decide whether scratch residency is the first library job.
 4. A mixed ensemble (members needing 10 and 23 passes in the same
    step) to price idle lanes on the tile in wall time, which is what
-   decides whether the lane-mask ask is worth its library change.
+   decides whether the lane-mask ask is worth its library change. *Half
+   done 2026-11-06: members apart, at the spread `--vscale planet 0.0005`
+   reaches in 20 steps, leave 2-9% of lane-passes idle and raise no card
+   time past the noise (entry 45). The 10-and-23 mix has not run.*
 
 ## The specialised bitstream: tried, measured, and worth 2%
 

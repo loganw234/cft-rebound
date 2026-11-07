@@ -9,20 +9,21 @@
 #                         drop-in gate and the two libraries
 #   make constants        re-derive and re-check the IAS15 constants
 #   make programs         generate and assemble the sequencer programs
-#   make check            every gate at every format. About an hour on
-#                         this host, and it NEVER skips: it is the thing
-#                         whose meaning must not change.
+#   make check            every gate at every format. About two and a
+#                         half hours on this host, and it NEVER skips:
+#                         it is the thing whose meaning must not change.
 #   make check-quick      the same gates with the cheaper arguments, and
 #                         it SKIPS any leg whose inputs are byte for byte
 #                         what they were when that leg last passed
-#                         (tools/gate_cache.py). Measured: eighteen
-#                         minutes cold, five seconds when nothing has
-#                         changed. Every skip prints itself by name.
+#                         (tools/gate_cache.py). Measured: 42 minutes
+#                         cold, 13 seconds when nothing has changed.
+#                         Every skip prints itself by name.
 #   make check-light      every gate, every case, with most step counts
 #                         scaled to a tenth - a fast signal from
 #                         everything rather than a thorough one.
-#                         Measured: 559 s end to end, and on check_dropin
-#                         alone 159 s against 585, the same 130 cases.
+#                         Measured: 31 min end to end from clean, and
+#                         on check_dropin alone 159 s against 585, the
+#                         same 130 cases, when the suite was smaller.
 #                         Every banner prints the count it actually ran.
 #                         Never a substitute for `make check`.
 #   make gate-cache-report

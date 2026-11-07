@@ -257,7 +257,10 @@ would leave every case passing PRS23 against PRS23.
 3. **`provenance`** — ROADMAP.md line 404 says it is still owed:
    nothing in the state records that it was promoted from binary64
    rather than restored exactly, and only `cft_archive_finish_load()`'s
-   return value carries that, which a caller may discard.
+   return value carries that, which a caller may discard. *(`7fbbd1f`
+   did this the same day: the state has `cft_provenance`. The later lines
+   that called it still owed were the ones that were wrong.
+   docs/VALIDATION.md entry 42.)*
 
 **Gate:** extend `tests/gate_real.c` with the remove → save → resume →
 regrow sequence, which **must fail before the fix**. `CFT_N_SCALARS`
