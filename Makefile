@@ -630,6 +630,11 @@ IN_SCALAR   := --input tools/check_scalar.py --input src/ias15_cft.c $(IN_PROGRA
 # the program on the problems, the program images and an ensemble
 IN_SEAMS    := --input tools/check_seams.py --input tools/check_checkpoint.py $(IN_REAL) \
                $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) --input tools/make_ensemble.py
+# tools/check_ring.py (round 4's P2): the program on the rings the generator
+# writes, on both engines and so the program images, and the helper it
+# imports; it reads no file of data/problems/
+IN_RING     := --input tools/check_ring.py --input tools/make_ring.py --input tools/check_equivalence.py \
+               $(IN_PROGRAM) $(IN_PROGS)
 
 # The pins, checked at build time and not only at fetch time: a clone
 # under third_party/ that is not at its MANIFEST commit fails every tier
@@ -652,6 +657,7 @@ check: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_scalar --mode full $(IN_SCALAR) -- $(PYTHON) tools/check_scalar.py --build $(B) --library
 	$(GATE_CACHE) --leg check_records --mode full --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B)
 	$(GATE_CACHE) --leg check_ensemble --mode full --input tools/check_ensemble.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_ensemble.py --build $(B)
+	$(GATE_CACHE) --leg check_ring --mode full $(IN_RING) -- $(PYTHON) tools/check_ring.py --build $(B)
 	$(GATE_CACHE) --leg check_archive --mode full --input tools/check_archive.py $(IN_ARCHIVE) -- $(PYTHON) tools/check_archive.py --build $(B)
 	$(GATE_CACHE) --leg check_bodycount --mode full --input tools/check_bodycount.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_bodycount.py --build $(B)
 	$(GATE_CACHE) --leg gate_real_fp64 --mode full $(IN_REAL) -- $(B)/gate_real$(EXE) --fp64
@@ -681,6 +687,7 @@ check-quick: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_scalar --mode quick $(IN_SCALAR) -- $(PYTHON) tools/check_scalar.py --build $(B) --quick --library
 	$(GATE_CACHE) --leg check_records --mode quick --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_ensemble --mode quick --input tools/check_ensemble.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_ensemble.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_ring --mode quick $(IN_RING) -- $(PYTHON) tools/check_ring.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_archive --mode quick --input tools/check_archive.py $(IN_ARCHIVE) -- $(PYTHON) tools/check_archive.py --build $(B)
 	$(GATE_CACHE) --leg check_bodycount --mode quick --input tools/check_bodycount.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_bodycount.py --build $(B) --quick
 	$(GATE_CACHE) --leg gate_real_fp64 --mode quick $(IN_REAL) -- $(B)/gate_real$(EXE) --fp64
@@ -713,6 +720,7 @@ check-light: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_scalar --mode quick $(IN_SCALAR) -- $(PYTHON) tools/check_scalar.py --build $(B) --quick --library
 	$(GATE_CACHE) --leg check_records --mode quick --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_ensemble --mode quick --input tools/check_ensemble.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_ensemble.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_ring --mode quick $(IN_RING) -- $(PYTHON) tools/check_ring.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_archive --mode quick --input tools/check_archive.py $(IN_ARCHIVE) -- $(PYTHON) tools/check_archive.py --build $(B)
 	$(GATE_CACHE) --leg check_bodycount --mode quick --input tools/check_bodycount.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_bodycount.py --build $(B) --quick
 	$(GATE_CACHE) --leg gate_real_fp64 --mode quick $(IN_REAL) -- $(B)/gate_real$(EXE) --fp64
