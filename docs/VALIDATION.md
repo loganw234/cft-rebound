@@ -5810,10 +5810,14 @@ The suites, read from their logs:
 
 - **The recalled order is REBOUNDx's of 2020, not today's.** READ by study
   DEBRIS-A (2026-11-12, from REBOUNDx's repository on the web; nothing
-  run): it matches gravitational_harmonics.c at 5406ae5 (2020-04-13).
-  The file was rewritten on 2024-10-20 (8402022, a general spin axis)
-  with another operation order, so an operation-for-operation check
-  against a current REBOUNDx would not match bit for bit (BELIEVED).
+  run against REBOUNDx): it matches gravitational_harmonics.c at 5406ae5
+  (2020-04-13). The file was rewritten on 2024-10-20 (8402022, a general
+  spin axis) with another operation order, so an operation-for-operation
+  check against a current REBOUNDx would not match bit for bit
+  (BELIEVED). The study did MEASURE the port at binary64 bit-identical,
+  at the turn and on return, to REBOUND 5.1.1's IAS15 with J2 written in
+  Python in that order: low Earth orbit in 100 s steps over a quarter day
+  and a day, J4 zero.
 - **The order is REBOUNDx's as recalled** (decision 4). The formula and
   the physics hold it either way; only an operation-for-operation binary64
   comparison with REBOUNDx would confirm the order.
@@ -5830,9 +5834,10 @@ The suites, read from their logs:
   grow to about 1,200 s, roughly an orbit, and its fixed runs reach t = 3
   s, exercising the replay and nothing physical (V1, measured; P1 had
   believed all of them non-physical).
-- **The usage block at the head of src/ias15_cft.c did not name
-  `--zonal-selftest`** (P1). The commit that lands these records adds it
-  there, beside the README's line.
+
+One limit P1 stated is closed: the usage block at the head of
+src/ias15_cft.c did not name `--zonal-selftest`, and the commits that
+land these records add it there, beside the README's line.
 
 ### What this does not establish
 
@@ -6566,7 +6571,7 @@ Read from their logs, each on a shared host:
 
 The commit that lands these records ran its own full make check before
 its push. A commit cannot record its own suite, so that result is in the
-round's closing report and in main's history; the ledger archived with
+round's closing report; the ledger archived with
 these records (`archive/round4-ledger.zip`) ends before it.
 
 ### The lead's two lapses

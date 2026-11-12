@@ -714,11 +714,11 @@ docs/HARDWARE.md says what would actually move the integrator.
 `make check` runs every gate at every format (about two and a half hours at
 19 legs, 2026-11-06);
 
-`make check-quick` runs them at binary64, in about 40 minutes cold. Both
-include `tests/gate_real.c`, which takes a checkpoint through the
-registered integrator and requires the restarted run to be bit
-identical to an uninterrupted one, and `tools/check_bodycount.py`,
-which re-runs the equivalence gate
+`make check-quick` runs them at binary64, in about 40 minutes cold (19
+legs, 2026-11-06). Both include `tests/gate_real.c`, which takes a
+checkpoint through the registered integrator and requires the restarted
+run to be bit identical to an uninterrupted one, and
+`tools/check_bodycount.py`, which re-runs the equivalence gate
 at a few hundred bodies - where the per-particle summation order could
 drift from REBOUND's and nowhere else - and checks that the 1024-body
 cap is reachable and that 1025 is refused.

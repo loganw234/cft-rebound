@@ -67,8 +67,9 @@
  *             [--zonal-selftest]
  *             [--record-iters FILE | --replay-iters FILE]
  *
- * --zonal-selftest evaluates a problem's J2 and J4 term at fixed points,
- * every operation traced, and exits; tools/check_zonal.py is its gate.
+ * --zonal-selftest evaluates the J2 and J4 term and its potential at fixed
+ * points on its own synthetic constants (it reads no problem), every
+ * operation traced, and exits; tools/check_zonal.py is its gate.
  * --door-selftest holds each route engine_routes() can open against the
  * route it replaces, and exits; tools/check_door.py is its gate.
  *

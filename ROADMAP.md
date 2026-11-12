@@ -860,7 +860,8 @@ first, so round 4 built that half.
 **No record line moved.** Every verifier's untouched-path comparison
 held, from V0's 117 of 117 runs to VL's 60 of 60, and the six digests of
 entry 45 are unchanged at `9a42b1d`, `291c99c`, `7d50392` and `d9c8c8c`.
-Entry 51 has every suite of the round.
+Entry 51 has every merge's suite; the records' own is in the round's
+closing report.
 
 **What the round found that changes the GPU half.**
 - **A format difference cannot see a narrowing both runs share** (entry
@@ -888,8 +889,9 @@ Entry 51 has every suite of the round.
 ### Still owed from round 4
 
 - **`tools/state_to_problem.py` drops the `active` and `zonal` lines**
-  (entry 46), so a reversal through `tools/reversal.py` on such a problem
-  runs its backward leg on another problem. Carry both lines, and gate it.
+  (entry 46; READ, not run), so a reversal through `tools/reversal.py` on
+  such a problem runs its backward leg on another problem (BELIEVED).
+  Carry both lines, and gate it.
 
 ### The GPU half, next
 

@@ -249,11 +249,13 @@ beside every number.
   REBOUNDx is not pinned (decision 4). The formula and the physics gates
   hold the term either way.
   READ by study DEBRIS-A (2026-11-12, from REBOUNDx's repository on the
-  web, nothing run): the recalled order is REBOUNDx's as of 5406ae5
-  (2020-04-13). REBOUNDx rewrote gravitational_harmonics.c on 2024-10-20
-  (8402022, a general spin axis), with another order. So decision 4's
-  comparison would match the 2020 order only, and a current REBOUNDx is
-  BELIEVED to differ from the port in bits.
+  web, nothing run against REBOUNDx): the recalled order is REBOUNDx's as
+  of 5406ae5 (2020-04-13). REBOUNDx rewrote gravitational_harmonics.c on
+  2024-10-20 (8402022, a general spin axis), with another order. So
+  decision 4's comparison would match the 2020 order only, and a current
+  REBOUNDx is BELIEVED to differ from the port in bits. The study did
+  MEASURE the port at binary64 bit-identical to REBOUND 5.1.1's IAS15
+  with J2 written in Python in the 2020 order (low Earth orbit, J4 zero).
 - **The same ring file on every host.** Measured on one host, with
   mpmath's two backends.
 - **The exact-time pair from `vaugadd`,** and G1B refusing AUGADD on
