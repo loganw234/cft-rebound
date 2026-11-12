@@ -81,9 +81,14 @@
 #      Their positions must differ, and by no more than u128 * steps^2 of the
 #      distance from Saturn: binary128's round-off, eleven decades under
 #      binary64's. Beside it, how far the term itself moved them.
-#      This cannot see a defect both formats share: a term rounded to
-#      binary64 in both is the same binary64 value in both, and cancels. Parts
-#      1 and 2 see that one; this sees a precision that depends on the format.
+#      ITS SCOPE (the lead's ruling, 2026-11-12): it can fail on a defect that
+#      differs between the two formats, a constant or an operation narrowed
+#      at one format only, and it cannot fail on a narrowing both formats
+#      share. A term rounded to binary64 in both runs is the same binary64
+#      value in both, and cancels in their difference (measured: 3.4e-33 on
+#      120 steps, against the correct build's 3.4e-33). Parts 1 and 2 hold that
+#      one, against references without it: the golden model and mpmath. Its
+#      negative control is the term rounded to binary64 at binary128 only.
 #   Then: the term reaches both engines and both forms (the program engine's
 #      record is the loop engine's in the FMA form, and every engine and form
 #      differs from its run without the zonal line); an ensemble of two
@@ -781,8 +786,9 @@ def main():
     verdict(len(a) == len(b) == sw + 1 and 0 < worst <= bound,
             "%d samples on the same %d steps: the positions differ by %s of the distance from Saturn at most, against "
             "binary128's round-off, u128 * steps^2 = %s (binary64's: %s), and must differ at all; the term itself "
-            "moved them %s" % (len(a), sw, mpmath.nstr(worst, 3), mpmath.nstr(bound, 3),
-                               mpmath.nstr(mpf(2) ** -53 * sw ** 2, 3), mpmath.nstr(moved, 3)))
+            "moved them %s. Its scope: a precision that differs between the formats, never a narrowing both share "
+            "(parts 1 and 2 hold that)" % (len(a), sw, mpmath.nstr(worst, 3), mpmath.nstr(bound, 3),
+                                           mpmath.nstr(mpf(2) ** -53 * sw ** 2, 3), mpmath.nstr(moved, 3)))
 
     # Both engines and both forms see the term
     print("check_zonal: both engines and both forms, and an ensemble against its members")
