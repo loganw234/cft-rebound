@@ -49,7 +49,12 @@
 #      `active 7` line deleted - every one of its 64 bodies active, the 57
 #      particles massless - gives the same record at every format, on the
 #      loop engine in REBOUND's form, and at binary64 in the FMA form on
-#      both engines too.
+#      both engines too. And REBOUND's own IAS15 (build/ias15_ref) runs
+#      the wave as one system with every body active (it reads no active
+#      line): bit for bit ias15_cft's at binary64 in REBOUND's form and at
+#      the program's defaults (REBOUND's 12 passes), which are the same
+#      samples as the gate's all-active run, so REBOUND has the bits
+#      `active 7` has.
 #   4. The ensemble: each of the 4 waves, run alone (--member), gets the
 #      bits it gets in the ensemble, every sample and its trailer, on the
 #      program engine (the FMA form; its ensemble path predicts each
@@ -100,7 +105,7 @@ from fractions import Fraction
 
 here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, here)
-from check_equivalence import hex_to_fraction  # noqa: E402
+from check_equivalence import compare as equivalent, hex_to_fraction  # noqa: E402
 
 root = os.path.dirname(here)
 
@@ -467,11 +472,13 @@ def main():
     # ------------------------------------------------------------ the runs
     cache = {}
 
-    def run(key, problem, fmt, engine, arith, nsteps, sample, member=None, dt=DT0):
-        """ias15_cft on a problem; each distinct run once."""
+    def run(key, problem, fmt, engine, arith, nsteps, sample, member=None, dt=DT0, max_iter=MAX_ITER):
+        """ias15_cft on a problem; each distinct run once. max_iter None
+        leaves the program's default, REBOUND's 12 passes."""
         cmd = [cft, "--format", fmt, "--problem", problem, "--dt", dt, "--epsilon", EPS,
-               "--steps", str(nsteps), "--sample", str(sample), "--max-iter", MAX_ITER, "--quiet",
-               "--engine", engine, "--arith", arith]
+               "--steps", str(nsteps), "--sample", str(sample)] + \
+              (["--max-iter", max_iter] if max_iter is not None else []) + \
+              ["--quiet", "--engine", engine, "--arith", arith]
         if engine == "program":
             cmd += ["--programs", progs]
         if member is not None:
@@ -601,6 +608,36 @@ def main():
                 fmt, engine, arith, na, N, "; ".join(bad) if bad else
                 "%d sample lines identical, the trailer too: %s pairs a force evaluation against %d"
                 % (len(crec[0]), ma.group(3), N * (N - 1) // 2)))
+
+    # REBOUND's own IAS15 on the wave, at binary64. ias15_ref reads no
+    # active, E or system line, so the wave goes to it as one system with
+    # every body active: by part 3, the same record as `active 7`.
+    ref_exe = os.path.join(args.build, "ias15_ref" + exe)
+    single = os.path.join(scratch, "ring_%s_one_system.txt" % systems[ENGINE_WAVE]["name"])
+    with open(single, "w", newline="\n") as f:
+        f.write("# %s of %s as one system, every body active, for ias15_ref\n" % (systems[ENGINE_WAVE]["name"], ring))
+        f.write("name ring_%s\nG %s\nN %d\n" % (systems[ENGINE_WAVE]["name"], G.hex(), N))
+        f.writelines("body %s\n" % " ".join(b) for b in systems[ENGINE_WAVE]["bodies"])
+    n64 = steps["fp64"]
+    p = subprocess.run([ref_exe, "--problem", single, "--dt", DT0, "--epsilon", EPS, "--steps", str(n64),
+                        "--sample", "1"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=root)
+    # the port at its defaults, REBOUND's: the loop engine, REBOUND's form, 12 passes at most
+    rc, cref = run("fp64 the wave as one system, REBOUND's defaults", single, "fp64", "loop", "rebound", n64, 1,
+                   max_iter=None)
+    if p.returncode or rc:
+        verdict(False, "REBOUND's own IAS15 on the wave: ias15_ref rc %d (%s), ias15_cft rc %d"
+                % (p.returncode, p.stderr.strip()[-200:], rc))
+    else:
+        allok &= equivalent("fp64: %s as one system of %d, every body active: REBOUND's own IAS15 (ias15_ref) against "
+                            "ias15_cft in REBOUND's form at its defaults" % (systems[ENGINE_WAVE]["name"], N),
+                            p.stdout, cref, 6, N)
+        # and that record is the gate's own: the all-active member run's, at --max-iter 60
+        rc, mem = run("fp64 loop engine rebound form, all active", allact, "fp64", "loop", "rebound", n64, 1, ENGINE_WAVE)
+        d = first_difference(parse(cref)[0].get(0, []), parse(mem)[0].get(0, [])) if rc == 0 else (0, -1, "rc", rc)
+        verdict(d is None, "the same %d sample lines as the gate's all-active run of %s (--member %d, --max-iter %s), "
+                "so REBOUND's IAS15 has the bits `active %d` has%s"
+                % (n64 + 1, systems[ENGINE_WAVE]["name"], ENGINE_WAVE, MAX_ITER, na,
+                   "" if d is None else ": first difference at sample %s, %s: %s against %s" % (d[0], column(d[1], N), d[2], d[3])))
 
     # ------------------------------------------------------------ 4. the ensemble
     print("check_ring: the ensemble of %d waves against each wave run alone (--member), fp64, the program engine" % E)
@@ -763,8 +800,9 @@ def main():
     verdict(seen and not bad,
             "the pairs, from every run's `# active` line, each against REBOUND's two loops' n(n-1)/2 + (N-n)n from its "
             "own problem file: %s; and no line in the %d runs with every body active"
-            % ("; ".join("%d pairs a force evaluation in %d runs of `active %d of %d` (%d with every body active)"
-                         % (k[2], v, k[0], k[1], k[1] * (k[1] - 1) // 2) for k, v in sorted(seen.items(), key=lambda kv: kv[0][1])),
+            % ("; ".join("%d pairs a force evaluation in %d run%s of `active %d of %d` (%d with every body active)"
+                         % (k[2], v, "" if v == 1 else "s", k[0], k[1], k[1] * (k[1] - 1) // 2)
+                         for k, v in sorted(seen.items(), key=lambda kv: kv[0][1])),
                without_line) if not bad else "the pairs: %s" % "; ".join(bad[:3]))
     verdict(phys["samples"] > 0 and annulus[0] <= phys["rmin"] and phys["rmax"] < annulus[1] and phys["rmin"] > r_saturn
             and phys["zmin"] > 0,

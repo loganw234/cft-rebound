@@ -631,10 +631,10 @@ IN_SCALAR   := --input tools/check_scalar.py --input src/ias15_cft.c $(IN_PROGRA
 IN_SEAMS    := --input tools/check_seams.py --input tools/check_checkpoint.py $(IN_REAL) \
                $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) --input tools/make_ensemble.py
 # tools/check_ring.py (round 4's P2): the program on the rings the generator
-# writes, on both engines and so the program images, and the helper it
-# imports; it reads no file of data/problems/
+# writes, on both engines and so the program images, REBOUND's own IAS15 on
+# one wave, and the helper it imports; it reads no file of data/problems/
 IN_RING     := --input tools/check_ring.py --input tools/make_ring.py --input tools/check_equivalence.py \
-               $(IN_PROGRAM) $(IN_PROGS)
+               $(IN_PROGRAM) $(IN_REF) $(IN_PROGS)
 
 # The pins, checked at build time and not only at fetch time: a clone
 # under third_party/ that is not at its MANIFEST commit fails every tier
