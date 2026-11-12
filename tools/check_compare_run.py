@@ -53,9 +53,11 @@
 #      and member 8's state is the record's in every value but dt_next,
 #      which differs only on a sample line printed just before a rejected
 #      attempt.
-#   2. The particles line, exactly: no particle replay is in this tree; and
-#      beside the sample, its limit, exactly: it trusts the trailers it is
-#      testing.
+#   2. The particles, through P3's replay (the lead's P3 x P4 seam): each
+#      sampled member's two particles, its least closest approach at the
+#      samples (the one this gate's own mpmath distances name) and one by
+#      the seed, each replayed alone and IDENTICAL to the record; and beside
+#      the sample, its limit, exactly: it trusts the trailers it is testing.
 #   3. The sample: --plan for seeds 1 to 10, each with every rejecting
 #      member and one member a stratum; not all ten alike; seed 1's is case
 #      1's.
@@ -101,10 +103,15 @@
 #      and the name changed. Each REFUSED, naming what differs;
 #   h. the record's `# active` line with one more pair than this tree's
 #      rows: REFUSED, naming the pair count;
-#   i. P3's tools in the tree and the particle place empty: a copy of the
-#      driver beside an empty stand-in for each of P3's two files in turn
-#      says NOT WIRED, ends RESULT: FAIL and exits 1, though its member is
-#      IDENTICAL; beside neither, it passes with the line in case 2.
+#   i. P3's tools in the tree and not callable: a copy of the driver beside
+#      an empty stand-in for each of P3's two files in turn says P3's replay
+#      cannot be called, ends RESULT: FAIL and exits 1, though its member is
+#      IDENTICAL; beside neither, it passes, saying no particle is sampled;
+#   p. the particle path is held to the record, not to the rerun: one hex
+#      digit of a sampled particle's x in a sampled member's line, and of
+#      that member's primary's x: the member FAILs, and so does each
+#      sampled particle's replay the change reaches, naming the line and
+#      the column (P3 x P4, the lead's).
 #
 # Every case runs a fixed seed and fixed bits, so the verdict is the same
 # on every run (tools/gate_cache.py). None of its step counts is scaled by
@@ -140,7 +147,9 @@ INC = (4095, 128, 4097)        # cos and sin of about 1.8 degrees, exactly ratio
 # degrees ahead of it (cos, sin = -5/13, 12/13), so they meet near t = 1.
 FLYBY, FLYBY_R, FLYBY_AT = E - 1, 1.0 + 1.0 / 128, (-5, 12, 13)
 PARTICLES = "particles: not sampled (no particle replay in this tree)"
-NOT_WIRED = "particles: NOT SAMPLED, and NOT WIRED: P3's tools/%s is in this tree"
+BROKEN = "particles: FAIL: P3's replay is in this tree and cannot be called: "
+PICK = re.compile(r"^  member (\d+): particle (\S+) \(body (\d+), (its least closest approach at the samples|by the "
+                  r"seed)\): replayed alone .*?held to the record: (IDENTICAL|FAIL): (.*)$", re.M)
 # The sample's limit, as V4 measured it: printed beside the sample.
 SAMPLE_LIMIT = ("sample: it trusts the trailers it is testing: a member whose trailer under-reports its rejections "
                 "leaves the sample, and an unsampled member's lines are never rerun")
@@ -399,6 +408,7 @@ def main():
             label, steps, ": " + "; ".join(bad) if bad else ""))
         # closest approaches, recomputed from oracle.py's parse, in mpmath
         worst, missing, at_wrong, n = mpmath.mpf(0), [], [], 0
+        least = {}                     # (member, body) -> its least distance to any active body
         for k in smp["members"]:
             _, _, smps, _ = oracle_parse(rec_path, system=k)
             for j in range(2, 2 + NTP):
@@ -414,6 +424,7 @@ def main():
                         st = s["state"]
                         dists.append(mpmath.sqrt(sum((F2m(st[6 * j + c]) - F2m(st[6 * i + c])) ** 2 for c in range(3))))
                     best = min(dists)
+                    least[(k, j)] = min(least.get((k, j), best), best)
                     n += 1
                     worst = max(worst, abs(mpmath.mpf(val) - best) / best)
                     if dists[int(at)] != best:
@@ -422,7 +433,32 @@ def main():
                 "%s: %d closest approaches (each test particle to each active body, at the samples) agree with this "
                 "gate's mpmath from tools/oracle.py's parse to %s relative, at the samples they name%s" % (
                     label, n, mpmath.nstr(worst, 3), "; " + ", ".join(missing + at_wrong) if missing or at_wrong else ""))
-        verdict(out.count("\n" + PARTICLES + "\n") == 1, "%s: the particles line, exactly: '%s'" % (label, PARTICLES))
+        # the particles (the lead's P3 x P4 seam): two a sampled member, its
+        # least closest approach (by this gate's mpmath, ties to the lower
+        # body) and one by the seed, each IDENTICAL to the record
+        picks = {}
+        for m in PICK.finditer(out):
+            picks.setdefault(int(m.group(1)), []).append((int(m.group(3)), m.group(4), m.group(5), m.group(6)))
+        pbad = []
+        for k in smp["members"]:
+            got = picks.get(k, [])
+            near = min(range(2, 2 + NTP), key=lambda j: (least.get((k, j), mpmath.inf), j))
+            kinds = sorted(g[1].split()[0] for g in got)
+            if kinds != ["by", "its"] or any(g[2] != "IDENTICAL" for g in got):
+                pbad.append("member %d: %s" % (k, got))
+            elif next(g[0] for g in got if g[1].startswith("its")) != near:
+                pbad.append("member %d: its least closest approach is body %d by mpmath, the driver chose %s"
+                            % (k, near, [g[0] for g in got]))
+            elif len({g[0] for g in got}) != 2:
+                pbad.append("member %d: the same particle twice" % k)
+        nwant = 2 * len(smp["members"])
+        summary = "particles: %d sampled in %d member(s), each replayed alone from its member's attempts record " \
+                  "and schedule as this tree reran it, and held to the record's own lines: %d identical" % (
+                      nwant, len(smp["members"]), nwant)
+        verdict(not pbad and summary in out and PARTICLES not in out,
+                "%s: the particles, through P3's replay: %d sampled, two a member (each member's least closest approach "
+                "at the samples, the body this gate's mpmath names, and one by the seed), each replayed alone and "
+                "IDENTICAL to the record%s" % (label, nwant, ": " + "; ".join(pbad[:3]) if pbad else ""))
         verdict(out.count("\n" + SAMPLE_LIMIT + "\n") == 1 and out.find(SAMPLE_LIMIT) > out.find("\nsample: seed "),
                 "%s: beside the sample, its limit, exactly: '%s'" % (label, SAMPLE_LIMIT))
         if fdiff:
@@ -462,6 +498,7 @@ def main():
     smp64 = None
     text64 = None
     rec64 = None
+    out64 = None
     for fmt, steps, sample, fdiff in fmt_cases:
         print("check_compare_run: case 1 at %s - the driver on an ensemble of %d waves, %d steps%s" % (
             fmt, E, steps, ", with --format-diff " + fdiff if fdiff else ""))
@@ -475,7 +512,7 @@ def main():
             allok = False
             continue
         if fmt == "fp64":
-            smp64, text64, rec64 = smp, text, rec
+            smp64, text64, rec64, out64 = smp, text, rec, out
             # One member of each kind replayed from its own dt file at its own
             # format, against the record: what each note above says of it.
             # dt_next is set aside where said, and only there: a sample line
@@ -572,9 +609,11 @@ def main():
     verdict(rc == 0 and "\nRESULT: PASS: " in out and sorted(lines) == [k6] and lines[k6][0] == "IDENTICAL" and
             lines[k6][1].endswith(want) and "one system of N=%d bodies, member %d of its problem" % (2 + NTP, k6) in out
             and "  member %d: closest approach AT THE SAMPLES (3 of them" % k6 in out and
-            out.count("\n" + PARTICLES + "\n") == 1,
+            "\nparticles: 2 sampled in 1 member(s), " in out and "held to the record's own lines: 2 identical\n" in out
+            and len([m for m in PICK.finditer(out) if m.group(5) == "IDENTICAL"]) == 2,
             "a --member %d record of the waves, held as one system: PASS, member %d IDENTICAL with its trailer's "
-            "counters (%s), its closest approaches, and the particles line (rc %d)" % (k6, k6, want, rc))
+            "counters (%s), its closest approaches, and its two particles replayed alone, IDENTICAL (rc %d)"
+            % (k6, k6, want, rc))
     rck, tk, _ = run([cft, "--format", "fp64", "--problem", kep, "--dt", "0.05", "--epsilon", "1e-9", "--steps", "20",
                       "--sample", "10", "--max-iter", "60", "--quiet"])
     reck = os.path.join(scratch, "kepler.rec")
@@ -835,10 +874,45 @@ def main():
             "h. the record's `# active` line saying %d pairs a force evaluation where this tree's rows make %d: REFUSED, "
             "naming the field (rc %d)" % (pairs + 1, pairs, rc))
 
-    # i. P3's tools in the tree and the particle place still empty: a copy of
-    # the driver, with what it imports and runs, beside a stand-in for each of
-    # P3's two files in turn, and beside neither, on case 5's kepler record.
-    # The stand-in is an empty file: only its presence is under test.
+    # p. The particle path is held to the record, not to the rerun (the lead's
+    # P3 x P4 seam). From case 1's fp64 run, member k's least-closest-
+    # approach particle j. In a copy of the record, one hex digit of j's x on
+    # k's last sample line: the member FAILs, and so does j's replay, naming
+    # the line and the column, while k's other sampled particle, whose
+    # sub-system has no body j, stays IDENTICAL. Then k's primary's x: the
+    # primary is in every sub-system, so both of k's replays FAIL.
+    picks64 = {}
+    for m in PICK.finditer(out64 or ""):
+        picks64.setdefault(int(m.group(1)), []).append((int(m.group(3)), m.group(4)))
+    kp = smp64["members"][0]
+    jp = next((j for j, why in picks64.get(kp, []) if why.startswith("its")), None)
+    if jp is None:
+        verdict(False, "p. case 1's fp64 run named no particle of member %d to plant a change in" % kp)
+    else:
+        ip = max(i for i in lines64 if rows[i].startswith("system %d sample " % kp))
+        for body, what in ((jp, "its sampled particle"), (0, "its primary")):
+            toks = rows[ip].split()
+            t = nlead + body * len(per) + per.index("x")
+            toks[t] = flip_last_digit(toks[t])
+            rc, out = drive(write("control_particle_body%d.rec" % body, rows[:ip] + [" ".join(toks)] + rows[ip + 1:]),
+                            "fp64")
+            lines = member_lines(out)
+            pm = [m for m in PICK.finditer(out) if int(m.group(1)) == kp]
+            hit = [m for m in pm if m.group(5) == "FAIL" and ("record line %d (system %d sample " % (ip + 1, kp))
+                   in m.group(6) and ("x of body %d " % body) in m.group(6)]
+            calm = [m for m in pm if m.group(5) == "IDENTICAL"]
+            want = 1 if body == jp else 2
+            verdict(rc == 1 and lines.get(kp, ("",))[0] == "FAIL" and len(pm) == 2 and len(hit) == want
+                    and len(calm) == 2 - want,
+                    "p. one hex digit of member %d's %s's x (body %d) on line %d: the member FAILs, and %d of its 2 "
+                    "sampled particles' replays FAIL naming that line and column (%s IDENTICAL): the replay is held "
+                    "to the record, not to the rerun (rc %d)"
+                    % (kp, what, body, ip + 1, len(hit), "the other" if want == 1 else "none", rc))
+
+    # i. P3's tools in the tree and not callable: a copy of the driver, with
+    # what it imports and runs, beside a stand-in for each of P3's two files
+    # in turn, and beside neither, on case 5's kepler record. The stand-in is
+    # an empty file, with no extract() to call.
     p3 = os.path.join(scratch, "p3_present", "tools")
     shutil.rmtree(os.path.dirname(p3), ignore_errors=True)
     os.makedirs(p3)
@@ -861,11 +935,13 @@ def main():
                     lines.get(0, ("",))[0] == "IDENTICAL",
                     "i. the driver's copy beside neither of P3's files: '%s', PASS, rc %d" % (PARTICLES, rc))
         else:
-            verdict(rc == 1 and (NOT_WIRED % present[0]) in out and PARTICLES not in out and
-                    result.startswith("RESULT: FAIL: ") and "particles are due and NOT sampled" in result and
-                    lines.get(0, ("",))[0] == "IDENTICAL",
-                    "i. the driver's copy beside a stand-in tools/%s: NOT WIRED, RESULT: FAIL and rc %d, though member 0 "
-                    "is IDENTICAL" % (present[0], rc))
+            why = ("tools/extract_particle.py has no extract() and Refused to call" if present[0] == "extract_particle.py"
+                   else "tools/check_replay.py is in this tree without tools/extract_particle.py")
+            verdict(rc == 1 and (BROKEN + why) in out and PARTICLES not in out and
+                    result.startswith("RESULT: FAIL: ") and "P3's replay is in this tree and cannot be called" in result
+                    and lines.get(0, ("",))[0] == "IDENTICAL",
+                    "i. the driver's copy beside a stand-in tools/%s: P3's replay cannot be called (%s), RESULT: FAIL "
+                    "and rc %d, though member 0 is IDENTICAL" % (present[0], why, rc))
     shutil.rmtree(os.path.dirname(p3), ignore_errors=True)
 
     print("RESULT: %s" % ("PASS" if allok else "FAIL"))

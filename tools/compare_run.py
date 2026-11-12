@@ -89,17 +89,28 @@
 #     the record's dt0 exactly when the first attempt was accepted, which
 #     is how the note beside the number tells them apart.
 #
-# PARTICLES are not sampled here: that needs P3's replay of one particle
-# out of its wave. sample_particles() is the place for it, and the lead's
-# P3 x P4 seam test fills it (ROUND4.md, "What the integrator keeps").
-# Until P3's tools are in the tree the driver prints
+# PARTICLES, through P3's replay (the lead's P3 x P4 seam, ROUND4.md "What
+# the integrator keeps"; sample_particles()). Each rerun member's rerun
+# also writes its attempts record and corrector schedule (--attempts-out,
+# --record-iters; neither moves a record line). From each such member two
+# test particles are sampled: the one whose closest approach to an active
+# body, at the samples, is the least (a rejection's path can show in that
+# particle alone: P3, measured), and one more by the seed, as the members
+# are. Each is written alone with the member's massive bodies, and its
+# zonal line if any, by P3's tools/extract_particle.py, replayed here from
+# those records, and held to the RECORD's own lines, not to the rerun's:
+# every sample's fields before the bodies, the particle and every massive
+# body, value for value, the exact-time pair, and the trailer's counters.
+# A replay that is not the record's FAILs, naming the member, the particle,
+# the line and the column.
+# The attempts records are this tree's reruns', so a particle is sampled
+# only in a member that was rerun; a producer that writes its own attempts
+# records (the GPU half) would let particles be sampled in members that are
+# not, and that is not built here.
+# Without P3's tools in the tree the driver prints
 #     particles: not sampled (no particle replay in this tree)
-# and once they are, while this place is still empty, it says they are NOT
-# WIRED, ends RESULT: FAIL and exits 1, whatever the members did. So a
-# caller that reads only the exit code sees it too, and
-# tools/check_compare_run.py, which asserts both, fails until the seam is
-# done. A stand-in that outlives the thing it stood in for is METHOD.md's
-# canonical failure.
+# and with them present but not callable (an extract() that will not
+# import) it FAILs and exits 1, whatever the members did.
 #
 # LIMITS, stated:
 #   - the record does not carry --adaptive-mode, --softening, --min-dt or
@@ -115,8 +126,8 @@
 #     memory; the problem file is.
 #   - the sample trusts the trailers it is testing (THE SAMPLE, above).
 #
-#   exit 0: every sampled member identical; 1: a FAIL, or particles due and
-#   not wired; 2: refused
+#   exit 0: every sampled member and particle identical; 1: a FAIL (a
+#   member, a particle, or P3's replay present and not callable); 2: refused
 
 import argparse
 import hashlib
@@ -652,7 +663,7 @@ def run(cmd):
     return p.returncode, p.stdout, p.stderr
 
 
-def rerun_cmd(rec, args, s, fmt=None, dt_file=None, dt_out=None):
+def rerun_cmd(rec, args, s, fmt=None, dt_file=None, dt_out=None, att_out=None, sched_out=None):
     p = rec.program
     engine = args.rerun_engine or p["engine"]
     cmd = [args.exe, "--format", fmt or p["format"], "--problem", args.problem, "--steps", p["steps"],
@@ -664,6 +675,10 @@ def rerun_cmd(rec, args, s, fmt=None, dt_file=None, dt_out=None):
         cmd += ["--dt", rec.dt0["dt0"], "--epsilon", rec.dt0["epsilon"], "--pc-tol-shift", p["pc_tol_shift"]]
     if dt_out:
         cmd += ["--dt-out", dt_out]
+    if att_out:
+        # the attempts record and the corrector schedule P3's replay reads;
+        # writing them moves no record line
+        cmd += ["--attempts-out", att_out, "--record-iters", sched_out]
     member = s if rec.kind == "ensemble" else rec.member
     if member is not None:
         cmd += ["--member", str(member)]
@@ -775,26 +790,141 @@ def closest(rec, lines):
     return best
 
 
-def sample_particles(rec, members, args):
-    """THE P3 x P4 SEAM - the lead's (ROUND4.md, "What the integrator keeps").
-
-    This is where the driver samples particles from the members above and
-    reruns each through P3's replay of one particle out of its wave (P3's
-    tools/extract_particle.py, and its attempts form of --dt-out),
-    comparing that particle's and every massive body's bits at every
-    sample. It is empty on purpose: anything else would be a gate driving a
-    stand-in.
-
-    Returns True when what it prints is the whole truth, and False when
-    particles are due and not sampled."""
+def p3_replay():
+    """Whether P3's replay is in this tree: ("absent", None), ("wired", its
+    extract_particle module), or ("broken", why it cannot be called)."""
     present = [t for t in P3_TOOLS if os.path.exists(os.path.join(here, t))]
     if not present:
+        return "absent", None
+    if "extract_particle.py" not in present:
+        return "broken", "tools/%s is in this tree without tools/extract_particle.py" % present[0]
+    try:
+        import importlib
+        xp = importlib.import_module("extract_particle")
+    except Exception as e:  # noqa: BLE001 - any failure to import is the finding
+        return "broken", "tools/extract_particle.py does not import: %s" % e
+    if not callable(getattr(xp, "extract", None)) or not isinstance(getattr(xp, "Refused", None), type):
+        return "broken", "tools/extract_particle.py has no extract() and Refused to call"
+    return "wired", xp
+
+
+def particle_compare(rec, s, lines, out, bodies, names):
+    """A particle's replay against the RECORD's lines for its member: every
+    sample's fields before the bodies, each sub-system body against the
+    member's body it is (`bodies`: the massive ones, then the particle),
+    and the exact-time pair, value for value; then the trailer's counters.
+    Returns (identical, what)."""
+    sub_cols = None
+    for l in out.splitlines():
+        if l.startswith("# columns:"):
+            sub_cols = Columns(l, len(bodies))
+            break
+    if sub_cols is None or not sub_cols.same_layout(rec.cols):
+        return False, "the replay's `# columns:` line is not the record's layout"
+    try:
+        rs, _ = parse_samples("\n".join(l for _, l in lines), s if rec.kind == "ensemble" else None)
+        ps, pt = parse_samples(out)
+    except (ValueError, IndexError) as e:
+        return False, "a sample line does not parse as hex floats: %s" % e
+    if len(rs) != len(ps):
+        return False, "%d samples in the record, %d in the replay" % (len(rs), len(ps))
+    ns, per, npair = len(rec.cols.scalars) - 2, len(rec.cols.per), len(rec.cols.pair)
+    pairs = [(j, j) for j in range(ns)]
+    for i, b in enumerate(bodies):
+        pairs += [(ns + b * per + f, ns + i * per + f) for f in range(per)]
+    pairs += [(ns + rec.N * per + q, ns + len(bodies) * per + q) for q in range(npair)]
+    sub_lines = [l for l in out.splitlines() if l.startswith("sample ")]
+    nvals = 0
+    for i, ((rk, rstep, rv), (pk, pstep, pv)) in enumerate(zip(rs, ps)):
+        lineno, line = lines[i]
+        where = "record line %d (%ssample %d, step %d)" % (lineno, "system %d " % s if rec.kind == "ensemble" else "",
+                                                           rk, rstep)
+        if (rk, rstep) != (pk, pstep):
+            return False, "%s: it is sample %d at step %d in the replay" % (where, pk, pstep)
+        if len(pv) != ns + len(bodies) * per + npair:
+            return False, "%s: %d values in the replay, where %d bodies make %d" % (
+                where, len(pv), len(bodies), ns + len(bodies) * per + npair)
+        for rj, pj in pairs:
+            if rv[rj] != pv[pj]:
+                return False, "%s: %s: record %s, replay %s" % (
+                    where, rec.cols.value_name(rj, names), line.split()[rec.cols.value_tok(rj)],
+                    sub_lines[i].split()[sub_cols.value_tok(pj)])
+            nvals += 1
+    rt = rec.trailer[s][2]
+    for c in COUNTERS:
+        if rt.get(c) != pt.get(c):
+            return False, "trailer %s is %s in the record, and %s in the replay" % (c, rt.get(c), pt.get(c))
+    return True, "%d samples, %d values and the trailer's counters" % (len(rs), nvals)
+
+
+def sample_particles(rec, info, args, work, state, xp):
+    """THE P3 x P4 SEAM - the lead's (ROUND4.md, "What the integrator keeps").
+
+    Two test particles of each rerun member (`info`): its least closest
+    approach at the samples, and one by the seed. Each is written alone with
+    the member's massive bodies by P3's extract(), from the member's attempts
+    record and schedule as this tree reran it, replayed, and held to the
+    record's lines (particle_compare). Returns (whole, failures): whole is
+    False when P3's replay is in the tree and cannot be called."""
+    if state == "absent":
         print("particles: not sampled (no particle replay in this tree)")
-        return True
-    print("particles: NOT SAMPLED, and NOT WIRED: P3's %s %s in this tree, and this driver does not call it yet - the "
-          "lead's P3 x P4 seam test wires it here (tools/compare_run.py, sample_particles)"
-          % (" and ".join("tools/" + t for t in present), "is" if len(present) == 1 else "are"))
-    return False
+        return True, []
+    if state == "broken":
+        print("particles: FAIL: P3's replay is in this tree and cannot be called: %s" % xp)
+        return False, []
+    if not rec.active:
+        print("particles: none to sample (no `# active` line: every body is active)")
+        return True, []
+    nact = rec.active[0]
+    fails, n, members_done = [], 0, 0
+    for s, k, names, lines, best, att, sched in info:
+        parts = list(range(nact, rec.N))
+        if not parts:
+            continue
+        members_done += 1
+        def least(j):
+            return min((best[(j, i)][0] for i in range(nact) if (j, i) in best), default=math.inf)
+        near = min(parts, key=lambda j: (least(j), j))
+        rest = [j for j in parts if j != near]
+        picks = [(near, "its least closest approach at the samples")]
+        if rest:
+            seeded = min(rest, key=lambda j: hashlib.sha256(b"cft-rebound compare_run particle %d %d %d"
+                                                             % (args.seed, k, j)).digest())
+            picks.append((seeded, "by the seed"))
+        base = rerun_cmd(rec, args, s)[1:]
+        run_args = []
+        i = 0
+        while i < len(base):
+            if base[i] in ("--problem", "--member"):
+                i += 2
+                continue
+            run_args.append(base[i])
+            i += 1
+        member_arg = s if rec.kind == "ensemble" else rec.member
+        for j, why in picks:
+            n += 1
+            label = "  member %d: particle %s (body %d, %s)" % (k, names[j], j, why)
+            try:
+                res = xp.extract(args.exe, args.problem, att, sched, j, os.path.join(work, "particles"), run_args,
+                                 member=member_arg)
+            except xp.Refused as e:
+                print("%s: FAIL: P3's extract_particle refused: %s" % (label, e))
+                fails.append((s, "particle %s refused" % names[j]))
+                continue
+            rc, out, err = run([args.exe] + res["args"])
+            if rc != 0:
+                print("%s: FAIL: its replay did not run (rc %d): %s" % (label, rc, (err or out).strip()[-300:]))
+                fails.append((s, "particle %s's replay did not run" % names[j]))
+                continue
+            ok, what = particle_compare(rec, s, lines, out, res["bodies"], names)
+            print("%s: replayed alone with the member's %d massive bodies%s through tools/extract_particle.py, "
+                  "and held to the record: %s: %s" % (label, nact, " and its zonal line" if " zonal=" in res["sub_key"]
+                                                     else "", "IDENTICAL" if ok else "FAIL", what))
+            if not ok:
+                fails.append((s, "particle %s" % names[j]))
+    print("particles: %d sampled in %d member(s), each replayed alone from its member's attempts record and schedule "
+          "as this tree reran it, and held to the record's own lines: %d identical" % (n, members_done, n - len(fails)))
+    return True, fails
 
 
 def format_diff(rec, args, s, rerun_path, dt_path, work, rejected):
@@ -919,10 +1049,15 @@ def compare_run(args):
         engine = args.rerun_engine or p["engine"]
         if engine != p["engine"]:
             print("rerun: on the %s engine, where the record ran %s (--rerun-engine)" % (engine, p["engine"]))
+        state, xp = p3_replay()
+        want_particles = state == "wired" and bool(rec.active)
+        info = []
         for s in todo:
             name, k = rec.name_of(s, prob), rec.label_of(s)
             dt_path = os.path.join(work, "member%d.dt" % k) if args.format_diff else None
-            rc, out, err = run(rerun_cmd(rec, args, s, dt_out=dt_path))
+            att = os.path.join(work, "member%d.att" % k) if want_particles else None
+            sched = os.path.join(work, "member%d.sched" % k) if want_particles else None
+            rc, out, err = run(rerun_cmd(rec, args, s, dt_out=dt_path, att_out=att, sched_out=sched))
             if rc != 0:
                 raise Refused("this tree's ias15_cft refused member %d's rerun with the record's arguments (rc %d): %s"
                               % (k, rc, (err or out).strip()[-400:]))
@@ -951,27 +1086,31 @@ def compare_run(args):
                     print("    %s (body %d): %s" % (names[j], j, "; ".join(
                         "%s %.6e at sample %d (step %d)" % ((names[i],) + best[(j, i)]) if (j, i) in best else
                         "%s: no sample line to measure" % names[i] for i in range(rec.active[0]))))
+                if want_particles:
+                    info.append((s, k, names, got[s], best, att, sched))
             if args.format_diff:
                 fok, fmsg = format_diff(rec, args, s, rerun_path, dt_path, work, int(rt.get("steps_rejected", "0")))
                 print("  member %d: format difference: %s%s" % (k, "" if fok else "FAIL: ", fmsg))
                 if not fok:
                     failed.add(s)
-        particles_whole = sample_particles(rec, members, args)
+        particles_whole, pfails = sample_particles(rec, info, args, work, state, xp)
     finally:
         if not args.keep:
             shutil.rmtree(work, ignore_errors=True)
-    if failed or whole or not particles_whole:
+    if failed or whole or not particles_whole or pfails:
         why = []
         if failed:
             why.append("FAIL: " + ", ".join("member %d" % rec.label_of(s) for s in sorted(failed)))
         if whole:
             why.append("FAIL: the record as a whole")
+        if pfails:
+            why.append("FAIL: " + ", ".join("member %d's %s" % (rec.label_of(s), what) for s, what in pfails))
         if not particles_whole:
-            why.append("particles are due and NOT sampled: P3's replay is in this tree and this driver does not call it")
+            why.append("P3's replay is in this tree and cannot be called")
         print("RESULT: FAIL: %d of %d sampled member(s) identical; %s" % (same, len(members), "; ".join(why)))
         return 1
-    print("RESULT: PASS: %d sampled member(s) of %d, every one identical to this tree's rerun, its counters beside it"
-          % (same, rec.E))
+    print("RESULT: PASS: %d sampled member(s) of %d, every one identical to this tree's rerun, its counters beside it%s"
+          % (same, rec.E, "; every sampled particle's replay identical to the record" if info else ""))
     return 0
 
 
