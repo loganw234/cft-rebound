@@ -85,7 +85,7 @@
 #    waves with no zonal line, and a GPU run's record will be P2's waves
 #    with P1's line. So a two-wave ensemble of P2's ring, its zonal line
 #    kept, is recorded from a first step far too large (each wave rejects
-#    its first attempt, so both are sampled), and the driver holds it: both
+#    at least once, asserted, so both are sampled), and the driver holds it: both
 #    members IDENTICAL, each one's two particles replayed alone with the
 #    zonal line and IDENTICAL to the record. THE CONTROL, permanent: one
 #    hex digit of a moon's x on wave 0's last sample line. Wave 0 FAILs, and
