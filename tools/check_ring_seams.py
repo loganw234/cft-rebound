@@ -33,6 +33,17 @@
 #        more than ten times: the bound resolves J4, not only J2.
 #        The energy, the zonal potential included, must hold to binary64's
 #        level over the run.
+#        THE NODES (ROUND4.md's precession counter). The run with the line
+#        goes on for about ten orbits. Each particle's node, from h = r x v
+#        relative to Saturn and fitted over the run, must regress at
+#        n - nu, first-order theory in J2 and J4:
+#          n^2  = (G M / r^3) (1 + 3/2 J2 (R/r)^2 - 15/8 J4 (R/r)^4)
+#          nu^2 = (G M / r^3) (1 + 9/2 J2 (R/r)^2 - 75/8 J4 (R/r)^4),
+#        to 0.5% (measured: under 0.1%, the size of J2^2), and the same
+#        theory without J4 must miss by at least five times as much: the
+#        run resolves J4's vertical force, which the circular check above,
+#        in the plane, does not reach. In --quick, three orbits, the bound
+#        is 2% and J4 is not claimed.
 #    (b) THE BITS. With the zonal line: the program engine against the loop
 #        engine in the FMA form; `active 7` against every body active (the
 #        test particles' reaction is not taken under `active`, and is an
@@ -167,9 +178,12 @@ def main():
 
     common = ["--dt", "100", "--epsilon", "1e-9", "--max-iter", "60"]
     steps = 12 if args.quick else 24
+    # the run with the zonal line goes on for the nodes: about ten orbits,
+    # three in quick mode; its circularity is read over the first `steps`
+    psteps = 120 if args.quick else 360
     phys = {}
-    for tag, path in (("with", small), ("without", small_nz), ("noj4", small_j4)):
-        rc, out, err = run([exe, "--format", "fp64", "--problem", path, "--steps", str(steps), "--sample", "1"] + common)
+    for tag, path, ns in (("with", small, psteps), ("without", small_nz, steps), ("noj4", small_j4, steps)):
+        rc, out, err = run([exe, "--format", "fp64", "--problem", path, "--steps", str(ns), "--sample", "1"] + common)
         if rc != 0:
             raise SystemExit("check_ring_seams: the %s run failed (rc %d): %s" % (tag, rc, err.strip()[-300:]))
         phys[tag] = out
@@ -196,9 +210,11 @@ def main():
             r = [math.dist(xs[3 * b:3 * b + 3], sx) for b in range(N)]
             out.append((t, r, float(v[iE][0])))
         return out
-    rw, rn, r4 = radii(phys["with"]), radii(phys["without"]), radii(phys["noj4"])
-    if len(rw) != steps + 1 or len(rn) != steps + 1 or len(r4) != steps + 1:
-        raise SystemExit("check_ring_seams: %d, %d and %d samples, not %d" % (len(rw), len(rn), len(r4), steps + 1))
+    rw_all, rn, r4 = radii(phys["with"]), radii(phys["without"]), radii(phys["noj4"])
+    if len(rw_all) != psteps + 1 or len(rn) != steps + 1 or len(r4) != steps + 1:
+        raise SystemExit("check_ring_seams: %d, %d and %d samples, not %d, %d and %d"
+                         % (len(rw_all), len(rn), len(r4), psteps + 1, steps + 1, steps + 1))
+    rw = rw_all[:steps + 1]
     BOUND = 1e-3
     def excursion(rs, share):
         """Each particle's growth against share(q) r (1 - cos M): whether all
@@ -233,10 +249,54 @@ def main():
             "the control, J4 zeroed in the zonal line: each particle moves outward by J4's share of delta, %.2f to "
             "%.2f km, within %.1f%% of -15/8 J4 (R/r)^4 r (1 - cos M), and %.1f times the bound above, so the bound "
             "resolves J4" % (lo_4, hi_4, 100 * dev_4, worst_4 / (BOUND * lo_n)))
-    e0, e1 = rw[0][2], rw[-1][2]
+    e0, e1 = rw_all[0][2], rw_all[-1][2]
     verdict(abs(e1 - e0) <= 1e-13 * abs(e0),
             "the energy with the zonal potential moves %.2e of itself over %d steps at binary64 (the bound is 1e-13)"
-            % (abs(e1 - e0) / abs(e0), steps))
+            % (abs(e1 - e0) / abs(e0), psteps))
+
+    # the nodes: each particle's node, from h = r x v relative to Saturn,
+    # fitted by least squares over the run, against n - nu
+    def node_rates(text):
+        series = {b: ([], []) for b in range(n_active, N)}
+        prev = {}
+        for _, step, v in parse(text)[0]:
+            t = float(v[it][0])
+            s = [float(v[nhead + 6 * zk + c][0]) for c in range(6)]
+            for b in range(n_active, N):
+                p = [float(v[nhead + 6 * b + c][0]) for c in range(6)]
+                r = [p[i] - s[i] for i in range(3)]
+                u = [p[3 + i] - s[3 + i] for i in range(3)]
+                h = (r[1] * u[2] - r[2] * u[1], r[2] * u[0] - r[0] * u[2], r[0] * u[1] - r[1] * u[0])
+                om = math.atan2(h[0], -h[1])
+                if b in prev:
+                    om += 2 * math.pi * round((prev[b] - om) / (2 * math.pi))
+                prev[b] = om
+                series[b][0].append(t)
+                series[b][1].append(om)
+        out = {}
+        for b, (ts, oms) in series.items():
+            mt, mo = sum(ts) / len(ts), sum(oms) / len(oms)
+            out[b] = sum((a - mt) * (c - mo) for a, c in zip(ts, oms)) / sum((a - mt) ** 2 for a in ts)
+        return out, ts[-1] - ts[0]
+    rates, span = node_rates(phys["with"])
+    worst, least_nj4 = 0.0, float("inf")
+    for b, rate in rates.items():
+        r0 = sum(s[1][b] for s in rw_all) / len(rw_all)
+        q, n0 = (R / r0) ** 2, math.sqrt(GM / r0 ** 3)
+        theory = n0 * (math.sqrt(1 + 1.5 * J2 * q - 15 / 8 * J4 * q * q) - math.sqrt(1 + 4.5 * J2 * q - 75 / 8 * J4 * q * q))
+        nj4 = n0 * (math.sqrt(1 + 1.5 * J2 * q) - math.sqrt(1 + 4.5 * J2 * q))
+        worst = max(worst, abs(rate / theory - 1))
+        least_nj4 = min(least_nj4, abs(rate / nj4 - 1))
+    r_in = min(rw_all[0][1][b] for b in range(n_active, N))
+    orbits = span * math.sqrt(GM / r_in ** 3) / (2 * math.pi)
+    NODE_BOUND = 0.02 if args.quick else 0.005
+    resolved = least_nj4 >= 5 * worst
+    verdict(rates and all(r < 0 for r in rates.values()) and worst < NODE_BOUND and (args.quick or resolved),
+            "the nodes: every particle's node regresses at n - nu, first-order theory in J2 and J4, to %.2e at worst "
+            "over %d steps (%.1f orbits of the innermost; the bound is %g); the same theory without J4 misses by %.2e "
+            "at least, %.0f times as far%s"
+            % (worst, psteps, orbits, NODE_BOUND, least_nj4, least_nj4 / worst if worst else float("inf"),
+               "" if not args.quick else " (in --quick, three orbits, J4 is not claimed resolved)"))
 
     # (b) the bits
     fmts = ["fp64"] if args.quick else ["fp64", "fp128", "fp256"]
