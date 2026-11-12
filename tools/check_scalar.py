@@ -317,7 +317,12 @@ def recount(path):
     # that derive them, or by vbcast(), one value into every lane.
     consts = set()
     for fn in CONST_FUNCS:
-        consts |= set(re.findall(r"\b([A-Z]\w*)(?:\[[^\]]*\])*\s*=[^=;][^;]*?\b(?:kderived|kint|kdec|valloc)\(", bodies.get(fn, "")))
+        # Each is required: a renamed one would drop its constants out of
+        # the recount with nothing failing (V1, round 4).
+        if fn not in bodies:
+            raise SystemExit("check_scalar: no %s() in %s or the includes it names, so the constants it fills "
+                             "would drop out of the recount; CONST_FUNCS names it" % (fn, path))
+        consts |= set(re.findall(r"\b([A-Z]\w*)(?:\[[^\]]*\])*\s*=[^=;][^;]*?\b(?:kderived|kint|kdec|valloc)\(", bodies[fn]))
     consts |= {n for n in re.findall(r"\bvbcast\(\s*(\w+)\s*[,\[]", src) if n[0].isupper()}
     per_system = set(re.findall(r"\bbcast_sys\(\s*(\w+)\s*,", src))
     sites, left, bad = [], [], []

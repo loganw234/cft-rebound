@@ -58,12 +58,15 @@
 #      were all massless. And an ensemble of two systems with `active 5`
 #      against every body active, and its member against the system alone.
 #   2c. The problem lines' refusals: an active count of 0 or past N, a
-#      second active line, and a corrector schedule recorded with `active 5`
-#      replayed without it - the run key names the line, so a schedule
-#      replays only its own N_active. And the zonal line, which P0 refused
-#      until round 4's P1 built the term: accepted now, named by the
-#      record's `# zonal` line and carried by the run key (the term itself
-#      is tools/check_zonal.py's).
+#      second active line, an active line with a second field, a second
+#      zonal line (it would silently replace the first oblate body: V1,
+#      round 4), a zonal line with a fifth field, and a corrector schedule
+#      recorded with `active 5` replayed without it - the run key names the
+#      line, so a schedule replays only its own N_active. And the zonal
+#      line, which P0 refused until round 4's P1 built the term: accepted
+#      now, named by the record's `# zonal` line and carried by the run key
+#      (the term itself is tools/check_zonal.py's). Its R = 1, J2 = 2^-10
+#      and J4 = 0 are synthetic: the case holds the line, not a planet.
 #   3. The body cap's refusal still holds one past it. The cap is read
 #      from src/ias15_limits.h, never typed here. (Its one force
 #      evaluation, at the cap, on the routes against the elementwise
@@ -243,7 +246,13 @@ def main():
     p_a9 = outer8("outer8_active9.txt", 9)
     p_a0 = outer8("outer8_active0.txt", 0)
     p_twice = outer8("outer8_active_twice.txt", 5, extra=("active 5",))
-    p_zonal = outer8("outer8_zonal.txt", 5, extra=("zonal 0 0x1.0000000000000p+0 0x1.0000000000000p-10 0x0.0p+0",))
+    # a synthetic zonal line (R = 1, J2 = 2^-10, J4 = 0): the cases hold the
+    # line's grammar and its record and key, not a planet
+    zline0 = "zonal 0 0x1.0000000000000p+0 0x1.0000000000000p-10 0x0.0p+0"
+    p_zonal = outer8("outer8_zonal.txt", 5, extra=(zline0,))
+    p_ztwice = outer8("outer8_zonal_twice.txt", 5, extra=(zline0, "zonal 1 0x1.0000000000000p+0 0x1.0000000000000p-10 0x0.0p+0"))
+    p_zfive = outer8("outer8_zonal_five.txt", 5, extra=(zline0 + " 0x1.0000000000000p+0",))
+    p_atwo = outer8("outer8_active_two.txt", None, extra=("active 5 6",))
 
     s = 1 if args.quick else 2
     rejecting = "kepler e=0.99, a rejected step"     # here for its rejection, which is asserted below
@@ -401,6 +410,15 @@ def main():
         rc, out, err = run([cft, "--format", "fp64", "--problem", path, "--steps", "1", "--quiet"])
         verdict(rc != 0 and needle in err and ("1 to N = 8" in err or needle == "a second active line"),
                 "%s is refused by name (rc %d): %s" % (what, rc, err.strip()[-160:]))
+    # Lines that once ran with a part of them unread (V1, round 4): a second
+    # zonal line replaced the first, a fifth field and a second active field
+    # were ignored. Each is refused by name, before anything runs.
+    for path, what, needle in ((p_ztwice, "a second zonal line", "a second zonal line"),
+                               (p_zfive, "a zonal line with a fifth field", "with a fifth field"),
+                               (p_atwo, "an active line with a second field", "'active 5 6'")):
+        rc, out, err = run([cft, "--format", "fp64", "--problem", path, "--steps", "1", "--quiet"])
+        verdict(rc != 0 and needle in err and not out.strip(),
+                "%s is refused by name, with nothing printed (rc %d): %s" % (what, rc, err.strip()[-160:]))
     # P0's refusal of the zonal line, replaced by round 4's P1: the line is
     # accepted, the record names it and the run key carries it. The term
     # itself is tools/check_zonal.py's.

@@ -13,10 +13,11 @@
  * once the problem and its active line are read, so a line this term
  * cannot honour is refused before anything is printed or issued.
  *
- * THE ORDER IS REBOUNDx'S. Body k, mass M, reference radius R, acts on
- * every other body j of its system, at (dx, dy, dz) = x_j - x_k, through
- * the expressions of REBOUNDx's gravitational_harmonics.c, J2's function
- * and then J4's, each evaluated as C evaluates it, left to right:
+ * THE ORDER IS REBOUNDx'S AS RECALLED, NOT AS READ (BELIEVED: see the
+ * paragraph after the list below). Body k, mass M, reference radius R, acts
+ * on every other body j of its system, at (dx, dy, dz) = x_j - x_k, through
+ * the expressions recalled from REBOUNDx's gravitational_harmonics.c, J2's
+ * function and then J4's, each evaluated as C evaluates it, left to right:
  *
  *   r2 = dx*dx + dy*dy + dz*dz;  r = sqrt(r2);  costheta2 = dz*dz/r2;
  *   J2: prefac = 3.*J2*R*R/r2/r2/r/2.;           fac = 5.*costheta2 - 1.;
@@ -45,7 +46,7 @@
  * the negated operand, so the bits are the same, zeros included. The
  * divides by 2. and 8. stay divides. 3*J2*R*R and 5*J4*R^4 are the same for
  * every body, so each is formed once a call, in that association, which is
- * the value REBOUNDx forms for each body. G*M is per system: an ensemble's
+ * the value REBOUNDx is believed to form for each body. G*M is per system: an ensemble's
  * body k has its own mass in each.
  *
  * Test particles. Under a problem's active line (testparticle_type 0) a
@@ -174,6 +175,11 @@ static void zcall(char op, const char *dn, V d, const char *an, const V a, const
 static int zready;
 static size_t zna, zni, zreact;    /* N_active, the bodies that act on active ones, those of them not k */
 static size_t zcap_m, zcap_e;
+/* Whether body j of a system gives body zonal_k a reaction: it is not k,
+ * and it acts on the active bodies (j < zni, N_interact). The record's
+ * count (zreact) and zonal_apply()'s loop both ask this one function, so
+ * the record cannot name a count the loop does not subtract. */
+static int zonal_gives(size_t j){ return j != zonal_k && j < zni; }
 /* E (N-1) elements each: system s's bodies other than k, ascending, at
  * s (N-1) + jj */
 static V zxj, zyj, zzj, zxk, zyk, zzk, zmj, zmk, zdx, zdy, zdz, zdxx, zdyy, zdzz, zr2, zr, zc2, zgm, zgmj,
@@ -198,7 +204,7 @@ static void zonal_ready(void){
         snprintf(zk_name[c], sizeof zk_name[c], "k%d", c);
     }
     zreact = 0;
-    for (size_t j = 0; j < zni; j++) zreact += j != zonal_k;
+    for (size_t j = 0; j < N; j++) zreact += (size_t)zonal_gives(j);
     const size_t m = E * (N - 1);
     if (zcap_m < m){
         for (size_t i = 0; i < sizeof zbuf_m / sizeof zbuf_m[0]; i++){ free(*zbuf_m[i]); *zbuf_m[i] = valloc(m); }
@@ -237,8 +243,8 @@ static void zonal_geometry(int with_a){
 }
 
 /* One pass's constant, (n+1)*Jn or Jn, times R n times, left to right, and
- * broadcast to every body: a call's one copy of what REBOUNDx forms for
- * each body. */
+ * broadcast to every body: a call's one copy of what REBOUNDx is believed
+ * to form for each body (BELIEVED, as the head says: REBOUNDx was not read). */
 static void zonal_constant(const char *kn, const V k, const char *jn, const V jv, int nr){
     const size_t m = E * (N - 1);
     if (k) zcall('*', "cst", zcst, kn, k, jn, jv, 1);
@@ -270,7 +276,7 @@ static void zonal_apply(void){
     zcall('*', "ufz", zufz, "u", zu, "fz", zfz, m);
     zcall('*', "rz", zrz, "ufz", zufz, "dz", zdz, m);
     for (size_t jj = 0; jj < n1; jj++){
-        if ((jj < zonal_k ? jj : jj + 1) >= zni) continue;    /* a test particle gives no reaction */
+        if (!zonal_gives(jj < zonal_k ? jj : jj + 1)) continue;    /* a test particle gives no reaction */
         for (size_t s = 0; s < E; s++){
             zmove("rs", zrs, 3 * s, "rx", zrx, s * n1 + jj);
             zmove("rs", zrs, 3 * s + 1, "ry", zry, s * n1 + jj);
@@ -392,6 +398,9 @@ static void zonal_record(void){
  * two nearly over a pole, a massless active body, and in each system a
  * test particle with a mass, whose reaction must not be taken. */
 static const char *const zst_g = "0x1.3000000000000p-1";
+/* R, J2 and J4: a SYNTHETIC R = 1.5 with Saturn's J2 and J4 (GPU-E §4) in
+ * binary64. The selftest holds the arithmetic and the formula, not a planet;
+ * data/problems/zonal_saturn.txt is the physical problem. */
 static const char *const zst_rj[3] = { "0x1.8000000000000p+0", "0x1.0ae79d91288f7p-6", "-0x1.ea5fb854f9344p-11" };
 static const char *const zst_body[2][8][4] = {   /* m, x, y, z */
     {

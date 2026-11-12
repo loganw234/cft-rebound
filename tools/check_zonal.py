@@ -79,8 +79,9 @@
 #   4. FORMAT DIFFERENCE. binary128 at epsilon 1e-9 writes its steps
 #      (--dt-out); binary128 and binary256 take them (--dt-file, --epsilon 0).
 #      Their positions must differ, and by no more than u128 * steps^2 of the
-#      distance from Saturn: binary128's round-off, eleven decades under
-#      binary64's. Beside it, how far the term itself moved them.
+#      distance from Saturn: binary128's round-off, eighteen decades under
+#      binary64's (u128/u64 = 2^-60). Beside it, how far the term itself
+#      moved them.
 #      ITS SCOPE (the lead's ruling, 2026-11-12): it can fail on a defect that
 #      differs between the two formats, a constant or an operation narrowed
 #      at one format only, and it cannot fail on a narrowing both formats

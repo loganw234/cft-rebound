@@ -996,11 +996,14 @@ static long prob_active = -1;
  *   active n            the first n bodies of every system, 1 to N, are
  *                       massive and the rest test particles: REBOUND's
  *                       N_active, with testparticle_type 0, in the forces
- *                       and in the record's energy alike; one line
+ *                       and in the record's energy alike; one line, one field
  *   zonal k R J2 J4     body k of every system is oblate about the z axis,
  *                       with J2 and J4 at reference radius R (round 4's P1,
- *                       src/ias15_zonal.inc); k must be an active body
- * Anything else is refused by name. */
+ *                       src/ias15_zonal.inc); k must be an active body; one
+ *                       line, four fields
+ * Anything else is refused by name: an unknown line, and on the active and
+ * zonal lines a second line or a field past the last (a second oblate body
+ * would otherwise replace the first, and a fifth field go unread). */
 static void read_problem(const char *path){
     FILE *f = fopen(path, "r");
     if (!f){ perror(path); exit(2); }
@@ -1070,9 +1073,11 @@ static void read_problem(const char *path){
         }
         else if (!strcmp(tok, "active")){
             const char *t = strtok(NULL, " \t\r\n");
+            const char *more = t ? strtok(NULL, " \t\r\n") : NULL;
             char *end = NULL;
             long n = t ? strtol(t, &end, 10) : -1;
             if (prob_active >= 0) die("a second active line in %s: a problem has one N_active", path);
+            if (more) die("'active %s %s' in %s: the line is 'active n', one field", t, more, path);
             /* not 0: with no massive body every acceleration is +0, and
              * the corrector's error is then 0/0 at the first step */
             if (!t || *end || n < 1 || (size_t)n > N)
@@ -1080,8 +1085,11 @@ static void read_problem(const char *path){
             prob_active = n;
         }
         else if (!strcmp(tok, "zonal")){
+            if (zonal_on) die("a second zonal line in %s: a problem has one oblate body, and the first zonal line named body %zu", path, zonal_k);
             const char *fields[4];
             for (int k = 0; k < 4; k++){ fields[k] = strtok(NULL, " \t\r\n"); if (!fields[k]) die("a short zonal line in %s: it is 'zonal k R J2 J4'", path); }
+            const char *more = strtok(NULL, " \t\r\n");
+            if (more) die("a zonal line in %s with a fifth field '%s': it is 'zonal k R J2 J4'", path, more);
             char *end = NULL;
             long k = strtol(fields[0], &end, 10);
             if (*end || k < 0 || (size_t)k >= N) die("'zonal %s' in %s: k is a body of each system, 0 to %zu", fields[0], path, N - 1);
