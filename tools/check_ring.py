@@ -20,19 +20,24 @@
 #      another seed; the same bytes again on mpmath's pure-Python backend
 #      (MPMATH_NOGMPY), the closest this host comes to a second host.
 #      Then the file, read back as the program reads it: N, E and the
-#      active line; Saturn and the moons first in every system, bit for
-#      bit the same in every wave, and the only massive bodies; the
-#      particles sorted by radius across the waves and inside the
-#      annulus; the barycentre of the massive bodies at the origin; every
-#      particle circular in the file's own field (|v|^2 r / GM is the
-#      field's factor, 1 with no zonal line, and r.v is 0); no start
-#      within the stated Hill radii of a moon, the Hill radii derived
-#      from the file's own masses and states. The zonal line, written
-#      without --no-zonal, holds the generator's constants, and its
-#      particles and its circular moon (Pan) the oblate field's circular
-#      speed. The exclusion bites (a wide one refuses draws), a count that
-#      does not fill waves of 57 is refused by name, and --one-system
-#      writes the same body lines as one wave of the same draws.
+#      active line, N the generator's WAVE (64) and active its MASSIVE
+#      (7); Saturn and the moons first in every system, bit for bit the
+#      same in every wave, and the only massive bodies; the particles
+#      sorted by radius across the waves and inside the annulus; the
+#      barycentre of the massive bodies at the origin; every particle
+#      circular in the file's own field (|v|^2 r / GM is the field's
+#      factor, 1 with no zonal line, and r.v is 0); every moon inclined:
+#      sin i, from r x v relative to Saturn, above zero (not |z|: Pan
+#      starts at its node, z = 0; a flat moon would leave its z terms and
+#      the z of its reaction on Saturn exactly zero, V2); no start within
+#      the stated Hill radii of a moon, the Hill radii derived from the
+#      file's own masses and states. The zonal line, written without
+#      --no-zonal, holds the generator's constants, and its particles and
+#      its circular moon (Pan) the oblate field's circular speed. The
+#      exclusion bites (a wide one refuses draws) and is bounded (one that
+#      leaves none of the annulus is refused by name), a count that does
+#      not fill waves of 57 is refused by name, and --one-system writes
+#      the same body lines as one wave of the same draws.
 #   2. The engines: one wave at every format. The loop and the program
 #      engine in the FMA form agree bit for bit, every record line and
 #      every trailer counter, and the program engine's predictor ran. The
@@ -49,12 +54,13 @@
 #      `active 7` line deleted - every one of its 64 bodies active, the 57
 #      particles massless - gives the same record at every format, on the
 #      loop engine in REBOUND's form, and at binary64 in the FMA form on
-#      both engines too. And REBOUND's own IAS15 (build/ias15_ref) runs
-#      the wave as one system with every body active (it reads no active
-#      line): bit for bit ias15_cft's at binary64 in REBOUND's form and at
-#      the program's defaults (REBOUND's 12 passes), which are the same
-#      samples as the gate's all-active run, so REBOUND has the bits
-#      `active 7` has.
+#      both engines too. And REBOUND's own IAS15 (build/ias15_ref, its
+#      build time printed, its record's header held to impl=rebound, so a
+#      stand-in at that path fails) runs the wave as one system with every
+#      body active (it reads no active line): bit for bit ias15_cft's at
+#      binary64 in REBOUND's form and at the program's defaults (REBOUND's
+#      12 passes), which are the same samples as the gate's all-active
+#      run, so REBOUND has the bits `active 7` has.
 #   4. The ensemble: each of the 4 waves, run alone (--member), gets the
 #      bits it gets in the ensemble, every sample and its trailer, on the
 #      program engine (the FMA form; its ensemble path predicts each
@@ -75,8 +81,9 @@
 #        of any run;
 #      - every wave's largest |z| from Saturn is above zero at every
 #        sample (a flat ring leaves every z term of J2 and J4 exactly
-#        zero, ROUND4.md "the trap"), and this counter reads zero on a
-#        flat copy of the file, so it can fail;
+#        zero, ROUND4.md "the trap"); this counter, and the moons'
+#        inclination counter of part 1, read zero on a flat copy of the
+#        file, so each can fail;
 #      - the far wave (the innermost, wholly inside every moon's
 #        pericentre, which the file is held to) takes within 10% of 36.2
 #        steps an orbit at epsilon 1e-9: cft-fp256's GPU-E section 3,
@@ -106,6 +113,7 @@ from fractions import Fraction
 here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, here)
 from check_equivalence import compare as equivalent, hex_to_fraction  # noqa: E402
+import make_ring  # noqa: E402 - the wave's size, the massive count and the zonal constants, from their one source
 
 root = os.path.dirname(here)
 
@@ -188,6 +196,17 @@ def largest_z(sat, particles):
     """The flat-ring counter: the largest |z| of any particle from Saturn
     (positions as (x, y, z, ...) lists)."""
     return max(abs(p[2] - sat[2]) for p in particles)
+
+
+def inclination(b, s):
+    """b's orbit about s (state() lists), from h = r x v: (sin i, i in
+    radians). sin i is |(h_x, h_y)| / |h|: exactly zero for an orbit in the
+    plane, prograde or retrograde, and unlike |z| not zero for a body that
+    starts on its node."""
+    d = rel(b, s)
+    h = [d[1] * d[5] - d[2] * d[4], d[2] * d[3] - d[0] * d[5], d[0] * d[4] - d[1] * d[3]]
+    tilt = math.hypot(h[0], h[1])
+    return tilt / norm(h), math.atan2(tilt, h[2])
 
 
 def edit_copy(src, dst, fn):
@@ -301,14 +320,16 @@ def main():
         print("  %s %s" % ("ok  " if ok else "FAIL", text))
         return ok
 
-    if not os.path.exists(cft):
-        print("check_ring: no %s" % cft)
-        print("RESULT: FAIL")
-        return 1
+    ref_exe = os.path.join(args.build, "ias15_ref" + exe)
+    for binary in (cft, ref_exe):
+        if not os.path.exists(binary):
+            print("check_ring: no %s" % binary)
+            print("RESULT: FAIL")
+            return 1
     images = [os.path.join(progs, f) for f in os.listdir(progs) if f.endswith(".cftp")] if os.path.isdir(progs) else []
     stamp = lambda t: time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t))
-    print("check_ring: %s, built %s; %d program images in %s, the newest %s" % (
-        cft, stamp(os.path.getmtime(cft)), len(images), progs,
+    print("check_ring: %s, built %s; %s, built %s; %d program images in %s, the newest %s" % (
+        cft, stamp(os.path.getmtime(cft)), ref_exe, stamp(os.path.getmtime(ref_exe)), len(images), progs,
         stamp(max(os.path.getmtime(f) for f in images)) if images else "none"))
 
     def generate(out, extra, env=None):
@@ -353,11 +374,13 @@ def main():
     excl = dict(kv.partition("=")[::2] for kv in prob["ring"].get("exclusion", []))
     k_hill = float(excl.get("hill", "nan"))
     ok = (G and N and E and na and len(systems) == E and len(annulus) == 2 and r_saturn > 0 and k_hill > 0
-          and all(len(s["bodies"]) == N for s in systems) and prob["zonal"] is None)
-    if not verdict(ok, "the file: N=%s E=%s active=%s, %d systems of %s bodies, no zonal line under --no-zonal, its "
-                       "annulus %s km, Saturn's radius %s km and the exclusion's %s Hill radii read from its head"
-                       % (N, E, na, len(systems), sorted(set(len(s["bodies"]) for s in systems)), annulus,
-                          r_saturn, k_hill)):
+          and all(len(s["bodies"]) == N for s in systems) and prob["zonal"] is None
+          and N == make_ring.WAVE and na == make_ring.MASSIVE)
+    if not verdict(ok, "the file: N=%s E=%s active=%s (make_ring's WAVE %d and MASSIVE %d), %d systems of %s bodies, "
+                       "no zonal line under --no-zonal, its annulus %s km, Saturn's radius %s km and the exclusion's "
+                       "%s Hill radii read from its head"
+                       % (N, E, na, make_ring.WAVE, make_ring.MASSIVE, len(systems),
+                          sorted(set(len(s["bodies"]) for s in systems)), annulus, r_saturn, k_hill)):
         print("RESULT: FAIL")
         return 1
     massive = [systems[0]["bodies"][i] for i in range(na)]
@@ -397,6 +420,16 @@ def main():
             "circular in the file's own field (a point mass's): |v|^2 r / GM - 1 at most %.1e, r.v / (|r||v|) at "
             "most %.1e" % (worst_circ, worst_radial))
     verdict(zmin_wave > 0, "not flat: every wave's largest |z| from Saturn is at least %.3f km" % zmin_wave)
+    # The moons out of the plane, by inclination. A flat moon leaves its J2
+    # and J4 z terms, and the z of its reaction on Saturn, exactly zero, and
+    # the moons carry all of the ring's reactions, the particles being
+    # massless (V2, 2026-11-12). Not by |z|: Pan starts at its node, z = 0.
+    incl = [(name, inclination(m, sat), m[3] - sat[3]) for name, m in moons]
+    verdict(all(sin_i > 0 for _, (sin_i, _), _ in incl),
+            "the moons are not flat: each one's inclination from r x v relative to Saturn is above zero (sin i > 0): "
+            "%s degrees%s" % (", ".join("%s %.4f" % (n, math.degrees(i)) for n, (_, i), _ in incl),
+                              "".join("; %s's z from Saturn is %r km, at its node, which |z| would call flat" % (n, z)
+                                      for n, (sin_i, _), z in incl if z == 0 and sin_i > 0)))
     # the Hill radii from the file's own state, and no start within the
     # exclusion's reach of a moon
     hill = {}
@@ -416,7 +449,6 @@ def main():
     zring = os.path.join(scratch, "ring_zonal.txt")
     rc, say = generate(zring, ["--particles", "57", "--seed", "3"])
     zp = read_problem(zring) if rc == 0 else None
-    import make_ring  # noqa: E402 - the constants the line must hold, from their one source
     want = (0, float(make_ring.ZONAL_R_KM), float(make_ring.ZONAL_J2), float(make_ring.ZONAL_J4))
     zworst, circular = None, [m[0] for m in make_ring.MOONS if float(m[3]) == 0]
     if zp and zp["zonal"] == want:
@@ -449,6 +481,15 @@ def main():
     verdict(refused > 0 and wclosest >= 300,
             "the exclusion bites: at 300 Hill radii it refused %d draws, and the closest start kept is %.1f Hill "
             "radii from a moon" % (refused, wclosest))
+    # and it is bounded: one that leaves none of the annulus is refused by
+    # name, where it once drew forever (V2)
+    unbounded = os.path.join(scratch, "ring_unbounded.txt")
+    if os.path.exists(unbounded):
+        os.remove(unbounded)
+    rc, say = generate(unbounded, ["--particles", "57", "--seed", "1", "--no-zonal", "--exclude-hill", "1000"])
+    verdict(rc != 0 and "Lower --exclude-hill" in say and not os.path.exists(unbounded),
+            "an exclusion that leaves none of the annulus, 1000 Hill radii, is refused by name and writes nothing "
+            "(rc %d): %s" % (rc, say[-170:]))
     rc, say = generate(os.path.join(scratch, "ring_56.txt"), ["--particles", "56"])
     verdict(rc != 0 and "multiple of 57" in say, "56 particles, which do not fill a wave, are refused by name (rc %d): %s"
             % (rc, say[-110:]))
@@ -612,7 +653,6 @@ def main():
     # REBOUND's own IAS15 on the wave, at binary64. ias15_ref reads no
     # active, E or system line, so the wave goes to it as one system with
     # every body active: by part 3, the same record as `active 7`.
-    ref_exe = os.path.join(args.build, "ias15_ref" + exe)
     single = os.path.join(scratch, "ring_%s_one_system.txt" % systems[ENGINE_WAVE]["name"])
     with open(single, "w", newline="\n") as f:
         f.write("# %s of %s as one system, every body active, for ias15_ref\n" % (systems[ENGINE_WAVE]["name"], ring))
@@ -628,6 +668,12 @@ def main():
         verdict(False, "REBOUND's own IAS15 on the wave: ias15_ref rc %d (%s), ias15_cft rc %d"
                 % (p.returncode, p.stderr.strip()[-200:], rc))
     else:
+        # METHOD.md 5: the binary at that path must be REBOUND's, not a stand-in
+        who = re.search(r"^# program=(\S+) impl=(\S+)", p.stdout, re.M)
+        verdict(who is not None and who.group(2) == "rebound",
+                "%s (built %s) says `%s` in its record's header: REBOUND's own IAS15, not a stand-in at that path"
+                % (os.path.basename(ref_exe), stamp(os.path.getmtime(ref_exe)),
+                   who.group(0)[2:] if who else "no # program= line"))
         allok &= equivalent("fp64: %s as one system of %d, every body active: REBOUND's own IAS15 (ias15_ref) against "
                             "ias15_cft in REBOUND's form at its defaults" % (systems[ENGINE_WAVE]["name"], N),
                             p.stdout, cref, 6, N)
@@ -748,15 +794,17 @@ def main():
                 "the moons act: with their masses zeroed the wave differs; after %s steps a particle (%s) is %.3e km "
                 "from where the moons put it, %.1e of its radius, against a binary64 rounding of %.1e"
                 % (a[-1][1], who, dmax, reld, 2.0 ** -53))
-    # the flat-ring counter on a flat copy of the file: it must read zero
-    zflat = 0.0
+    # the flat-ring counters on a flat copy of the file: each must read zero
+    zflat, iflat = 0.0, 0.0
     for s in systems:
-        flat = [state(b)[1:] for b in s["bodies"]]
+        flat = [state(b) for b in s["bodies"]]          # m, x, y, z, vx, vy, vz
         for p in flat:
-            p[2], p[5] = 0.0, 0.0
-        zflat = max(zflat, largest_z(flat[0], flat[na:]))
-    verdict(zflat == 0, "the |z| counter can fail: on a flat copy of the file (every z and vz zeroed) it reads %r"
-            % zflat)
+            p[3], p[6] = 0.0, 0.0
+        zflat = max(zflat, largest_z(flat[0][1:], [p[1:] for p in flat[na:]]))
+        iflat = max(iflat, max(inclination(p, flat[0])[0] for p in flat[1:na]))
+    verdict(zflat == 0 and iflat == 0,
+            "the |z| and the moons' inclination counters can fail: on a flat copy of the file (every z and vz zeroed) "
+            "the largest |z| reads %r and the largest moon's sin i %r" % (zflat, iflat))
     # the far wave: wholly inside every moon's pericentre by the exclusion's
     # Hill radii, so its own particles set its step; and its steps an orbit
     fw = systems[FAR_WAVE]

@@ -62,7 +62,11 @@
 #     would make its wave's steps collapse. The Hill radius is
 #     a (GM_moon / (3 GM_Saturn))^(1/3), computed from the constants above
 #     (the study's column: Pan 18 km, Prometheus 63, Pandora 61). How many
-#     draws were refused, and near which moon, is in the file's head.
+#     draws were refused, and near which moon, is in the file's head. An
+#     exclusion that refuses more than REFUSED_PER_KEPT draws for each
+#     particle asked for, and 1,000 beside, is itself refused by name: it
+#     leaves almost none of the annulus, and one that leaves none of it
+#     would draw forever.
 #   - The orbit is circular in the field the file describes. With the
 #     zonal line, its speed is the circular speed in Saturn's equatorial
 #     plane with J2 and J4 at the particle's radius,
@@ -72,7 +76,8 @@
 #     problem, so the speed is the point mass's, sqrt(GM / r): a particle
 #     given the oblate speed in a point mass's field is on an e ~ 0.005
 #     orbit and swings out by about 1,400 km.
-#   - The particles are sorted by radius, then cut into waves of 57.
+#   - The particles are sorted by radius, then cut into waves of
+#     PER_WAVE = WAVE - MASSIVE = 64 - 7 = 57.
 # THE MOONS are Saturn-centric Kepler orbits with mu = G (M + m), in
 # REBOUND's own form (third_party/rebound/src/tools.c, reb_particle_from_
 # orbit: Murray & Dermott eq. 2.122 and 2.36). With the zonal line each
@@ -130,8 +135,10 @@ MOON_ANGLES = {"mimas":      ("1.0",  "30",  "60", "0"),
                "janus":      ("0.2",  "180", "0",  "45")}
 INC_LO, INC_HI = "1e-4", "1e-3"  # the particles' inclinations, radians: synthetic
 EXCLUDE_HILL = "5"               # Hill radii: "a few", ROUND4.md P2
-PER_WAVE = 57                    # particles a wave: 64 lanes less Saturn and the moons
-MASSIVE = 1 + len(MOONS)         # bodies 0..6 of every system
+MASSIVE = 1 + len(MOONS)         # bodies 0..6 of every system: Saturn, then the moons
+WAVE = 64                        # bodies a wave: one 64-lane GPU wave a system (GPU-E's a2)
+PER_WAVE = WAVE - MASSIVE        # particles a wave: 57
+REFUSED_PER_KEPT = 99            # the exclusion's bound: see draw()
 
 
 def b64(x):
@@ -215,7 +222,13 @@ def draw(ring, n, seed, rmin, rmax, k_hill, place):
     """n particles, each as (u0, place(state)) - u0 the draw the radius came
     from, which orders them as the radius does - sorted by radius; the
     refused draws, by moon; the draws in all; and the largest |z| from
-    Saturn."""
+    Saturn.
+
+    The exclusion is bounded: past REFUSED_PER_KEPT refused draws for each
+    particle asked for, and 1,000 beside, the ring is refused by name. It
+    would then cover all but about 1% of the annulus, and a reach that
+    covers all of it (--exclude-hill 1000 reaches 521,000 km from Mimas)
+    would otherwise draw forever."""
     rng = random.Random(seed)
     two_pi = 2 * mp.pi
     inc_lo, inc_hi = mp.mpf(float(INC_LO)), mp.mpf(float(INC_HI))
@@ -224,7 +237,14 @@ def draw(ring, n, seed, rmin, rmax, k_hill, place):
         m["r0"] = mp.sqrt(sum(m["state"][c] ** 2 for c in range(3)))
         m["reach"] = k_hill * m["hill"]
     kept, refused, draws, zmax = [], {m["name"]: 0 for m in ring.moons}, 0, mp.mpf(0)
+    limit = REFUSED_PER_KEPT * n + 1000
     while len(kept) < n:
+        if draws - len(kept) > limit:
+            raise SystemExit("make_ring: %d draws were refused for a start within %g Hill radii of a moon (%s) and %d of "
+                             "%d particles kept: the exclusion leaves almost none of the annulus %g to %g km. Lower "
+                             "--exclude-hill." % (draws - len(kept), float(k_hill),
+                                                  ", ".join("%s %d" % kv for kv in refused.items() if kv[1]),
+                                                  len(kept), n, rmin, rmax))
         u = [rng.random() for _ in range(4)]
         draws += 1
         r = lo + (hi - lo) * mp.mpf(u[0])
