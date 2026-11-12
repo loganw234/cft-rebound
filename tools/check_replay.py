@@ -27,7 +27,13 @@
 # for each of three sampled test particles (the first, the middle one and
 # the last, which in C is the flyby), tools/extract_particle.py writes the
 # particle alone with the seven massive bodies and re-keys the schedule,
-# and the replay runs.
+# and the replay runs. All of that is on the loop engine in REBOUND's form.
+# B and C, the two kinds of rejection, also run on the loop engine in the
+# FMA form and on the program engine (which takes only that form): the
+# wave, its rejections counted, and each particle's bits, counters and
+# travel, items 1 and 2 and the first two counts of item 3. The step after
+# a rejection is restored and predicted through each engine's own code;
+# the records, the tool and the refusals are the same on all three.
 #
 # What it asserts, and what lets each assertion fail:
 #   1. Bits. At every sample, the replay's particle AND every massive body,
@@ -69,6 +75,10 @@
 #      direction; a malformed line, a record cut short, a line after its
 #      end, too few accepted attempts, and no --epsilon 0. And --run-key
 #      prints exactly the run line --record-iters writes.
+#   6. A wave that is one system of an ensemble, as P2's waves are, at the
+#      first format: member 1 of two, recorded with --member 1, gives its
+#      particles alone (one of them the body that tells the two waves apart),
+#      and its records extracted for member 0 are refused by name.
 #
 # The --light rules (CLAUDE.md): this gate has no scaling of its own. Every
 # replay runs its wave's own --steps, never a count scaled apart from the
@@ -249,6 +259,8 @@ def main():
     ap.add_argument("--quick", action="store_true", help="binary64 only, shorter waves")
     ap.add_argument("--keep", default=None, help="directory for the waves and records, kept "
                     "(default <build>/replay/<pid>, removed after a pass)")
+    ap.add_argument("--programs", default=os.path.join(os.path.dirname(here), "programs", "out"),
+                    help="the program engine's images")
     args = ap.parse_args()
     exe = ".exe" if os.name == "nt" else ""
     cft = os.path.join(args.build, args.exe + exe)
@@ -268,12 +280,18 @@ def main():
              "B": ("the ring from dt0 = 1e5 s (a first dt far too large)", "1e5"),
              "C": ("the ring and a particle aimed past Janus, from dt0 = 100 s (rejections after accepted steps)", "100")}
 
-    def run_args(fmt, case):
+    # The engine and form: REBOUND's on the loop engine, which every check
+    # runs on, and the FMA form on each engine, where B and C replay too.
+    forms = {"loop": ([], "the loop engine, REBOUND's form"),
+             "loop-fma": (["--arith", "fma"], "the loop engine, the FMA form"),
+             "program": (["--arith", "fma", "--engine", "program", "--programs", args.programs], "the program engine")}
+
+    def run_args(fmt, case, form="loop"):
         steps = 24 if args.quick else (20 if fmt == "fp256" else 40)
         if case == "C":
             steps = 24 if args.quick or fmt == "fp256" else 30
         a = ["--format", fmt, "--dt", cases[case][1], "--epsilon", "1e-9", "--steps", str(steps),
-             "--sample", str(steps // 4), "--quiet"]
+             "--sample", str(steps // 4), "--quiet"] + forms[form][0]
         return a + (["--max-iter", "60"] if fmt == "fp256" else [])   # so its pass counts vary
 
     def sampled(case):
@@ -281,14 +299,15 @@ def main():
         n = nfly if case == "C" else nring
         return [n_active, n_active + (n - n_active) // 2, n - 1]
 
-    # One job a format and wave: the wave, then each particle's extraction,
-    # replay and runs alone, then the controls on copies of its records.
-    def job(fc):
-        fmt, case = fc
-        res = {"fmt": fmt, "case": case}
-        d = os.path.join(work, "%s-%s" % (fmt, case))
+    # One job a format, wave and form: the wave, then each particle's
+    # extraction and replay; on the loop engine in REBOUND's form, each
+    # particle's runs alone too, and the controls on copies of the records.
+    def job(fcf):
+        fmt, case, form = fcf
+        res = {"fmt": fmt, "case": case, "form": form}
+        d = os.path.join(work, "%s-%s-%s" % (fmt, case, form))
         os.makedirs(d, exist_ok=True)
-        ra = run_args(fmt, case)
+        ra = run_args(fmt, case, form)
         att, sch = os.path.join(d, "wave.att"), os.path.join(d, "wave.sched")
         rc, out, err = run([cft, "--problem", waves[case]] + ra + ["--attempts-out", att, "--record-iters", sch])
         res["wave_rc"], res["wave_err"] = rc, err
@@ -308,6 +327,9 @@ def main():
             rc, out, err = run([cft] + r["args"])
             p["rc"], p["err"] = rc, err
             p["rec"], p["tail"] = record(out)
+            res["parts"][j] = p
+            if form != "loop":
+                continue
             # alone: on its own steps, and on the recorded steps with its own exit test
             rc2, out2, _ = run([cft, "--problem", r["problem"]] + ra)
             p["own_rc"], (p["own"], _) = rc2, record(out2)
@@ -315,10 +337,11 @@ def main():
             rc3, out3, _ = run([cft] + r["args"][:-2] + ["--record-iters", own_sched])
             p["ownx_rc"], (p["ownx"], p["ownx_tail"]) = rc3, record(out3)
             p["ownx_passes"] = passes(own_sched) if rc3 == 0 else []
-            res["parts"][j] = p
+        res["ctl"] = ctl = {}
+        if form != "loop":
+            return res
         j0 = sampled(case)[0]
         acc = [i for i, o in enumerate(res["outc"]) if o == "a"]
-        ctl = {}
         if case == "A" and j0 in res["parts"] and "x" in res["parts"][j0]:
             # one accepted attempt's dt moved by one ulp, in a copy of the record
             k = acc[len(acc) // 2]
@@ -358,14 +381,16 @@ def main():
         res["ctl"] = ctl
         return res
 
-    jobs = [(fmt, case) for fmt in reversed(formats) for case in "ABC"]      # the widest first: the long poles
+    order = [("A", "loop"), ("B", "loop"), ("C", "loop"), ("B", "loop-fma"), ("C", "loop-fma"),
+             ("B", "program"), ("C", "program")]
+    jobs = [(fmt, case, form) for fmt in reversed(formats) for case, form in order]   # the widest first: the long poles
     with ThreadPoolExecutor(max_workers=1 if os.environ.get("CFT_REBOUND_ARTIFACT") else 4) as pool:
         results = dict(zip(jobs, pool.map(job, jobs)))
 
     for fmt in formats:
-        for case in "ABC":
-            res = results[(fmt, case)]
-            print("check_replay at %s: %s" % (fmt, cases[case][0]))
+        for case, form in order:
+            res = results[(fmt, case, form)]
+            print("check_replay at %s: %s, on %s" % (fmt, cases[case][0], forms[form][1]))
             if res["wave_rc"]:
                 verdict(False, "the wave did not run (rc %d): %s" % (res["wave_rc"], res["wave_err"].strip()[-300:]))
                 continue
@@ -408,6 +433,8 @@ def main():
                 verdict(swept > 0.05 and dist > 1000.0,
                         "  it moved: %.3f rad about Saturn, %.0f km, over the run's %.0f s"
                         % (swept, dist, float.fromhex(wrec[-1][3])))
+                if form != "loop":
+                    continue
                 d_own = particle_differs(wrec, p["own"], j, x["n_active"]) if p["own_rc"] == 0 else 0
                 d_pass = sum(1 for a, b in zip(res["passes"], p["ownx_passes"]) if a != b) if p["ownx_rc"] == 0 else 0
                 own_bits += d_own > 0
@@ -416,6 +443,8 @@ def main():
                       "own exit test takes other passes in %d of %d attempts (mean_pc_iterations %s, the wave's %s)"
                       % (d_own, len(wrec), d_pass, len(o), p["ownx_tail"].get("mean_pc_iterations"),
                          wt.get("mean_pc_iterations")))
+            if form != "loop":
+                continue
             verdict(own_bits > 0 and own_passes > 0,
                     "the records are load bearing here: %d sampled particles take other bits on their own steps, and %d "
                     "other passes on their own exit test" % (own_bits, own_passes))
@@ -457,15 +486,20 @@ def main():
                                 "every bit is the wave's (%d mismatches) and only the counters see it, steps_rejected %s "
                                 "against %s" % (k, len(bad), tail.get("steps_rejected"), wt.get("steps_rejected")))
 
-    # 5. Refusals by name, at the first format, on wave A's records.
+    # A wave that is a system of an ensemble, as P2's are: recorded with
+    # --member, extracted with --member, and refused for the other member.
     fmt0 = formats[0]
-    res = results[(fmt0, "A")]
+    print("check_replay at %s: a wave that is system 1 of a two-wave ensemble (--member 1)" % fmt0)
+    member_case(cft, work, run_args(fmt0, "B"), n_active)
+
+    # 5. Refusals by name, at the first format, on wave A's records.
+    res = results[(fmt0, "A", "loop")]
     print("check_replay at %s: refusals" % fmt0)
     j0 = sampled("A")[0]
     if res["wave_rc"] or "x" not in res["parts"].get(j0, {}):
         verdict(False, "wave A did not run or its first particle was not extracted, so nothing can be refused")
     else:
-        refusals(cft, work, waves["A"], res, results[(fmt0, "B")], j0, n_active)
+        refusals(cft, work, waves["A"], res, results[(fmt0, "B", "loop")], j0, n_active)
 
     if ok_all and not args.keep:
         shutil.rmtree(work, ignore_errors=True)
@@ -473,6 +507,55 @@ def main():
         print("the waves and records of this run are kept in %s" % work)
     print("RESULT: %s" % ("PASS" if ok_all else "FAIL"))
     return 0 if ok_all else 1
+
+
+def member_case(cft, work, ra, n_active):
+    d = os.path.join(work, "member")
+    os.makedirs(d, exist_ok=True)
+    w0, w1 = os.path.join(d, "w0.txt"), os.path.join(d, "w1.txt")
+    write_wave(w0, False)
+    n = write_wave(w1, False, edit=lambda b: b[:n_active + 2] + [shift(b[n_active + 2])] + b[n_active + 3:])
+    sys_lines = []
+    for k, w in enumerate((w0, w1)):
+        with open(w, encoding="utf-8") as f:
+            sys_lines += ["system w%d" % k] + [l for l in f.read().splitlines() if l.startswith("body ")]
+    ens = os.path.join(d, "ensemble.txt")
+    with open(ens, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(["# two ring waves, the second with body %d moved 1 km" % (n_active + 2), "name ringens",
+                           "G " + (1.0).hex(), "active %d" % n_active, "N %d" % n, "E 2"] + sys_lines) + "\n")
+    att, sch = os.path.join(d, "m1.att"), os.path.join(d, "m1.sched")
+    rc, out, err = run([cft, "--problem", ens, "--member", "1"] + ra + ["--attempts-out", att, "--record-iters", sch])
+    if rc:
+        verdict(False, "member 1 did not run (rc %d): %s" % (rc, err.strip()[-300:]))
+        return
+    wrec, wt = record(out)
+    for j in (n_active, n_active + 2):
+        try:
+            r = xp.extract(cft, ens, att, sch, j, d, ra, member=1)
+        except xp.Refused as e:
+            verdict(False, "body %d of member 1: extract_particle refused: %s" % (j, e))
+            continue
+        rc, out, err = run([cft] + r["args"])
+        rec, tail = record(out)
+        nn, values, bad = compare(wrec, rec, r["bodies"])
+        verdict(rc == 0 and not bad and nn == len(wrec) and all(tail.get(k) == wt.get(k) for k in COUNTERS),
+                "body %d of member 1%s replayed alone: %d samples, %d values and the counters are member 1's "
+                "(steps_rejected=%s)" % (j, " (the body moved)" if j == n_active + 2 else "", nn, values,
+                                         tail.get("steps_rejected")))
+    try:
+        xp.extract(cft, ens, att, sch, n_active, d, ra, member=0)
+        why = None
+    except xp.Refused as e:
+        why = str(e)
+    verdict(why is not None and "was recorded from a different run than this wave" in why,
+            "member 1's records extracted for member 0: refused by name")
+
+
+def shift(line):
+    """A body line with its x moved 1 km."""
+    t = line.split()
+    t[3] = (float.fromhex(t[3]) + 1.0).hex()
+    return " ".join(t)
 
 
 def refusals(cft, work, wave, res, resb, j, n_active):
@@ -541,6 +624,13 @@ def refusals(cft, work, wave, res, resb, j, n_active):
     write_wave(w3, False, active=False)
     why = tool(w3)
     verdict(why is not None and "has no active line" in why, "a wave with no active line: refused by name")
+    # a zonal line on a test particle: the tool refuses it before the program
+    # is asked anything (the program refuses every zonal line until P1)
+    w4 = edit_lines(wave, os.path.join(d, "zonal-on-a-particle.txt"),
+                    lambda L: L[:3] + ["zonal %d 0x1p+0 0x0p+0 0x0p+0" % n_active] + L[3:])
+    why = tool(w4)
+    verdict(why is not None and "is not one of its %d massive bodies" % n_active in why,
+            "a wave whose zonal line names a test particle, body %d: refused by name" % n_active)
 
     # the attempts record with two outcomes swapped, on wave B's: its rejected
     # first attempt made accepted and its last attempt rejected, so the dts

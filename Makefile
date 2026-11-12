@@ -616,9 +616,10 @@ IN_SUBPROC  := --input $(B)/gate_subprocess$(EXE) --input $(B)/ias15_cft$(EXE)
 # engine too, generates an ensemble, and reads the pinned MANIFEST
 IN_CORRECTOR := --input tools/check_corrector.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) \
                 --input tools/make_ensemble.py --input $(CFTPROGS)/MANIFEST
-# tools/check_replay.py: the program, and the tool it imports to cut a
-# test particle out of its wave; it writes its own waves (ROUND4.md, P3)
-IN_REPLAY   := --input tools/check_replay.py --input tools/extract_particle.py $(IN_PROGRAM)
+# tools/check_replay.py: the program, the program images its program-engine
+# cases run, and the tool it imports to cut a test particle out of its
+# wave; it writes its own waves (ROUND4.md, P3)
+IN_REPLAY   := --input tools/check_replay.py --input tools/extract_particle.py $(IN_PROGRAM) $(IN_PROGS)
 # tools/check_gravity.py: the program, the problems, the program images it
 # holds the binary to, the two generators it runs and the header it reads
 # the body cap from; --library adds the drop-in gate it runs.

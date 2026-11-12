@@ -20,6 +20,11 @@
 #   ias15_cft --problem DIR/<name>.txt <the run arguments, --epsilon 0>
 #             --dt-file WAVE.att --replay-iters DIR/<name>.sched
 #
+# The printed line is joined with spaces, for reading. A driver imports
+# this file and calls extract(), which returns the same arguments as a
+# list, and the wave's body each sub-system body is (tools/check_replay.py
+# does).
+#
 # Why a re-key, and not a key that leaves the test particles out. Every
 # wave of a ring starts its massive bodies from one state, so a key over
 # the massive bodies and the settings alone could not tell one wave's
@@ -32,6 +37,8 @@
 #     each one's `# run` line is the key the program gives for the wave and
 #     these arguments (--run-key), and they hold one attempt a line alike;
 #   - J is a test particle: the wave has an active line and N_active <= J;
+#     and a zonal line's body is a massive one, whose index the sub-system
+#     keeps;
 #   - the sub-system's G, active and zonal lines are the wave's, and its
 #     first N_active body lines are the wave's first N_active, line for
 #     line and in order, and its last is the wave's body J.
@@ -156,6 +163,12 @@ def extract(exe, wave, attempts, schedule, particle, out_dir, run_args, member=N
     if not n_active <= particle < len(bodies):
         refuse("body %d of %s is not a test particle: they are bodies %d to %d (active %d)"
                % (particle, wave, n_active, len(bodies) - 1, n_active))
+    # the sub-system keeps the wave's body indices below N_active only, so
+    # the zonal line's body must be one of them for the line to mean the
+    # same body there
+    if head["zonal"] is not None and not 0 <= int(head["zonal"].split()[1]) < n_active:
+        refuse("%s's zonal body, %s, is not one of its %d massive bodies, so the sub-system's copy of the line would "
+               "name another body" % (wave, head["zonal"].split()[1], n_active))
 
     # the records are this wave's: their run lines are the program's key for it
     wave_args = ["--problem", wave] + (["--member", str(member)] if member is not None else []) + list(run_args)
