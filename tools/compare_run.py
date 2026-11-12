@@ -994,6 +994,9 @@ def main():
     ap.add_argument("--keep", help="keep the reruns' records in this directory")
     args = ap.parse_args()
     args.problem = os.path.abspath(args.problem)
+    # absolute, as Windows' CreateProcess runs no relative path written with
+    # forward slashes (a traceback otherwise, measured 2026-11-12)
+    args.exe = os.path.abspath(args.exe)
     try:
         return compare_run(args)
     except Refused as e:

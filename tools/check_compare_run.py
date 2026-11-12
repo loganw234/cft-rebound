@@ -76,7 +76,13 @@
 #      a3, the sign of a zero flipped (a sample-0 dt_last made -0), and a4,
 #      one hex digit past binary64 changed in case 4's binary128 record
 #      (its binary64 value, asserted here, unmoved): each FAIL, naming the
-#      member, the line and the column;
+#      member, the line and the column; and a5, every column the record
+#      names, read from its own `# columns:` line - each field before the
+#      bodies, each field of the last body (so a comparison stopping short
+#      of the end fails) and the exact-time pair - one planted change each,
+#      one column a sampled member and so two records for twelve columns:
+#      each FAIL, naming its column (a driver skipping the pair passed
+#      every control before this one, V4);
 #   b. one byte of a sampled member's trailer (mean_pc_iterations): FAIL,
 #      naming the member and the counter;
 #   c. every line of one member that is not sampled deleted: FAIL, naming
@@ -218,6 +224,33 @@ def columns(text):
     # "system s" is two fields and so is "sample" (the word and its index)
     nlead = len(lead) + 1
     return nlead, per
+
+
+def column_plan(text, N, last_name):
+    """Every column this gate plants a change in, read from the record's own
+    `# columns:` line: each field before the bodies after the sample's index
+    and step, each field of the LAST body's block (so a comparison that
+    stops short of the end fails too), and the exact-time pair. Each comes
+    as (the name the driver must give it, its token in an ensemble line)."""
+    line = next(l for l in text.splitlines() if l.startswith("# columns:"))
+    head, _, rest = line.split(":", 1)[1].partition(" then per body ")
+    per, _, pair = rest.partition(" ; then exact-time pair ")
+    head, per, pair = head.split(), per.split(), pair.split()
+    pre = 0
+    if head[:1] == ["system"]:
+        head, pre = head[2:], 2
+    first_body = pre + 1 + len(head)
+    bar = first_body + N * len(per)
+    plan = [(f, pre + 1 + head.index(f)) for f in head[2:]]
+    plan += [("%s of body %d (%s)" % (f, N - 1, last_name), first_body + (N - 1) * len(per) + per.index(f)) for f in per]
+    plan += [("the exact-time pair's %s" % f, bar + 1 + pair.index(f)) for f in pair]
+    return plan
+
+
+def flip_last_digit(tok):
+    """A hex float with its mantissa's last hex digit changed (XOR 1)."""
+    mant = tok.split("p")[0]
+    return mant[:-1] + "%x" % (int(mant[-1], 16) ^ 1) + tok[len(mant):]
 
 
 def scalar_tok(text, name):
@@ -662,6 +695,48 @@ def main():
                 "sampled IDENTICAL (rc %d)" % (digits, digits, k, tok, toks[t], i + 1, k, i + 1, len(others), rc))
     else:
         verdict(False, "a4. case 4's binary128 record and its sample, to change a digit past binary64 in")
+
+    # a5. Every column the record names is compared (V4, 2026-11-12: a driver
+    # that skipped the exact-time pair passed every control above). From the
+    # record's own `# columns:` line, one planted change a column (its last
+    # hex digit) in one sampled member's last sample line. The driver names
+    # each member's first differing line, so a record carries one column a
+    # sampled member, and a few records carry them all.
+    Nb = int(re.search(r" N=(\d+)", next(l for l in rows if l.startswith("# program="))).group(1))
+    last_name = [l.split()[3] for l in rows if l.startswith("# body ")][Nb - 1]
+    plan = column_plan(text, Nb, last_name)
+    members = smp64["members"]
+    held, missed, nrec = [], [], 0
+    for start in range(0, len(plan), len(members)):
+        nrec += 1
+        doctored, want = list(rows), {}
+        for (name, t), k in zip(plan[start:start + len(members)], members):
+            i = max(i for i in lines64 if rows[i].startswith("system %d sample " % k))
+            toks = doctored[i].split()
+            old = toks[t]
+            toks[t] = flip_last_digit(old)
+            doctored[i] = " ".join(toks)
+            want[k] = (name, i + 1, toks[t], old)
+        rc, out = drive(write("control_columns_%d.rec" % nrec, doctored), "fp64")
+        lines = member_lines(out)
+        if rc != 1:
+            missed.append("record %d: rc %d" % (nrec, rc))
+        for k in members:
+            got = lines.get(k, ("", ""))
+            if k not in want:
+                if got[0] != "IDENTICAL":
+                    missed.append("member %d, with nothing planted, is %s" % (k, got[0] or "not reported"))
+                continue
+            name, lineno, new, old = want[k]
+            if got[0] == "FAIL" and ("first differing line: record line %d (system %d sample " % (lineno, k)) in got[1] \
+                    and ("): %s: record %s, here %s" % (name, new, old)) in got[1]:
+                held.append(name)
+            else:
+                missed.append("%s in member %d: %s %s" % (name, k, got[0] or "not reported", got[1][:160]))
+    verdict(not missed and len(held) == len(plan),
+            "a5. every column the record names, %d of them, each one planted change in one sampled member's last line, "
+            "%d to a record over %d records: each FAILs naming its column (%s)%s"
+            % (len(plan), len(members), nrec, ", ".join(held), "; NOT: " + "; ".join(missed) if missed else ""))
 
     # b. one byte of a sampled member's trailer
     k = smp64["picks"][0]
