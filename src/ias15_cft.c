@@ -64,8 +64,11 @@
  *             [--attempts-out FILE] [--run-key]
  *             [--softening S] [--min-dt M] [--adaptive-mode 0|1|2|3]
  *             [--probe] [--door-selftest] [--corrector-selftest]
+ *             [--zonal-selftest]
  *             [--record-iters FILE | --replay-iters FILE]
  *
+ * --zonal-selftest evaluates a problem's J2 and J4 term at fixed points,
+ * every operation traced, and exits; tools/check_zonal.py is its gate.
  * --door-selftest holds each route engine_routes() can open against the
  * route it replaces, and exits; tools/check_door.py is its gate.
  *

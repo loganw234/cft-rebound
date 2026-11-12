@@ -859,8 +859,8 @@ first, so round 4 built that half.
 
 **No record line moved.** Every verifier's untouched-path comparison
 held, from V0's 117 of 117 runs to VL's 60 of 60, and the six digests of
-entry 45 are unchanged at `9a42b1d` and `291c99c`. Entry 51 has the last
-two suites.
+entry 45 are unchanged at `9a42b1d`, `291c99c`, `7d50392` and `d9c8c8c`.
+Entry 51 has every suite of the round.
 
 **What the round found that changes the GPU half.**
 - **A format difference cannot see a narrowing both runs share** (entry
@@ -884,6 +884,12 @@ two suites.
 - **A record names no non-default `--adaptive-mode`, `--softening`,
   `--min-dt` or `--no-flag-abort`,** so a GPU record must name it, and
   the driver must learn to read it (entry 50).
+
+### Still owed from round 4
+
+- **`tools/state_to_problem.py` drops the `active` and `zonal` lines**
+  (entry 46), so a reversal through `tools/reversal.py` on such a problem
+  runs its backward leg on another problem. Carry both lines, and gate it.
 
 ### The GPU half, next
 

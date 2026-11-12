@@ -246,8 +246,9 @@ Nothing is vendored by hand.
                                    own ias15, and every refusal refused
     tools/check_zonal.py           the gate: J2 and J4 against cft-fp256's golden
                                    model, mpmath's gradient and theory's rates
-    tools/check_ring.py            the gate: the ring's generator, and a wave at
-                                   every format against REBOUND and its ensemble
+    tools/check_ring.py            the gate: the ring's generator; a wave at every
+                                   format on both engines, and at binary64 against
+                                   REBOUND's own IAS15 and its ensemble
     tools/check_replay.py          the gate: a test particle replayed out of its wave,
                                    rejected attempts included, bit for bit
     tools/check_compare_run.py     the gate: compare_run, a planted change in every
@@ -578,13 +579,14 @@ convention for a fixed step.
 
 ### The two suite targets, and why one of them skips
 
-`make check` runs every gate at every format. On this host that is about
-two and a half hours, and **it never skips anything** - it is the target whose
+`make check` runs every gate at every format. On this host that was about
+two and a half hours at 19 legs (2026-11-06; CLAUDE.md has later, dated
+figures), and **it never skips anything** - it is the target whose
 meaning must not change, so it always executes.
 
 `make check-quick` runs the same gates with the cheaper arguments and
 consults a cache: a leg whose inputs are byte for byte what they were
-when that leg last passed is skipped. Measured on this host: **42
+when that leg last passed is skipped. Measured on this host (19 legs, 2026-11-06): **42
 minutes with an empty cache, 13 seconds when nothing has changed.**
 
 The key is over the **artifacts a leg executes** - the binaries, its own
@@ -619,8 +621,8 @@ on another.
 `make check-light` is the third tier, for when you have changed
 something and want a fast signal from *everything* rather than a
 thorough one from part of it. It runs every case, with most step counts
-scaled to a tenth. Measured: **31 minutes end to end** from clean, build
-included. When the suite was smaller, `check_dropin` alone took **159
+scaled to a tenth. Measured (19 legs, 2026-11-06): **31 minutes end to end** from clean,
+build included. When the suite was smaller, `check_dropin` alone took **159
 seconds against 585, the same 130 cases, zero failures.**
 
 Two cases opt out by name, and the reason is the interesting part. The
@@ -709,7 +711,8 @@ workload, because four fifths of a card-side step is not arithmetic.
 The flow, the numbers and that conclusion are in docs/BITSTREAM.md;
 docs/HARDWARE.md says what would actually move the integrator.
 
-`make check` runs every gate at every format (about two and a half hours);
+`make check` runs every gate at every format (about two and a half hours at
+19 legs, 2026-11-06);
 
 `make check-quick` runs them at binary64, in about 40 minutes cold. Both
 include `tests/gate_real.c`, which takes a checkpoint through the

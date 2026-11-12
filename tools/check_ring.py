@@ -11,9 +11,9 @@
 #
 # The ring is generated here, into the build tree (build/check_ring/),
 # never committed: 228 particles, seed 1, --no-zonal, so 4 waves of 64
-# bodies - Saturn and six moons, then 57 test particles each. The zonal
-# line is refused until round 4's P1 lands; the lead's P1 x P2 seam test
-# runs the ring with it.
+# bodies - Saturn and six moons, then 57 test particles each. Its runs use
+# --no-zonal; the ring with its zonal line, P1's term, is the lead's seam
+# test (tools/check_ring_seams.py), and the term itself is check_zonal's.
 #
 # What it asserts, and what lets each assertion fail:
 #   1. The generator. Twice the same bytes, and different bytes from

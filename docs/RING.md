@@ -43,8 +43,8 @@ Units are km and s with G = 1, so every mass is a GM.
   `zonal 0 R J2 J4` unless `--no-zonal` is given.
 - **Waves.** The particles are sorted by radius and cut into waves of 64
   bodies, 7 massive and 57 particles, GPU-E's shape a2; `--one-system`
-  writes them as one system instead. A count that is not a multiple of 57
-  is refused by name.
+  writes them as one system instead. For waves, a count that is not a
+  multiple of 57 is refused by name; `--one-system` takes any count.
 - **Exact.** Everything is computed in mpmath at 160 bits from the
   binary64 constants, and each written value is rounded to binary64 once
   and written as exact hex. Python's trig is not used. The moons'
@@ -90,7 +90,7 @@ Each gate is one leg in all three suite tiers.
 | J2 and J4, a problem's `zonal k R J2 J4` line (`src/ias15_zonal.inc`) | `tools/check_zonal.py` | every traced operation against cft-fp256's golden model, bits and flags; the term against mpmath's gradient of the potential at 200 digits; energy, momentum, and the apsidal and nodal rates of first-order theory, J4 resolved; binary128 against binary256, with its scope; both engines, an ensemble, the run key | 47 |
 | the ring generator | `tools/check_ring.py` | the same bytes; circular in its own field; every wave and every moon out of the plane; one wave at every format on both engines; `active 7` against all 64 active, 420 pairs against 2,016; REBOUND's own IAS15 on a wave, bit for bit at binary64; the ensemble against its members; the far wave's steps an orbit | 48 |
 | one particle out of its wave | `tools/check_replay.py` | three waves at every format, rejecting nothing, first, and after accepted steps; each sampled particle and every massive body at the wave's bits, with its counters; the records load bearing; refusals; a dt file through a pipe | 49 |
-| the driver | `tools/check_compare_run.py` | its PASS on a nine-wave ensemble, and a change planted in every column it compares, for members and for particles, each failing by name: bits, not values; another format, arithmetic, producer or problem refused | 50, 51 |
+| the driver | `tools/check_compare_run.py` | its PASS on a nine-wave ensemble, and a change planted in every column it compares, for members and for particles, each failing by name: bits, not values; a record of another format, arithmetic or problem refused, and one lacking a field the rerun needs (as REBOUND's own ias15_ref's does); another producer's record that carries every field is held like this tree's | 50, 51 |
 | the parts together | `tools/check_ring_seams.py` | part 1, the ring in its own field, with the node counter (P1 x P2); part 2, a ring particle replayed with its zonal line (P2 x P3, P1 x P3); part 3, the driver on the ring's own shape (P2 x P4, P1 x P4) | 51 |
 
 Where a gate compares one run of this tree with another, a defect both
@@ -102,8 +102,9 @@ theory, and the format difference below says what it cannot see.
 ## What a GPU run's record must carry to be held
 
     python tools/compare_run.py RECORD --problem FILE --format F --arith A
-           [--exe build/ias15_cft] [--seed 1] [--strata 8] [--format-diff F2]
-           [--plan] [--rerun-engine loop|program] [--keep DIR]
+           [--exe build/ias15_cft] [--programs programs/out] [--seed 1]
+           [--strata 8] [--format-diff F2] [--plan]
+           [--rerun-engine loop|program] [--keep DIR]
 
 The driver reads only the record format, the lines `ias15_cft`'s
 `main()` writes, from its first line to the trailer. An engine that
@@ -207,7 +208,8 @@ beside every number.
   check that fails on exactly the defect the README names", and its
   question 4 leans on it. BELIEVED, by message from cft-fp256's lead on
   2026-11-12: both are to be corrected in a new commit on its main. At
-  cft-fp256's `be40005b` the study is unchanged since `56006987`.
+  cft-fp256's `be40005b` the study is unchanged since `56006987` (MEASURED by
+  the lead, read only: `git diff 56006987 be40005b` of the study is empty).
 - **A rejection,** beside the number. The replay at F2 takes no rejected
   attempt. A rejection before a member's first accepted step leaves
   state, the rejected attempt's corrected b, so that member's difference
@@ -246,6 +248,12 @@ beside every number.
 - **REBOUNDx's order** in `src/ias15_zonal.inc`, recalled and not read.
   REBOUNDx is not pinned (decision 4). The formula and the physics gates
   hold the term either way.
+  READ by study DEBRIS-A (2026-11-12, from REBOUNDx's repository on the
+  web, nothing run): the recalled order is REBOUNDx's as of 5406ae5
+  (2020-04-13). REBOUNDx rewrote gravitational_harmonics.c on 2024-10-20
+  (8402022, a general spin axis), with another order. So decision 4's
+  comparison would match the 2020 order only, and a current REBOUNDx is
+  BELIEVED to differ from the port in bits.
 - **The same ring file on every host.** Measured on one host, with
   mpmath's two backends.
 - **The exact-time pair from `vaugadd`,** and G1B refusing AUGADD on
@@ -267,7 +275,7 @@ ROUND4.md's list, as the round leaves it:
 | 1 | merges and pushes for this round | delegated to the lead on 2026-11-11, on round 3's bar |
 | 2 | the study's questions 1, 3 and 5: the workload, the form and the formats | open; the CPU half serves every answer |
 | 3 | its question 2, a device divide before cft-fp256's exp family | open; it decides when the GPU half's step 3 starts. The term adds 10 divides and a square root a body a force evaluation to gravity's one each a pair |
-| 4 | REBOUNDx as a pinned upstream | open; one operation-for-operation comparison at binary64 would confirm or correct the order |
+| 4 | REBOUNDx as a pinned upstream | open; one operation-for-operation comparison at binary64 would confirm or correct the order. Study DEBRIS-A read that the recalled order is REBOUNDx's of 2020 (5406ae5), rewritten in 2024 (8402022): the comparison needs that older pin |
 | 5 | the moons' phases | synthetic; an epoch's needs JPL's tables from the web |
 | 6 | P5, the wave kernel at the hardware's binary64 | open, and then a GPU slot from cft-fp256 |
 | 7 | the pin's move to G1B | open, once G1B merges |

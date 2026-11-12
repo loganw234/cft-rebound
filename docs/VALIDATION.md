@@ -5446,7 +5446,7 @@ after V0, `9a42b1d`. main fast-forwarded to `9a42b1d` and was pushed on
 2026-11-11.
 
 ROUND4.md is the round's plan and has P0's design; docs/RING.md is what
-the round left. The round's ledger is to be archived as
+the round left. The round's ledger is archived as
 `archive/round4-ledger.zip`. This entry is what ran.
 
 ### What P0 is, in one paragraph
@@ -5569,6 +5569,12 @@ assertion of the type itself.
 
 ### Stated limits, not closed
 
+- **`tools/state_to_problem.py` carries neither the `active` nor the
+  `zonal` line.** READ by study DEBRIS-A (2026-11-12) and by the lead:
+  it writes the name, G, N and body lines only. So `tools/reversal.py`,
+  run on such a problem, would integrate back on a different problem
+  (BELIEVED; not run). No gate runs either tool. P0 changed the grammar
+  and no one owned this tool: not fixed in round 4.
 - **`tools/make_ensemble.py` refuses `active` lines** (V0). An ensemble
   with test particles is written whole, as P2's generator does.
 - **A problem file through a pipe is refused, not misread.**
@@ -5711,8 +5717,10 @@ them (README, "A force routine is evaluated at binary64").
 Gate 4 stays, and its head states its scope: it can fail on a defect that
 differs between the two formats, and cannot fail on a narrowing both
 share. Its control is the binary128-only rounding. The plan's control is
-kept, asserted to fail gates 1 and 2, with its gate 4 number reported as
-the measured blind spot. P4's format difference prints its scope beside
+kept, shown to fail gates 1 and 2, with its gate 4 number reported as the
+measured blind spot. Both were run from copies, by P1 and again by V1, and
+deleted: neither is a permanent control in the gate, whose head names
+them. P4's format difference prints its scope beside
 its number (entry 50).
 
 GPU-E's section 6, item 3(b) proposes this check as "the check that
@@ -5800,6 +5808,12 @@ The suites, read from their logs:
 
 ### Stated limits, not closed
 
+- **The recalled order is REBOUNDx's of 2020, not today's.** READ by study
+  DEBRIS-A (2026-11-12, from REBOUNDx's repository on the web; nothing
+  run): it matches gravitational_harmonics.c at 5406ae5 (2020-04-13).
+  The file was rewritten on 2024-10-20 (8402022, a general spin axis)
+  with another operation order, so an operation-for-operation check
+  against a current REBOUNDx would not match bit for bit (BELIEVED).
 - **The order is REBOUNDx's as recalled** (decision 4). The formula and
   the physics hold it either way; only an operation-for-operation binary64
   comparison with REBOUNDx would confirm the order.
@@ -5812,10 +5826,13 @@ The suites, read from their logs:
   decide.
 - **A file in data/problems/ binds two gates.** check_scalar fails
   unless every file there is one of its cases, and check_corrector runs
-  every one at binary64 from dt 0.01, which on zonal_saturn exercises the
-  replay and nothing physical (P1; V1).
-- **The usage block at the head of src/ias15_cft.c does not name
-  `--zonal-selftest`.** The README does, from this round's docs.
+  every one at binary64: on zonal_saturn its adaptive runs from dt 0.01 s
+  grow to about 1,200 s, roughly an orbit, and its fixed runs reach t = 3
+  s, exercising the replay and nothing physical (V1, measured; P1 had
+  believed all of them non-physical).
+- **The usage block at the head of src/ias15_cft.c did not name
+  `--zonal-selftest`** (P1). The commit that lands these records adds it
+  there, beside the README's line.
 
 ### What this does not establish
 
@@ -6237,7 +6254,7 @@ Every control is permanent, asserted to FAIL or be refused by name:
 | e, f | a record of another format, of another arithmetic, and REBOUND's own ias15_ref record, which shares the first line |
 | g | four problem files under the record's name: a test particle's mass 0 made 2^-40, the active line dropped, a coordinate one ulp off, the name changed. The first two move no bit |
 | h | the `# active` line with one pair too many |
-| i | an empty stand-in for each of P3's two files: the driver must say NOT WIRED and exit 1 |
+| i | an empty stand-in for each of P3's two files: at `79bd206` the driver had to say NOT WIRED and exit 1; since the lead's wiring (`e5636a9`, entry 51) it must say P3's replay cannot be called, and FAIL |
 
 P4 ran one-defect copies of the driver through their own gate: 12 at
 `c640f65`, 14 at `517e8d5`, 18 at `f27f9c6` and 21 at `79bd206`, each
@@ -6383,8 +6400,10 @@ main moves. Each merge is `--no-ff`, on an integration branch:
   part 2, cherry-picked from the first P3 merge's branch, a Makefile
   conflict resolved; then the wiring and VL's fixes.
 
-The order changed at 05:38 on 2026-11-12, to three suites rather than
-four. Each parcel added a leg to all three tiers, and the seams one: 19
+The order changed at 05:38 on 2026-11-12: P1, then P2 and P4 under one
+suite, then P3 with the seams and the wiring. At 08:56 the records were
+given a suite of their own after P3's, so that P3 landed sooner: four
+suites after P0's. Each parcel added a leg to all three tiers, and the seams one: 19
 at P0, then check_zonal, check_ring, check_ring_seams, check_compare_run
 and check_replay, 24 at `d9c8c8c`, counted from the Makefile's `--leg`
 lines. VL measured each merge's tiers to be the union of its parents',
@@ -6542,9 +6561,13 @@ Read from their logs, each on a shared host:
 | `4b52705` | P0's first | 19 | rc 2 at leg 7: MSYS fork failures (entry 46) |
 | `9a42b1d` | P0 | 19 | rc 0, 857 `ok`, 0 FAIL, 2 h 20 min (entry 46) |
 | `291c99c` | P1 and the fix | 20 | rc 0, 980 `ok`, 0 FAIL, 2 h 47 min (entry 47) |
+| `7d50392` | P2 and P4 with seam part 1 and the a5 hardening | 23 | rc 0, 1097 `ok`, 0 FAIL, 2 h 34 min (06:35:43 to 09:09:48); each of the 20 legs both ran has `291c99c`'s ok count, and the new check_ring 40, check_compare_run 64, check_ring_seams 13; entry 45's six wide-state digests present; main fast-forwarded 291c99c..7d50392 and pushed |
+| `d9c8c8c` | P3, seam parts 2 and 3, the P3 x P4 wiring and VL's fixes | 24 | rc 0, 1424 `ok`, 0 FAIL, 2 h 37 min (09:11:20 to 11:47:58); of the 23 legs both ran, 21 have `7d50392`'s ok count, check_compare_run 67 (+3, the wiring's controls) and check_ring_seams 34 (parts 2 and 3 joined part 1); the new check_replay 303; entry 45's six wide-state digests present; main fast-forwarded 7d50392..d9c8c8c and pushed |
 
-LEAD-FILL: the P2 + P4 suite on `7d50392` (started 2026-11-12 06:35:43): end, rc, legs, ok and FAIL by `^  ok `, each leg's ok against `291c99c`'s, the six digests, and main's fast-forward and push.
-LEAD-FILL: P3's final suite on `round4-int5` with these docs: its commit, start and end, rc, legs, ok and FAIL by `^  ok `, each leg's ok against `7d50392`'s, the six digests, and main's fast-forward and push.
+The commit that lands these records ran its own full make check before
+its push. A commit cannot record its own suite, so that result is in the
+round's closing report and in main's history; the ledger archived with
+these records (`archive/round4-ledger.zip`) ends before it.
 
 ### The lead's two lapses
 

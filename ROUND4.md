@@ -689,8 +689,9 @@ ledger entries named are in the round's ledger, archived as
    `urgent/P1-gate4-blind.md`). The lead's ruling of 2026-11-12 01:33
    (`urgent/lead-gate4-ruling.md`): gate 4 stays with its scope stated,
    its control is the binary128-only rounding, the control above is
-   asserted to fail gates 1 and 2, and P4's format difference prints its
-   scope. Entry 47.
+   shown to fail gates 1 and 2, and P4's format difference prints its
+   scope. Both controls were run from copies, by P1 and again by V1, and
+   deleted: neither is a permanent control in the gate. Entry 47.
 2. **"The replay cannot carry a rejected step" holds only for a
    rejection before the first accepted step.** After an accepted step a
    rejection leaves no state bit: deleted from the accepted-steps replay,
