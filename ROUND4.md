@@ -184,9 +184,10 @@ but not zero), and P1's points leave the plane.
 Every parcel reads or writes problem files, and three of them write
 src/ias15_cft.c. So the lead lands the shared part first.
 
-- **`active n`.** The first n bodies of every system are massive and the
-  rest are test particles, with `testparticle_type` 0, through the
-  engine's own `eng_active`.
+- **`active n`,** with n from 1 to N. The first n bodies of every system
+  are massive and the rest are test particles, with `testparticle_type`
+  0, through the engine's own `eng_active`. The record's energy follows
+  it as REBOUND's does.
   - It is built in P0: it is one assignment, on a path the drop-in
     already gates.
   - The record says so in one line, with the pair count. That count is
@@ -221,8 +222,17 @@ src/ias15_cft.c. So the lead lands the shared part first.
   - **The control:** one test particle given a mass of 2^-40, after which
     the two runs must differ. It stays in the gate. (A mass of 1e-30 would
     be inert at binary64, below its last bit.)
-  - **The refusals:** an active count past N; the zonal line; and a
-    schedule recorded with `active 5`, replayed without it.
+  - **testparticle_type 0, held.** Under `active 5`, a test particle's
+    2^-40 mass must change nothing, the energy column included: it moves
+    no active body, and REBOUND's energy (`reb_simulation_energy`)
+    counts only the active bodies. V0 found both unheld in P0's first
+    version, whose test particles were all massless. A copy at type 1
+    fails this check, and so does one whose energy counts every body.
+  - **An ensemble.** Two systems with `active 5` match every body active,
+    and `--member 1` matches the system run alone.
+  - **The refusals:** an active count of 0 or past N; a second active
+    line; the zonal line; and a schedule recorded with `active 5`,
+    replayed without it.
 - **Behaviour is preserved.** No existing problem has either line, so
   `make check` must give merge 6's result: 841 ok and six digests
   unchanged (docs/VALIDATION.md entry 45). That is read from the log.
@@ -328,9 +338,13 @@ then runs them.
   (GPU-E §4: NASA's fact sheets, Cassini's J2 and J4, JPL's moons), each
   value with its source in the file's head. Units are km and s, with
   G = 1 and masses as GM.
-- **The moons' phases are synthetic:** fixed, documented longitudes,
-  unless Logan asks for an epoch's (decision 5). Their inclinations are
-  JPL's, small and not zero.
+- **The moons' phases and inclinations are synthetic:** fixed, documented
+  values, unless Logan asks for an epoch's (decision 5). So this round
+  needs no web read. The inclinations are small and not zero. Epimetheus
+  and Janus are co-orbital, 100 km apart, so their phases stay far
+  apart. Particles that would start within a few Hill radii of Pan,
+  Prometheus or Pandora (all three are inside the annulus) are excluded
+  and counted.
 - **Particles** go on near-circular orbits in the oblate field, at the
   circular speed with J2 and J4. Their inclinations are small and not
   zero, and their radii and phases come from a seeded generator. Every

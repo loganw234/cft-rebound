@@ -993,9 +993,10 @@ static long prob_active = -1;
  *   E e                 systems, which must equal the system lines
  *   system NAME         starts a system of an ensemble
  *   body NAME m x y z vx vy vz
- *   active n            the first n bodies of every system are massive and
- *                       the rest test particles: REBOUND's N_active, with
- *                       testparticle_type 0
+ *   active n            the first n bodies of every system, 1 to N, are
+ *                       massive and the rest test particles: REBOUND's
+ *                       N_active, with testparticle_type 0, in the forces
+ *                       and in the record's energy alike; one line
  *   zonal k R J2 J4     body k of every system is oblate about the z axis
  *                       (refused until round 4's P1)
  * Anything else is refused by name. */
@@ -1070,8 +1071,11 @@ static void read_problem(const char *path){
             const char *t = strtok(NULL, " \t\r\n");
             char *end = NULL;
             long n = t ? strtol(t, &end, 10) : -1;
-            if (!t || *end || n < 0 || (size_t)n > N)
-                die("'active %s' in %s: it takes the count of massive bodies a system, 0 to N = %zu", t ? t : "", path, N);
+            if (prob_active >= 0) die("a second active line in %s: a problem has one N_active", path);
+            /* not 0: with no massive body every acceleration is +0, and
+             * the corrector's error is then 0/0 at the first step */
+            if (!t || *end || n < 1 || (size_t)n > N)
+                die("'active %s' in %s: it takes the count of massive bodies a system, 1 to N = %zu", t ? t : "", path, N);
             prob_active = n;
         }
         else if (!strcmp(tok, "zonal")){
@@ -3075,14 +3079,22 @@ static void energy_all(V out){
         vkmul(uu, G, pmi, P); vmul(uu, uu, pmj, P); vdiv(uu, uu, tt, P);
     }
     /* the sums, in REBOUND's order within each system, every system at
-     * once: element s of each call is the scalar add system s would do */
+     * once: element s of each call is the scalar add system s would do.
+     * With a problem's active line they run as reb_simulation_energy's
+     * (tools.c) do: N_interact = N_active under testparticle_type 0, so
+     * only the active bodies count, kinetic and potential alike. With no
+     * active line every body is active, and these are the sums they
+     * always were (ROUND4.md, P0; V0 found the first version counting
+     * every body). */
+    const size_t na = (eng_active == (size_t)-1 || eng_active > N) ? N : eng_active;
+    const size_t ni = eng_tptype ? N : na;
     static V gat; if (!gat) gat = valloc(E);
     vzero(ekin, E); vzero(epot, E);
-    for (size_t i = 0; i < N; i++){
+    for (size_t i = 0; i < ni; i++){
         for (size_t s = 0; s < E; s++) memcpy(E(gat, s), E(bu, s * N + i), ESZ);
         vadd(ekin, ekin, gat, E);
     }
-    for (size_t i = 0; i < N; i++) for (size_t j = i + 1; j < N; j++){
+    for (size_t i = 0; i < na; i++) for (size_t j = i + 1; j < ni; j++){
         for (size_t s = 0; s < E; s++) memcpy(E(gat, s), E(uu, s * PS + j * (j - 1) / 2 + i), ESZ);   /* pair (j > i) of the list */
         vsub(epot, epot, gat, E);
     }

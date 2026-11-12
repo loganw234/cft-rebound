@@ -50,10 +50,18 @@
 #      with 25 pairs a force evaluation (REBOUND's two loops: 10 active
 #      pairs, then 3 x 5), the test particles move, and the comparison can
 #      fail: with one of them given a mass of 2^-40 the two runs differ.
-#   2c. The problem lines' refusals: an active count past N, a zonal line
-#      (until round 4's P1 builds the term), and a corrector schedule
-#      recorded with `active 5` replayed without it - the run key names
-#      the line, so a schedule replays only its own N_active.
+#      testparticle_type 0 is held too: under `active 5` that 2^-40 mass
+#      must change NOTHING, the energy column included - a test particle's
+#      mass moves no active body (type 1 would), and REBOUND's energy
+#      counts only the active bodies (reb_simulation_energy, N_interact).
+#      V0 found both unheld in P0's first version, whose test particles
+#      were all massless. And an ensemble of two systems with `active 5`
+#      against every body active, and its member against the system alone.
+#   2c. The problem lines' refusals: an active count of 0 or past N, a
+#      second active line, a zonal line (until round 4's P1 builds the
+#      term), and a corrector schedule recorded with `active 5` replayed
+#      without it - the run key names the line, so a schedule replays only
+#      its own N_active.
 #   3. The body cap's refusal still holds one past it. The cap is read
 #      from src/ias15_limits.h, never typed here. (Its one force
 #      evaluation, at the cap, on the routes against the elementwise
@@ -201,22 +209,38 @@ def main():
     px, py_, pz, pvx, pvy, pvz = pl[3:9]
     neg = lambda h: h[1:] if h.startswith("-") else "-" + h
 
-    def outer8(name, active=None, tp2_mass="0x0.0p+0", extra=()):
+    def outer8_lines(tp2_mass="0x0.0p+0"):
         lines = ["N 8" if l.startswith("N ") else l for l in outer_lines]
         lines.append("body tp1 0x0.0p+0 %s %s %s %s %s %s" % (neg(py_), px, pz, neg(pvy), pvx, pvz))
         lines.append("body tp2 %s %s %s %s %s %s %s" % (tp2_mass, neg(px), neg(py_), pz, neg(pvx), neg(pvy), pvz))
-        if active is not None:
-            lines.append("active %d" % active)
-        lines.extend(extra)
+        return lines
+
+    def write(name, lines):
         path = os.path.join(scratch, name)
         with open(path, "w") as f:
             f.write("\n".join(lines) + "\n")
         return path
+
+    def outer8(name, active=None, tp2_mass="0x0.0p+0", extra=()):
+        return write(name, outer8_lines(tp2_mass) + (["active %d" % active] if active is not None else []) + list(extra))
+
+    def outer8x2(name, active=None):
+        # two systems of the same eight bodies: the header lines, then each
+        # system's body lines under its own system line
+        lines = outer8_lines()
+        head = [l for l in lines if not l.startswith("body ")]
+        bodies = [l for l in lines if l.startswith("body ")]
+        return write(name, head + ["E 2", "system one"] + bodies + ["system two"] + bodies
+                     + (["active %d" % active] if active is not None else []))
     p_a5 = outer8("outer8_active5.txt", 5)
     p_all = outer8("outer8_all.txt")
     p_a5m = outer8("outer8_active5_mass.txt", 5, "0x1.0000000000000p-40")
     p_allm = outer8("outer8_all_mass.txt", None, "0x1.0000000000000p-40")
+    p_ens5 = outer8x2("outer8x2_active5.txt", 5)
+    p_ensall = outer8x2("outer8x2_all.txt")
     p_a9 = outer8("outer8_active9.txt", 9)
+    p_a0 = outer8("outer8_active0.txt", 0)
+    p_twice = outer8("outer8_active_twice.txt", 5, extra=("active 5",))
     p_zonal = outer8("outer8_zonal.txt", 5, extra=("zonal 0 0x1.0000000000000p+0 0x1.0000000000000p-10 0x0.0p+0",))
 
     s = 1 if args.quick else 2
@@ -329,6 +353,11 @@ def main():
             for key, path in (("a5", p_a5), ("all", p_all), ("a5m", p_a5m), ("allm", p_allm)):
                 rc, out, err = run(base + ["--problem", path])
                 res[key] = (rc, [l for l in out.splitlines() if l and not l.startswith("#")], out, err)
+            for key, path in (("e5", p_ens5), ("eall", p_ensall)):
+                rc, out, err = run(base + ["--problem", path])
+                res[key] = (rc, [l for l in out.splitlines() if l and not l.startswith("#")], out, err)
+            rc, out, err = run(base + ["--problem", p_ens5, "--member", "1"])
+            res["m1"] = (rc, [l for l in out.splitlines() if l and not l.startswith("#")], out, err)
             bad = ["%s: rc %d: %s" % (k, r[0], r[3].strip()[-200:]) for k, r in res.items() if r[0] != 0]
             if not bad:
                 if not res["a5"][1] or res["a5"][1] != res["all"][1]:
@@ -339,20 +368,37 @@ def main():
                     bad.append("an `# active` line in the run with no active line")
                 if res["a5m"][1] == res["allm"][1]:
                     bad.append("the control did not bite: with tp2 given a mass of 2^-40 the two runs still agree")
+                if res["a5m"][1] != res["a5"][1]:
+                    bad.append("testparticle_type 0 does not hold: under active 5 a test particle's 2^-40 mass changed "
+                               "the record (an active body moved, or the energy column counted it)")
+                if not res["e5"][1] or res["e5"][1] != res["eall"][1]:
+                    bad.append("the two-system ensemble with active 5 differs from it all active, or is empty")
+                # the member's lines are the system's own, without the ensemble's leading system field
+                mine = [l.split(None, 2)[2] for l in res["e5"][1] if l.split(None, 2)[:2] == ["system", "1"]]
+                if not mine or mine != res["m1"][1]:
+                    bad.append("--member 1 of the active 5 ensemble differs from that system's lines in the ensemble "
+                               "(%d against %d)" % (len(res["m1"][1]), len(mine)))
+                cols = re.search(r"^# columns: (.*?) then per body", res["a5"][2], re.M)
+                lead = len(cols.group(1).split()) if cols else -1
                 first, last = res["a5"][1][0].split(), res["a5"][1][-1].split()
-                tp1x = 6 + 6 * 6          # sample step t dt_next dt_last E, then six a body; tp1 is body 6
-                if len(first) <= tp1x or first[tp1x] == last[tp1x]:
-                    bad.append("the physics: tp1's x did not move between the first and last sample")
+                tp1x = lead + 6 * 6       # the record's own leading columns, then six a body; tp1 is body 6
+                if lead < 0 or len(first) <= tp1x or first[tp1x] == last[tp1x]:
+                    bad.append("the physics: tp1's x did not move between the first and last sample (or no # columns line)")
             label = "%s, %s engine, %s form" % (fmt, engine, arith)
             verdict(not bad, "%s: %s" % (label, "%d sample lines identical, %d pairs a force evaluation against %d all "
-                                         "active, the test particles move, and a 2^-40 mass makes the runs differ"
+                                         "active, the test particles move, a 2^-40 mass changes nothing under active 5 "
+                                         "(energy included) and everything without it, and the two-system ensemble and "
+                                         "its member agree"
                                          % (len(res["a5"][1]), want_pairs, 8 * 7 // 2) if not bad else "; ".join(bad[:4])))
 
     # 2c. The problem lines' refusals (round 4's P0).
     print("check_gravity: the problem lines' refusals")
-    rc, out, err = run([cft, "--format", "fp64", "--problem", p_a9, "--steps", "1", "--quiet"])
-    verdict(rc != 0 and "'active 9'" in err and "0 to N = 8" in err,
-            "active 9 in a system of 8 is refused by name (rc %d): %s" % (rc, err.strip()[-160:]))
+    for path, what, needle in ((p_a9, "active 9 in a system of 8", "'active 9'"),
+                               (p_a0, "active 0, no massive body", "'active 0'"),
+                               (p_twice, "a second active line", "a second active line")):
+        rc, out, err = run([cft, "--format", "fp64", "--problem", path, "--steps", "1", "--quiet"])
+        verdict(rc != 0 and needle in err and ("1 to N = 8" in err or needle == "a second active line"),
+                "%s is refused by name (rc %d): %s" % (what, rc, err.strip()[-160:]))
     rc, out, err = run([cft, "--format", "fp64", "--problem", p_zonal, "--steps", "1", "--quiet"])
     verdict(rc != 0 and "round 4's P1" in err,
             "a zonal line is refused by name until round 4's P1 builds the term (rc %d): %s" % (rc, err.strip()[-160:]))
