@@ -642,6 +642,12 @@ IN_SEAMS    := --input tools/check_seams.py --input tools/check_checkpoint.py $(
 # one wave, and the helper it imports; it reads no file of data/problems/
 IN_RING     := --input tools/check_ring.py --input tools/make_ring.py --input tools/check_equivalence.py \
                $(IN_PROGRAM) $(IN_REF) $(IN_PROGS)
+# tools/check_ring_seams.py (round 4's seams, the lead's): the program on the
+# rings the generator writes, with and without their zonal lines, on both
+# engines and so the program images, and the parsers it imports; it reads no
+# file of data/problems/
+IN_RSEAMS   := --input tools/check_ring_seams.py --input tools/make_ring.py --input tools/check_ensemble.py \
+               --input tools/check_equivalence.py $(IN_PROGRAM) $(IN_PROGS)
 
 # The pins, checked at build time and not only at fetch time: a clone
 # under third_party/ that is not at its MANIFEST commit fails every tier
@@ -674,6 +680,7 @@ check: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg gate_subprocess --mode full $(IN_SUBPROC) -- $(B)/gate_subprocess$(EXE) --build $(B)
 	$(GATE_CACHE) --leg check_checkpoint --mode full --input tools/check_checkpoint.py $(IN_REAL) -- $(PYTHON) tools/check_checkpoint.py --build $(B)
 	$(GATE_CACHE) --leg check_seams --mode full $(IN_SEAMS) -- $(PYTHON) tools/check_seams.py --build $(B)
+	$(GATE_CACHE) --leg check_ring_seams --mode full $(IN_RSEAMS) -- $(PYTHON) tools/check_ring_seams.py --build $(B)
 
 # the same gates at binary64 only, in a few minutes
 .PHONY: check-quick
@@ -705,6 +712,7 @@ check-quick: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg gate_subprocess --mode quick $(IN_SUBPROC) -- $(B)/gate_subprocess$(EXE) --build $(B)
 	$(GATE_CACHE) --leg check_checkpoint --mode quick --input tools/check_checkpoint.py $(IN_REAL) -- $(PYTHON) tools/check_checkpoint.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_seams --mode quick $(IN_SEAMS) -- $(PYTHON) tools/check_seams.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_ring_seams --mode quick $(IN_RSEAMS) -- $(PYTHON) tools/check_ring_seams.py --build $(B) --quick
 	@$(PYTHON) tools/gate_cache.py --report --cache-dir $(B)/.gate-cache
 
 # Every case touched, none of them thoroughly - the step counts are
@@ -739,6 +747,7 @@ check-light: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg gate_subprocess --mode quick $(IN_SUBPROC) -- $(B)/gate_subprocess$(EXE) --build $(B)
 	$(GATE_CACHE) --leg check_checkpoint --mode quick --input tools/check_checkpoint.py $(IN_REAL) -- $(PYTHON) tools/check_checkpoint.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_seams --mode quick $(IN_SEAMS) -- $(PYTHON) tools/check_seams.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_ring_seams --mode quick $(IN_RSEAMS) -- $(PYTHON) tools/check_ring_seams.py --build $(B) --quick
 	@$(PYTHON) tools/gate_cache.py --report --cache-dir $(B)/.gate-cache
 
 # The worked round trip, built in the tree and run against the
