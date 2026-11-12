@@ -21,11 +21,14 @@
 #        from Saturn grows as delta r (1 - cos M), M the mean anomaly the
 #        run reaches. That is about 1,000 km in two thirds of an orbit.
 #        Each particle's measured growth must be outward and within 10% of
-#        that theory, which holds P2's speeds to the J2 and J4 they name.
+#        that theory, which holds P2's speeds to the J2 they name. (J4's
+#        share of delta is about 1.4%, under this check's 10%: J4 is held
+#        by the circular check below and its J4-zeroed control.)
 #        With the line, P1's field must keep every particle's distance from
 #        Saturn within 1e-3 of the same theory's smallest excursion: a J2
 #        or J4 radial force wrong by more than about 0.1% of J2's, in P1's
-#        term or in P2's speeds, fails it (measured: about 3e-5).
+#        term or in P2's speeds, fails it (measured: 3.5e-5 over the 12
+#        steps of --quick, 1.5e-4 over the 24 of the full run).
 #        THE CONTROL, permanent: the same file with J4 zeroed in its zonal
 #        line. The particles' speeds still carry J4's share of delta,
 #        -15/8 J4 (R/r)^4, so each must move outward by that share's
@@ -76,6 +79,18 @@
 #    tool would refuse it), must replay to other bits in the massive
 #    bodies. So the line is load-bearing in the replay, and a tool that
 #    dropped it would fail this part.
+#
+# 3. THE DRIVER ON THE RING'S OWN SHAPE (P2 x P4, P1 x P4; VL, 2026-11-12:
+#    no gate ran it). tools/compare_run.py's own gate drives hand-made
+#    waves with no zonal line, and a GPU run's record will be P2's waves
+#    with P1's line. So a two-wave ensemble of P2's ring, its zonal line
+#    kept, is recorded from a first step far too large (each wave rejects
+#    its first attempt, so both are sampled), and the driver holds it: both
+#    members IDENTICAL, each one's two particles replayed alone with the
+#    zonal line and IDENTICAL to the record. THE CONTROL, permanent: one
+#    hex digit of a moon's x on wave 0's last sample line. Wave 0 FAILs, and
+#    both its particles' replays FAIL naming that line and column, while
+#    wave 1 and its particles stay IDENTICAL.
 #
 #   python tools/check_ring_seams.py [--build build] [--quick] [--keep]
 
@@ -377,11 +392,82 @@ def main():
                 "alone (--member %d)" % (k, len(es), k))
 
     part2(exe, wd, waves, args.quick)
+    part3(exe, wd, waves)
 
     if not args.keep:
         shutil.rmtree(wd, ignore_errors=True)
     print("RESULT: %s" % ("FAIL" if FAILS else "PASS"))
     return 1 if FAILS else 0
+
+
+def part3(exe, wd, waves):
+    print("check_ring_seams 3: the driver on the ring's own shape, P2's waves with P1's zonal line (P2 x P4, P1 x P4)")
+    pl = problem_lines(waves)
+    n_active = int(field(pl, "active")[0])
+    E = int(field(pl, "E")[0])
+    rc, rec_text, err = run([exe, "--format", "fp64", "--problem", waves, "--dt", "1e5", "--epsilon", "1e-9",
+                             "--max-iter", "60", "--steps", "8", "--sample", "4", "--quiet"])
+    if rc != 0:
+        verdict(False, "the ring's ensemble did not run (rc %d): %s" % (rc, err.strip()[-200:]))
+        return
+    rec = os.path.join(wd, "ring2w_z.rec")
+    with open(rec, "w", newline="\n") as f:
+        f.write(rec_text)
+    rejected = [int(m.group(1)) for m in re.finditer(r"^# system \d+ steps_done=\S+ .*?steps_rejected=(\d+)",
+                                                     rec_text, re.M)]
+    drv = [PY, "-B", os.path.join(here, "compare_run.py"), None, "--problem", waves, "--format", "fp64",
+           "--arith", "rebound", "--exe", exe, "--strata", str(E), "--seed", "1"]
+
+    def drive(path):
+        cmd = list(drv)
+        cmd[3] = path
+        return run(cmd)
+
+    def members(out):
+        return {int(m.group(1)): m.group(2) for m in re.finditer(r"^member (\d+) \(\S+\): (IDENTICAL|FAIL): ", out, re.M)}
+
+    def particles(out):
+        return [(int(m.group(1)), m.group(2), m.group(3), m.group(4)) for m in re.finditer(
+            r"^  member (\d+): particle \S+ \(body (\d+), [^)]*\): replayed alone with the member's \d+ massive bodies"
+            r"( and its zonal line)? .*?held to the record: (IDENTICAL|FAIL)", out, re.M)]
+
+    rc, out, err = drive(rec)
+    mem, parts = members(out), particles(out)
+    ok = (rc == 0 and len(rejected) == E and all(r > 0 for r in rejected) and sorted(mem) == list(range(E))
+          and all(v == "IDENTICAL" for v in mem.values()) and len(parts) == 2 * E
+          and all(p[2] and p[3] == "IDENTICAL" for p in parts) and "\nRESULT: PASS: " in out)
+    verdict(ok, "fp64, the driver on a %d-wave ensemble of P2's ring with P1's zonal line, from a first step of 1e5 s "
+            "(rejections %s, so every wave is sampled): %d members IDENTICAL, and %d particles replayed alone with the "
+            "zonal line, IDENTICAL to the record (rc %d)"
+            % (E, rejected, sum(v == "IDENTICAL" for v in mem.values()), sum(p[3] == "IDENTICAL" for p in parts), rc))
+
+    # the control: one hex digit of a moon's x on wave 0's last sample line,
+    # its token found by P4's own reading of the record's `# columns:` line
+    from compare_run import Columns
+    rows = rec_text.splitlines()
+    N = int(field(pl, "N")[0])
+    cols = Columns(next(l for l in rows if l.startswith("# columns:")), N)
+    i = max(i for i, l in enumerate(rows) if l.startswith("system 0 sample "))
+    toks = rows[i].split()
+    moon = 1
+    t = cols.body_tok(moon, "x")
+    old = toks[t]
+    mant = old.split("p")[0]
+    toks[t] = mant[:-1] + "%x" % (int(mant[-1], 16) ^ 1) + old[len(mant):]
+    bad = os.path.join(wd, "ring2w_z_moon.rec")
+    with open(bad, "w", newline="\n") as f:
+        f.write("\n".join(rows[:i] + [" ".join(toks)] + rows[i + 1:]) + "\n")
+    rc, out, err = drive(bad)
+    mem, parts = members(out), particles(out)
+    hit = re.findall(r"^  member 0: particle .*?held to the record: FAIL: record line %d \(system 0 sample \d+, step \d+\): "
+                     r"x of body %d " % (i + 1, moon), out, re.M)
+    ok = (rc == 1 and mem.get(0) == "FAIL" and all(mem.get(k) == "IDENTICAL" for k in range(1, E)) and len(hit) == 2
+          and all(p[3] == "IDENTICAL" for p in parts if p[0] != 0)
+          and re.search(r"^member 0 \(\S+\): FAIL: first differing line: record line %d .*?x of body %d " % (i + 1, moon),
+                        out, re.M) is not None)
+    verdict(ok, "the control: one hex digit of a moon's x (body %d) on wave 0's line %d: wave 0 FAILs naming it, and so "
+            "do %d of its 2 particles' replays, while the other wave%s and %s particles stay IDENTICAL (rc %d)"
+            % (moon, i + 1, len(hit), "s" if E > 2 else "", "their" if E > 2 else "its", rc))
 
 
 def part2(exe, wd, waves, quick):

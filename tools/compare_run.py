@@ -39,7 +39,7 @@
 #     engine, steps, sample, N, pc_tol_shift, max_iter, problem, dt0,
 #     epsilon, G, pc_tol, the member's index, name and bodies, the columns,
 #     the `# active` line both ways, and every other header line this tree
-#     writes (P1's zonal line, when it lands).
+#     writes, P1's `# zonal` line among them.
 #
 # FAIL (exit 1), each by member, with its name:
 #   - a member missing from the record or incomplete in it: its system
@@ -120,8 +120,10 @@
 #     otherwise fails as not identical.
 #   - a record run from a dt file (dt_file= in its header) is refused: the
 #     file is not in the record.
-#   - a problem's zonal line is held only through the rerun's header: the
-#     record line that names it is P1's to write.
+#   - a problem's zonal line is held through the record's `# zonal` line,
+#     compared verbatim with the rerun's like every other header line, and
+#     through the bits the term moves; the term's own correctness is
+#     tools/check_zonal.py's.
 #   - the record is read twice, as a stream, so its size is not held in
 #     memory; the problem file is.
 #   - the sample trusts the trailers it is testing (THE SAMPLE, above).

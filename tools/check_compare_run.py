@@ -111,7 +111,13 @@
 #      digit of a sampled particle's x in a sampled member's line, and of
 #      that member's primary's x: the member FAILs, and so does each
 #      sampled particle's replay the change reaches, naming the line and
-#      the column (P3 x P4, the lead's).
+#      the column (P3 x P4, the lead's); and p2, every column the particle
+#      path compares, read from the record's own `# columns:` line - each
+#      field before the bodies, every field of each massive body and of the
+#      particle, and the exact-time pair - one planted change a member a
+#      record, and a trailer counter: each FAILs that member's
+#      least-closest particle's replay, naming its column (VL: control p
+#      alone held two of them).
 #
 # Every case runs a fixed seed and fixed bits, so the verdict is the same
 # on every run (tools/gate_cache.py). None of its step counts is scaled by
@@ -259,6 +265,30 @@ def column_plan(text, N, names):
     plan += [("the exact-time pair's %s" % f, bar + 1 + pair.index(f)) for f in pair]
     plan += [("%s of body %d (%s)" % (per[b % len(per)], b, names[b]), first_body + b * len(per) + b % len(per))
              for b in range(N - 1)]
+    return plan
+
+
+def particle_plan(text, N, names, nact, j):
+    """Every column the particle path compares for particle j of a member
+    (tools/compare_run.py, particle_compare), read from the record's own
+    `# columns:` line: each field before the bodies after the sample's index
+    and step, every field of each massive body and of the particle, and the
+    exact-time pair. Each as (the name the driver gives it, its token in an
+    ensemble line). VL, 2026-11-12: control p planted only two of these, and
+    a particle_compare that checked only those two passed."""
+    line = next(l for l in text.splitlines() if l.startswith("# columns:"))
+    head, _, rest = line.split(":", 1)[1].partition(" then per body ")
+    per, _, pair = rest.partition(" ; then exact-time pair ")
+    head, per, pair = head.split(), per.split(), pair.split()
+    pre = 0
+    if head[:1] == ["system"]:
+        head, pre = head[2:], 2
+    first_body = pre + 1 + len(head)
+    bar = first_body + N * len(per)
+    plan = [(f, pre + 1 + head.index(f)) for f in head[2:]]
+    for b in list(range(nact)) + [j]:
+        plan += [("%s of body %d (%s)" % (f, b, names[b]), first_body + b * len(per) + per.index(f)) for f in per]
+    plan += [("the exact-time pair's %s" % f, bar + 1 + pair.index(f)) for f in pair]
     return plan
 
 
@@ -908,6 +938,72 @@ def main():
                     "sampled particles' replays FAIL naming that line and column (%s IDENTICAL): the replay is held "
                     "to the record, not to the rerun (rc %d)"
                     % (kp, what, body, ip + 1, len(hit), "the other" if want == 1 else "none", rc))
+
+    # p2. Every column the particle path compares is compared (VL, 2026-11-12:
+    # control p plants two of them, and a particle_compare that checked only
+    # those two passed every control). From the record's own `# columns:`
+    # line, each sampled member's least-closest-approach particle j gets its
+    # plan (particle_plan): each field before the bodies, every field of each
+    # massive body and of j, and the exact-time pair. One planted change a
+    # member a record, on its last sample line; each must FAIL j's replay,
+    # naming its column. Then one trailer counter, which must FAIL it too.
+    body_names = [l.split()[3] for l in rows if l.startswith("# body ")][:Nb]
+    nact64 = int(re.search(r"^# active (\d+) of ", text, re.M).group(1))
+    plans = {}
+    for k in smp64["members"]:
+        j = next((j for j, why in picks64.get(k, []) if why.startswith("its")), None)
+        if j is not None:
+            plans[k] = (j, particle_plan(text, Nb, body_names, nact64, j))
+    held, missed, nrec, ncols = [], [], 0, 0
+    if len(plans) != len(smp64["members"]):
+        missed.append("case 1's fp64 run named no least-closest particle for some sampled member: %s" % sorted(plans))
+    width = len(next(iter(plans.values()))[1]) if plans else 0
+    order = sorted(plans)
+    for start in range(0, width, len(order)):
+        nrec += 1
+        doctored, want = list(rows), {}
+        for c, k in zip(range(start, min(width, start + len(order))), order):
+            j, plan = plans[k]
+            name, t = plan[c]
+            i = max(i for i in lines64 if rows[i].startswith("system %d sample " % k))
+            toks = doctored[i].split()
+            old = toks[t]
+            toks[t] = flip_last_digit(old)
+            doctored[i] = " ".join(toks)
+            want[k] = (j, name, i + 1, toks[t], old)
+            ncols += 1
+        rc, out = drive(write("control_particle_columns_%d.rec" % nrec, doctored), "fp64")
+        found = {(int(m.group(1)), int(m.group(3))): m for m in PICK.finditer(out)
+                 if m.group(4).startswith("its")}
+        for k, (j, name, lineno, new, old) in want.items():
+            m = found.get((k, j))
+            if m and m.group(5) == "FAIL" and ("record line %d (system %d sample " % (lineno, k)) in m.group(6) \
+                    and ("): %s: record %s, replay %s" % (name, new, old)) in m.group(6):
+                held.append(name)
+            else:
+                missed.append("%s in member %d's particle body %d: %s" % (
+                    name, k, j, ("%s %s" % (m.group(5), m.group(6)[:140])) if m else "no particle line"))
+    # one trailer counter of one sampled member: its replay's counters are held
+    k = order[0] if order else None
+    if k is not None:
+        j = plans[k][0]
+        i = next(i for i, l in enumerate(rows) if l.startswith("# system %d steps_done=" % k))
+        doctored = list(rows)
+        doctored[i] = re.sub(r"\bmax_pc_iterations=(\d+)", lambda mm: "max_pc_iterations=%d" % (int(mm.group(1)) + 1),
+                             rows[i], count=1)
+        rc, out = drive(write("control_particle_trailer.rec", doctored), "fp64")
+        m = next((m for m in PICK.finditer(out) if int(m.group(1)) == k and int(m.group(3)) == j), None)
+        if m and m.group(5) == "FAIL" and "trailer max_pc_iterations is " in m.group(6):
+            held.append("the trailer's max_pc_iterations")
+        else:
+            missed.append("max_pc_iterations in member %d's trailer: %s" % (
+                k, ("%s %s" % (m.group(5), m.group(6)[:140])) if m else "no particle line"))
+    verdict(not missed and len(held) == ncols + 1,
+            "p2. every column the particle path compares, %d of them a particle (each field before the bodies, every "
+            "field of each massive body and of the particle, and the exact-time pair) and a trailer counter, one "
+            "planted change a member over %d records: each FAILs its member's least-closest particle's replay, "
+            "naming its column (%d held)%s"
+            % (width, nrec, len(held), "; NOT: " + "; ".join(missed[:4]) if missed else ""))
 
     # i. P3's tools in the tree and not callable: a copy of the driver, with
     # what it imports and runs, beside a stand-in for each of P3's two files

@@ -1016,7 +1016,9 @@ static long prob_active = -1;
  *                       line, four fields
  * Anything else is refused by name: an unknown line, and on the active and
  * zonal lines a second line or a field past the last (a second oblate body
- * would otherwise replace the first, and a fifth field go unread). */
+ * would otherwise replace the first, and a fifth field go unread). So an
+ * inline comment is refused there, while on a body line anything after its
+ * seventh field is ignored, as it was before round 4. */
 static void read_problem(const char *path){
     FILE *f = fopen(path, "r");
     if (!f){ perror(path); exit(2); }
