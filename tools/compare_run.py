@@ -69,10 +69,20 @@
 #     x y z columns, found by name), in binary64;
 #   - with --format-diff F2, the format difference: the member rerun here
 #     with --dt-out, then at F2 with --dt-file and --epsilon 0, so on the
-#     same accepted steps, measured by tools/compare_formats.py. The replay
-#     takes no rejected attempt, and a rejection changes the next step's
-#     prediction (ROUND4.md), so a member that rejected one has that in
-#     its difference too, and it is said beside the number.
+#     same accepted steps, measured by tools/compare_formats.py. Its scope
+#     is printed beside it, by the lead's ruling on P1's measurement: it
+#     shows the narrower format's round-off on these steps, and a narrowing
+#     both runs share passes it. It is a counter, never evidence that the
+#     arithmetic is the format's everywhere.
+#     The replay takes no rejected attempt. A rejection before the first
+#     accepted step leaves state (that attempt's corrected b is the next
+#     one's first guess), so that member's difference includes it. A
+#     rejection after an accepted step leaves no state bit, and the replay
+#     follows the member's path; only the dt_next of a sample line printed
+#     just before a rejected attempt differs. P3 measured both, and
+#     tools/check_compare_run.py holds both. The dt file's first step is
+#     the record's dt0 exactly when the first attempt was accepted, which
+#     is how the note beside the number tells them apart.
 #
 # PARTICLES are not sampled here: that needs P3's replay of one particle
 # out of its wave. sample_particles() is the place for it, and the lead's
@@ -142,6 +152,11 @@ NAME_WIDTH, SYS_WIDTH = 63, 31
 P3_TOOLS = ("extract_particle.py", "check_replay.py")
 FLOOR = re.compile(r"^FLOOR (\S+) vs (\S+): (\d+) common samples, last step (\d+), max \|dE/E\| (\S+) \(last \S+\), "
                    r"max \|dx\|/L (\S+) \(last \S+\)$", re.M)
+# What a format difference can and cannot show, printed beside its number
+# (the lead's ruling, .ledger/urgent/lead-gate4-ruling.md, 2026-11-12, on
+# P1's measurement that rounding a term to binary64 in BOTH runs leaves
+# binary128 against binary256 where the correct build has it).
+FORMAT_DIFF_SCOPE = "the difference shows the narrower format's round-off on these steps; a narrowing both runs share passes it"
 
 
 class Refused(Exception):
@@ -788,22 +803,28 @@ def format_diff(rec, args, s, rerun_path, dt_path, work, rejected):
                           trail.get("steps_done"), trail.get("steps_rejected"))
     narrow, wide = (rerun_path, p2) if FORMATS.index(f1) < FORMATS.index(f2) else (p2, rerun_path)
     cmd = [sys.executable, os.path.join(here, "compare_formats.py"), narrow, wide, "--quiet"]
-    if exact(dts[0]) != exact(rec.dt0["dt0"]):
-        # The replay's dt0 is the first ACCEPTED step, which is not the
-        # record's dt0 when the first attempt was rejected. Its steps are
-        # still the dt file's, so there is no time offset to warn of.
+    # The dt file's first step is the first ACCEPTED one: the record's dt0
+    # exactly when the first attempt was accepted, and smaller when it was
+    # rejected. That is what tells the two kinds of rejection apart below.
+    first_rejected = exact(dts[0]) != exact(rec.dt0["dt0"])
+    if first_rejected:
+        # the replay's dt0 is then not the record's; its steps are still
+        # the dt file's, so there is no time offset to warn of
         cmd.append("--allow-dt-mismatch")
     rc, out, err = run(cmd)
     m = FLOOR.search(out)
     if rc != 0 or not m:
         return False, "tools/compare_formats.py did not measure it (rc %d): %s" % (rc, (out + err).strip()[-300:])
     note = ""
-    if rejected:
-        note = "; this member rejected %d attempt%s, which the replay at %s does not take, and a rejection changes " \
-               "the next step's prediction, so the difference includes that" % (rejected, "" if rejected == 1 else "s", f2)
+    if first_rejected:
+        note = "; this member's first attempt was rejected, before any accepted step, which leaves state the replay " \
+               "at %s does not take, so the difference includes that" % f2
+    elif rejected:
+        note = "; this member's %d rejected attempt%s all followed an accepted step, which leaves no state bit, so " \
+               "the replay at %s follows its path" % (rejected, "" if rejected == 1 else "s", f2)
     return True, "%s against %s on the same %d accepted steps (--dt-out, then --dt-file with --epsilon 0): " \
-                 "max |dx|/L %s, max |dE/E| %s over %s common samples (tools/compare_formats.py)%s" % (
-                     m.group(1), m.group(2), steps, m.group(6), m.group(5), m.group(3), note)
+                 "max |dx|/L %s, max |dE/E| %s over %s common samples (tools/compare_formats.py): %s%s" % (
+                     m.group(1), m.group(2), steps, m.group(6), m.group(5), m.group(3), FORMAT_DIFF_SCOPE, note)
 
 
 def built(path):

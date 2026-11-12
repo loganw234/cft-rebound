@@ -14,7 +14,7 @@
 #   python tools/check_compare_run.py [--build build] [--quick]
 #
 # THE WAVES. A small ring, hand-made here because tools/make_ensemble.py
-# refuses `active` lines: E=8 systems of a primary, a moon and three
+# refuses `active` lines: E=9 systems of a primary, a moon and three
 # massless test particles, `active 2`. Member k's particles start at radii
 # 0.5 + k/16 + j/64, so the member index is radius, as in P2's generator.
 # Orbits are near circular and inclined about 1.8 degrees, alternately up
@@ -23,21 +23,33 @@
 # first step of 0.3 is rejected by the innermost members and accepted by
 # the rest, so the sample's "every member with a rejected step" is
 # exercised, and its strata are a proper subset.
+# Member 8, the last, holds the other kind of rejection: its first particle
+# is retrograde in the moon's own plane, 1/128 outside its radius, and meets
+# it head on near t = 1, after the first attempt and a few more steps have
+# been accepted; so it rejects attempts only after an accepted step. It was
+# appended for that (2026-11-12), and the ensemble's members run apart, so
+# members 0 to 7 have the bits they had when there were eight.
 #
 # CASES (all of them in --quick, at binary64, unless marked):
 #   1. The driver on the ensemble's record, with --format-diff fp128: every
 #      sampled member IDENTICAL, and asserted beside it from this gate's own
 #      reading of the record - each member's steps, rejections and passes;
-#      a sample that holds every rejecting member (some reject and some do
-#      not) and one member of every stratum, and is not every member; each
-#      test particle's closest approach to each active body, recomputed here
-#      in mpmath from tools/oracle.py's parse; and each format difference
-#      nonzero and below 10^4 units of the narrower format's round-off. A
-#      member that rejected nothing replays from its dt file at its own
-#      format bit for bit - checked here - so its nonzero difference is
-#      another format really run. (A member that rejected a step differs
-#      from its own same-format replay at round-off, so for it nonzero alone
-#      would prove nothing.)
+#      members that reject their first attempt, one that rejects only after
+#      an accepted step, and members that reject nothing (each rejecting
+#      member run alone for one step tells the first two apart); a sample
+#      that holds every rejecting member and one member of every stratum,
+#      and is not every member; each test particle's closest approach to
+#      each active body, recomputed here in mpmath from tools/oracle.py's
+#      parse; and each format difference nonzero and below 10^4 units of
+#      the narrower format's round-off, with its scope beside its number in
+#      the lead's ruling's words, and the note its member's rejections call
+#      for. What each note says is held by a replay from the member's own
+#      dt file at its own format: a member that rejected nothing is the
+#      record's bit for bit, so its nonzero difference is another format
+#      really run; one whose first attempt was rejected differs in state;
+#      and member 8's state is the record's in every value but dt_next,
+#      which differs only on a sample line printed just before a rejected
+#      attempt.
 #   2. The particles line, exactly: no particle replay is in this tree.
 #   3. The sample: --plan for seeds 1 to 10, each with every rejecting
 #      member and one member a stratum; not all ten alike; seed 1's is case
@@ -94,12 +106,25 @@ from oracle import parse as oracle_parse, F2m               # noqa: E402
 root = os.path.dirname(here)
 mpmath.mp.dps = 40
 
-E = 8
+E = 9
 NTP = 3
 DT0 = "0.3"
 PHASES = [(3, 4, 5), (5, 12, 13), (8, 15, 17), (7, 24, 25), (20, 21, 29), (12, 35, 37)]
 INC = (4095, 128, 4097)        # cos and sin of about 1.8 degrees, exactly rational
+# The last member's first particle meets the moon head on: retrograde, in
+# the moon's own orbital plane, 1/128 outside its radius, starting 112.6
+# degrees ahead of it (cos, sin = -5/13, 12/13), so they meet near t = 1.
+FLYBY, FLYBY_R, FLYBY_AT = E - 1, 1.0 + 1.0 / 128, (-5, 12, 13)
 PARTICLES = "particles: not sampled (no particle replay in this tree)"
+# What --format-diff must say beside its number (the lead's ruling,
+# .ledger/urgent/lead-gate4-ruling.md), and the note a rejecting member's
+# difference must carry, by whether its first attempt was rejected. Stated
+# here as this gate's expectation, not read from the driver.
+SCOPE = "the difference shows the narrower format's round-off on these steps; a narrowing both runs share passes it"
+FIRST_NOTE = ("; this member's first attempt was rejected, before any accepted step, which leaves state the replay at %s "
+              "does not take, so the difference includes that")
+LATER_NOTE = ("; this member's %d rejected attempt%s all followed an accepted step, which leaves no state bit, so the "
+              "replay at %s follows its path")
 FORMATS = ("fp64", "fp128", "fp256")
 # 2^-p for a p-bit significand: binary64, binary128 and libcft's binary256
 # (237 bits, as ias15_cft's own pc_tol_shift of 237 - 53 says)
@@ -115,6 +140,20 @@ def body(name, m, r, ph, up, gm):
     return "body %s %s" % (name, " ".join(float.hex(x) for x in vals))
 
 
+def flyby(name, r, at):
+    """A massless body on a circular orbit in the moon's orbital plane,
+    going the other way round. The plane's axes are the moon's starting
+    direction e_a = (0, ci, si) and its velocity's, e_b = (-1, 0, 0); the
+    body starts at angle th from e_a toward e_b, cos and sin = c/n and s/n,
+    at r (cos th e_a + sin th e_b), with velocity v (sin th e_a - cos th e_b)."""
+    c, s, n = at
+    ct, st = c / n, s / n
+    ci, si = INC[0] / INC[2], INC[1] / INC[2]
+    v = math.sqrt(1.0 / r)
+    vals = (0.0, -r * st, r * ct * ci, r * ct * si, v * ct, v * st * ci, v * st * si)
+    return "body %s %s" % (name, " ".join(float.hex(x) for x in vals))
+
+
 def write_waves(path, name="cr_waves", tp_mass=None, ulp=None, active=True):
     """The waves. tp_mass=(k, j, m) gives system k's particle j mass m;
     ulp=(k, j) moves system k's particle j's x by one ulp."""
@@ -126,6 +165,9 @@ def write_waves(path, name="cr_waves", tp_mass=None, ulp=None, active=True):
         lines.append(body("moon", 2.0 ** -12, 1.0, (0, 1, 1), 1, 1.0 + 2.0 ** -12))
         for j in range(NTP):
             m = tp_mass[2] if tp_mass and tp_mass[:2] == (k, j) else 0.0
+            if (k, j) == (FLYBY, 0):
+                lines.append(flyby("tp0", FLYBY_R, FLYBY_AT))
+                continue
             b = body("tp%d" % j, m, 0.5 + k / 16 + j / 64, PHASES[(k + j) % len(PHASES)], 1 - 2 * (j % 2), 1.0)
             if ulp and ulp == (k, j):
                 t = b.split()
@@ -154,6 +196,17 @@ def columns(text):
     # "system s" is two fields and so is "sample" (the word and its index)
     nlead = len(lead) + 1
     return nlead, per
+
+
+def value_index(text, name):
+    """Where a field is in check_ensemble.parse()'s list of a sample's values
+    (every field after the sample's index and step), read from the record's
+    own `# columns:` line."""
+    line = next(l for l in text.splitlines() if l.startswith("# columns:"))
+    head = line.split(":", 1)[1].split(" then per body ")[0].split()
+    if head[:1] == ["system"]:
+        head = head[2:]
+    return head[2:].index(name)
 
 
 def main():
@@ -230,19 +283,30 @@ def main():
                 re.finditer(r"^member (\d+) \((\w+)\): (IDENTICAL|FAIL): (.*)$", out, re.M)}
 
     def hold_clean(label, rec_path, text, out, rc, fmt, steps, fdiff=None):
-        """Case 1's assertions on one clean record."""
+        """Case 1's assertions on one clean record. Returns the sample, and
+        the rejecting members split by whether their FIRST attempt was."""
         tr = trailers(text)
         rej = sorted(k for k in range(E) if int(tr[k]["steps_rejected"]) > 0)
+        # Which of them rejected their first attempt: each run alone for one
+        # step, its trailer read here - not the driver's test of the dt file.
+        first, later, unread = [], [], []
+        for k in rej:
+            rc1, o1, _ = run([cft, "--format", fmt, "--problem", waves, "--dt", DT0, "--epsilon", "1e-9", "--steps", "1",
+                              "--sample", "1", "--max-iter", "60", "--member", str(k), "--quiet"])
+            n1 = parse_samples(o1)[1].get("steps_rejected") if rc1 == 0 else None
+            (unread if n1 is None else later if n1 == "0" else first).append(k)
         smp = sampled(out)
         lines = member_lines(out)
         verdict(rc == 0 and "\nRESULT: PASS: " in out, "%s: the driver PASSES (rc %d): %s" % (
             label, rc, (re.findall(r"^RESULT: .*$", out, re.M) or ["no RESULT line"])[-1]))
         if not verdict(smp is not None, "%s: the driver prints its sample" % label):
             print(out[-1500:])
-            return None
+            return None, first, later
         strata_ok = all(any(lo <= m <= hi for m in smp["members"]) for lo, hi in smp["strata"])
-        verdict(rej and len(rej) < E, "%s: the record has a mixed first attempt: members %s rejected a step, %d did not "
-                "(this gate's reading of the record's trailers)" % (label, rej, E - len(rej)))
+        verdict(first and later and not unread and len(rej) < E,
+                "%s: members %s reject their first attempt, %s reject only after an accepted step, and %d reject nothing "
+                "(this gate's reading of the record's trailers, and of each rejecting member run alone for one step)%s"
+                % (label, first, later, E - len(rej), "; no one-step run read for %s" % unread if unread else ""))
         verdict(set(rej) <= set(smp["members"]) and smp["rejected"] == rej and strata_ok and
                 len(smp["strata"]) == 3 and smp["n"] == len(smp["members"]) < E and smp["E"] == E,
                 "%s: the sample %s holds every rejecting member %s and one member of each stratum %s, and is %d of %d"
@@ -289,9 +353,9 @@ def main():
         if fdiff:
             diffs = {int(m.group(1)): m for m in re.finditer(
                 r"^  member (\d+): format difference: (\S+) against (\S+) on the same (\d+) accepted steps .*?"
-                r"max \|dx\|/L ([^,\s]+), max \|dE/E\| (\S+) over (\d+) common samples \(tools/compare_formats.py\)(.*)$",
-                out, re.M)}
-            bad = []
+                r"max \|dx\|/L ([^,\s]+), max \|dE/E\| (\S+) over (\d+) common samples \(tools/compare_formats.py\): "
+                r"(.*)$", out, re.M)}
+            bad, scoped = [], 0
             pair = tuple(sorted((fmt, fdiff), key=FORMATS.index))
             bound = 1e4 * UNIT_ROUNDOFF[pair[0]]
             for k in smp["members"]:
@@ -300,16 +364,23 @@ def main():
                     bad.append("member %d: no format difference line" % k)
                     continue
                 dx = float(m.group(5))
-                said = "rejected" in m.group(8)
+                n = int(tr[k]["steps_rejected"])
+                note = (FIRST_NOTE % fdiff if k in first else
+                        LATER_NOTE % (n, "" if n == 1 else "s", fdiff) if k in later else "")
+                scoped += m.group(8) == SCOPE + note
                 if (m.group(2), m.group(3)) != pair or int(m.group(4)) != steps or not 0 < dx < bound or \
-                        said != (k in rej):
+                        m.group(8) != SCOPE + note:
                     bad.append("member %d: %s" % (k, m.group(0).strip()))
             verdict(not bad, "%s: each sampled member's format difference, %s against %s on its own steps, is nonzero "
-                    "and below 1e4 units of %s's round-off, %.2g (max |dx|/L %s), and a member that rejected a step is "
-                    "said to%s" % (label, pair[0], pair[1], pair[0], bound,
-                                   ", ".join("%d: %s" % (k, diffs[k].group(5)) for k in sorted(diffs)),
-                                   ": " + "; ".join(bad) if bad else ""))
-        return smp
+                    "and below 1e4 units of %s's round-off, %.2g (max |dx|/L %s)%s" % (
+                        label, pair[0], pair[1], pair[0], bound,
+                        ", ".join("%d: %s" % (k, diffs[k].group(5)) for k in sorted(diffs)),
+                        ": " + "; ".join(bad) if bad else ""))
+            verdict(not bad and scoped == len(smp["members"]) and set(first) | set(later) <= set(smp["members"]),
+                    "%s: each of the %d says its scope beside its number, '%s', and the note its rejections call for: "
+                    "first attempt rejected for %s, rejected only after an accepted step for %s, none for the rest"
+                    % (label, scoped, SCOPE, first, later))
+        return smp, first, later
 
     # ---------------------------------------------------------------- case 1
     fmt_cases = [("fp64", 40, 20, "fp128")] + ([] if args.quick else [("fp128", 20, 10, "fp256"), ("fp256", 20, 10, None)])
@@ -324,29 +395,57 @@ def main():
             allok = False
             continue
         rc, out = drive(rec, fmt, extra=["--format-diff", fdiff] if fdiff else [])
-        smp = hold_clean(fmt, rec, text, out, rc, fmt, steps, fdiff)
+        smp, first, later = hold_clean(fmt, rec, text, out, rc, fmt, steps, fdiff)
         if smp is None:
             allok = False
             continue
         if fmt == "fp64":
             smp64, text64, rec64 = smp, text, rec
-            # the same-format replay of a member that rejected nothing is the
-            # record's member, bit for bit: so its nonzero difference above
-            # is another format, not the same one run twice
-            quiet = [k for k in smp["members"] if k not in smp["rejected"]]
-            if verdict(quiet, "fp64: a sampled member that rejected nothing exists (%s)" % quiet):
-                k = quiet[-1]
+            # One member of each kind replayed from its own dt file at its own
+            # format, against the record: what each note above says of it.
+            # dt_next is set aside where said, and only there: a sample line
+            # printed just before a rejected attempt has that attempt's dt as
+            # its dt_next, and the replay never tries that attempt.
+            skip = value_index(text, "dt_next")
+
+            def replayed(k):
                 dt = os.path.join(scratch, "member%d.dt" % k)
                 base = [cft, "--format", "fp64", "--problem", waves, "--steps", str(steps), "--sample", str(sample),
                         "--max-iter", "60", "--member", str(k), "--quiet"]
                 rc1, a, _ = run(base + ["--dt", DT0, "--epsilon", "1e-9", "--dt-out", dt])
                 rc2, b, _ = run(base + ["--dt-file", dt, "--epsilon", "0"])
-                es, _ = parse_samples(text, k)
-                ra, _ = parse_samples(a)
-                rb, _ = parse_samples(b)
-                verdict(rc1 == 0 and rc2 == 0 and es and es == ra == rb,
-                        "fp64: member %d replayed from its dt file at fp64 is the record's member bit for bit (%d samples)"
-                        % (k, len(es)))
+                es = parse_samples(text, k)[0]
+                if rc1 or rc2:
+                    return es, None, None
+                return es, parse_samples(a)[0], parse_samples(b)[0]
+
+            def state(samples):
+                return [(k_, st, [v for i, v in enumerate(vals) if i != skip]) for k_, st, vals in samples or []]
+
+            quiet = [k for k in smp["members"] if k not in smp["rejected"]]
+            if verdict(quiet, "fp64: a sampled member that rejected nothing exists (%s)" % quiet):
+                k = quiet[-1]
+                es, ra, rb = replayed(k)
+                verdict(es and es == ra == rb,
+                        "fp64: member %d, which rejected nothing, replayed from its dt file at fp64 is the record's member "
+                        "bit for bit (%d samples): so its nonzero difference above is another format" % (k, len(es)))
+            if first:
+                k = first[0]
+                es, ra, rb = replayed(k)
+                agree = sum(1 for x, y in zip(state(es), state(rb)) if x == y)
+                verdict(es and es == ra and rb and len(rb) == len(es) and state(rb) != state(es),
+                        "fp64: member %d, whose first attempt was rejected, replayed from its dt file at fp64: its state "
+                        "is the record's at %d of %d samples, so that rejection leaves state, as its note says"
+                        % (k, agree, len(es)))
+            if later:
+                k = later[-1]
+                es, ra, rb = replayed(k)
+                ndt = sum(1 for x, y in zip(es, rb or []) if x[2][skip] != y[2][skip])
+                verdict(es and es == ra and rb and state(rb) == state(es),
+                        "fp64: member %d, whose %s rejected attempts all followed an accepted step, replayed from its dt "
+                        "file at fp64: every value but dt_next is the record's at all %d samples (dt_next differs at %d), "
+                        "so they leave no state bit, as its note says" % (
+                            k, parse_samples(text, k)[1].get("steps_rejected"), len(es), ndt))
     if smp64 is None:
         print("RESULT: FAIL")
         return 1
