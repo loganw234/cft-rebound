@@ -61,6 +61,7 @@
  *             [--arith rebound|fma] [--engine loop|program] [--programs DIR]
  *             [--no-flag-abort] [--artifact PATH] [--dump-constants] [--quiet]
  *             [--member K] [--dt-file FILE] [--dt-out FILE]
+ *             [--attempts-out FILE] [--run-key]
  *             [--softening S] [--min-dt M] [--adaptive-mode 0|1|2|3]
  *             [--probe] [--door-selftest] [--corrector-selftest]
  *             [--record-iters FILE | --replay-iters FILE]
@@ -74,6 +75,16 @@
  * record must be its recording's, byte for byte. --corrector-selftest
  * holds pc_error() on both of its routes against a reference, and exits.
  * tools/check_corrector.py is the gate of all three (ROUND3.md, P2).
+ *
+ * --attempts-out writes one system's every step attempt, rejected ones
+ * included: the dt it tried and whether it was accepted, and last the dt
+ * the run takes next. --dt-file reads that form back by its first line and
+ * replays it, a recorded rejection taken as the run took it (it needs
+ * --epsilon 0, as the accepted-steps form does); with --replay-iters of the
+ * same run's schedule it is that run, bit for bit. --run-key prints the
+ * run's key and exits. tools/extract_particle.py replays one test particle
+ * out of its wave with them, and tools/check_replay.py is their gate
+ * (ROUND4.md, P3).
  *
  * --artifact opens a tile instead of the software backend; with no flag
  * the program falls back to $CFT_REBOUND_ARTIFACT, which is how the
@@ -1123,6 +1134,13 @@ static int adaptive;              /* epsilon > 0 */
 /* --dt-file: a prescribed step sequence, shared by every system */
 static V *dtlist; static long ndtlist;
 static FILE *dt_out;
+/* --dt-file in its attempts form, which --attempts-out writes (ROUND4.md,
+ * P3): dtlist holds every attempt's dt in the order they were tried, then
+ * the step the run took next, and att_ok[i] says whether attempt i was
+ * accepted. att_at is the attempt being made. NULL in the accepted-steps
+ * form, which reads and runs exactly as it always did. */
+static unsigned char *att_ok; static long natt, att_at;
+static FILE *att_out;
 
 /* the per-lane state, as slices for masking */
 #define NSLICE 52
@@ -2963,6 +2981,23 @@ static void step_attempt(void){
             }
             vcopy(E(SDT, s), E(SDTNEW, s), 1);
         }
+    }else if (att_ok){
+        /* --dt-file's attempts form (ROUND4.md, P3): the attempt's recorded
+         * outcome in place of choose_timestep()'s, and the next attempt's
+         * recorded dt in place of its dt_new. Everything else is the branch
+         * above's, so a recorded rejection is taken as the run took it: the
+         * step's start restored here, the end-of-step update skipped and
+         * the next step's e and b predicted from er and br with ratio
+         * dt / dt_last_done below (not at all before the first accepted
+         * step). One system: main() refuses an ensemble. */
+        if (att_at >= natt) die("--dt-file: the attempts record ends after %ld attempts, and this run makes more", natt);
+        accepted[0] = att_ok[att_at];
+        if (!accepted[0]){
+            copy_sys(x, x0, 0); copy_sys(v, v0, 0); copy_sys(a, a0, 0);
+            rejected[0]++;
+        }
+        vcopy(E(SDT, 0), dtlist[att_at + 1], 1);
+        att_at++;
     }else{
         for (size_t s = 0; s < E; s++) accepted[s] = active[s];
     }
@@ -2995,13 +3030,20 @@ static void step_attempt(void){
     }
     vadd(STPLAIN, STPLAIN, DTADD, E);
     vaugadd(TR, TERR, STHI, DTADD, E); vadd(STLO, STLO, TERR, E); vcopy(STHI, TR, E);
+    /* --attempts-out: this attempt, accepted or not, with the dt it tried.
+     * One system (main() refuses more), so system 0 is the attempt. */
+    if (att_out && active[0]){
+        char buf[160]; size_t len = 0;
+        cft_to_hex_char(dev, F, E(SDTDONE, 0), buf, sizeof buf, &len);
+        fprintf(att_out, "%s %c\n", buf, accepted[0] ? 'a' : 'r');
+    }
     for (size_t s = 0; s < E; s++){
         if (!(active[s] && accepted[s])) continue;
         V dt_done = E(SDTDONE, s);
         vcopy(E(SDTLAST, s), dt_done, 1);
         if (dt_out) { char buf[160]; size_t len = 0; cft_to_hex_char(dev, F, dt_done, buf, sizeof buf, &len); fprintf(dt_out, "%s\n", buf); }
         done[s]++;
-        if (dtlist){
+        if (dtlist && !att_ok){
             if (done[s] < ndtlist) vcopy(E(SDT, s), dtlist[done[s]], 1);
         }
     }
@@ -3124,9 +3166,75 @@ static void dump_constants(void){
     printf("pc_tol"); puthex(TOL); printf("\n");
 }
 
+/* The attempts form of a dt file (ROUND4.md, P3): what --attempts-out
+ * writes, and what --dt-file replays when a file's first line is this. */
+#define ATT_MAGIC "# cft-rebound attempts v1"
+
+/* One line of an attempts record, of any length (its run line is a whole
+ * run key), without its line end; NULL at the end of the file. */
+static char *att_line(FILE *f, long *lineno){
+    static char *buf;
+    static size_t cap;
+    size_t n = 0;
+    int c;
+    if (!buf){ cap = 256; buf = malloc(cap); if (!buf) die("out of memory"); }
+    while ((c = fgetc(f)) != EOF && c != '\n'){
+        if (n + 2 > cap){ cap *= 2; buf = realloc(buf, cap); if (!buf) die("out of memory"); }
+        buf[n++] = (char)c;
+    }
+    if (c == EOF && n == 0) return NULL;
+    if (n && buf[n - 1] == '\r') n--;
+    buf[n] = 0;
+    (*lineno)++;
+    return buf;
+}
+
+/* The attempts form's body: a line an attempt, in the order the run tried
+ * them, "<dt> a" where it was accepted and "<dt> r" where it was rejected,
+ * each dt an exact hex float; then "<dt> next", the step the run took after
+ * its last attempt, which ends the record. # lines and blank lines are
+ * skipped. Anything else is refused by name, never run. */
+static void read_attempts(FILE *f, const char *path, long steps, long lineno){
+    long cap = 1024, n = 0, ok = 0;
+    int ended = 0;
+    char *l;
+    dtlist = malloc(cap * sizeof *dtlist); att_ok = malloc((size_t)cap);
+    if (!dtlist || !att_ok) die("out of memory");
+    while ((l = att_line(f, &lineno))){
+        char *dt, *what, *rest;
+        if (l[0] == '#') continue;
+        if (!(dt = strtok(l, " \t"))) continue;
+        what = strtok(NULL, " \t"); rest = strtok(NULL, " \t");
+        if (ended) die("--dt-file %s: line %ld follows the attempts record's next line, which ends it", path, lineno);
+        if (!what || rest || !is_hex_text(dt) || (strcmp(what, "a") && strcmp(what, "r") && strcmp(what, "next")))
+            die("--dt-file %s: line %ld is not an attempt: a line is '<dt, a hex float> a' for an accepted attempt, "
+                "'<dt> r' for a rejected one, and last '<dt> next'", path, lineno);
+        if (n == cap){
+            cap *= 2;
+            dtlist = realloc(dtlist, cap * sizeof *dtlist); att_ok = realloc(att_ok, (size_t)cap);
+            if (!dtlist || !att_ok) die("out of memory");
+        }
+        dtlist[n] = from_text(dt, 1);
+        if (!strcmp(what, "next")) ended = 1;
+        else{ att_ok[n] = what[0] == 'a'; ok += att_ok[n]; }
+        n++;
+    }
+    if (!ended) die("--dt-file %s: the attempts record has no next line, so it is cut short", path);
+    natt = n - 1; ndtlist = n;
+    if (ok < steps) die("--dt-file %s has %ld accepted attempts, the run needs %ld", path, ok, steps);
+}
+
 static void read_dt_file(const char *path, long steps){
     FILE *f = fopen(path, "r");
     if (!f){ perror(path); exit(2); }
+    /* The attempts form, by its first line. Any other file is the
+     * accepted-steps form, read from its start below exactly as before. */
+    {
+        long lineno = 0;
+        char *first = att_line(f, &lineno);
+        if (first && !strcmp(first, ATT_MAGIC)){ read_attempts(f, path, steps, lineno); fclose(f); return; }
+        rewind(f);
+    }
     char line[256]; long cap = 1024, n = 0;
     dtlist = malloc(cap * sizeof *dtlist);
     while (fgets(line, sizeof line, f)){
@@ -4295,11 +4403,15 @@ static void sched_key(char *out, size_t cap, long steps, long sample, int tol_sh
     for (size_t k = 0; k < N3 * ESZ; k++){ hs ^= X0[k]; hs *= 1099511628211ULL; hs ^= V0[k]; hs *= 1099511628211ULL; }
     for (long i = 0; i < ndtlist; i++)
         for (size_t k = 0; k < ESZ; k++){ hs ^= dtlist[i][k]; hs *= 1099511628211ULL; }
+    /* An attempts record's outcomes decide its replay as its steps do, so
+     * they are hashed with them, and the key names the form (ROUND4.md,
+     * P3). An accepted-steps file hashes and names what it always did. */
+    for (long i = 0; att_ok && i < natt; i++){ hs ^= att_ok[i]; hs *= 1099511628211ULL; }
     int w = snprintf(out, cap, "format=%s problem=%s E=%zu N=%zu member=%d steps=%ld sample=%ld adaptive_mode=%d max_iter=%d "
              "pc_tol_shift=%d cs=%s arith=%s engine=%s dt0=%s epsilon=%s softening2=%s min_dt=%s G=%s dt_file=%s state=%016llx",
              cft_format_name(F), problem_name, E, N, member, steps, sample, ADAPTIVE_MODE, max_iter, tol_shift,
              cs_augmented ? "augmented" : "kahan", arith_fma ? "fma" : "rebound", engine_program ? "program" : "loop",
-             h[0], h[1], h[2], h[3], h[4], dtlist ? "yes" : "no", (unsigned long long)hs);
+             h[0], h[1], h[2], h[3], h[4], dtlist ? (att_ok ? "attempts" : "yes") : "no", (unsigned long long)hs);
     /* A problem's active and zonal lines change the run, so they key it -
      * appended only when present, so that no older key moves (ROUND4.md,
      * P0). A schedule recorded with one N_active or one J2 is then refused
@@ -4366,8 +4478,10 @@ int main(int argc, char **argv){
                                     * the addend the port always issued */
     const char *dt_txt = "0.01", *eps_txt = "1e-9";
     const char *iters_out = NULL, *iters_in = NULL;   /* --record-iters, --replay-iters */
+    const char *att_out_path = NULL;                  /* --attempts-out */
     long steps = 1000, sample = 100;
     int tol_shift = -1, quiet = 0, do_dump = 0, do_probe = 0, do_door = 0, do_corr = 0;
+    int do_key = 0;                                   /* --run-key */
     for (int i = 1; i < argc; i++){
         if (!strcmp(argv[i], "--format") && i + 1 < argc) fmtname = argv[++i];
         else if (!strcmp(argv[i], "--problem") && i + 1 < argc) problem = argv[++i];
@@ -4408,6 +4522,8 @@ int main(int argc, char **argv){
         else if (!strcmp(argv[i], "--member") && i + 1 < argc) member = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--dt-file") && i + 1 < argc) dt_file = argv[++i];
         else if (!strcmp(argv[i], "--dt-out") && i + 1 < argc) dt_out_path = argv[++i];
+        else if (!strcmp(argv[i], "--attempts-out") && i + 1 < argc) att_out_path = argv[++i];
+        else if (!strcmp(argv[i], "--run-key")) do_key = 1;
         else if (!strcmp(argv[i], "--no-flag-abort")) flag_abort = 0;
         else if (!strcmp(argv[i], "--dump-constants")) do_dump = 1;
         else if (!strcmp(argv[i], "--probe")) do_probe = 1;
@@ -4500,6 +4616,9 @@ int main(int argc, char **argv){
     if (dt_file){
         if (adaptive) die("--dt-file prescribes every step; it needs --epsilon 0");
         read_dt_file(dt_file, steps);
+        if (att_ok && E != 1)
+            die("--dt-file %s is an attempts record, which is one system's attempts; replay a system of an ensemble with --member",
+                dt_file);
         for (size_t s = 0; s < E; s++) vcopy(E(SDT, s), dtlist[0], 1);
     }else{
         V s0 = from_text(dt_txt, is_hex_text(dt_txt));
@@ -4507,7 +4626,22 @@ int main(int argc, char **argv){
         free(s0);
     }
     bcast_sys(DTB, SDT);
+    /* --run-key: this run's key, as its corrector schedule's `# run` line and
+     * its attempts record's would hold it, from the same sched_key() as
+     * below; nothing is integrated and no file is opened. It is how a tool
+     * re-keys a schedule without a copy of the key's hash (ROUND4.md, P3). */
+    if (do_key){
+        char key[1536];
+        sched_key(key, sizeof key, steps, sample, tol_shift);
+        printf("%s\n", key);
+        cft_close(dev);
+        return 0;
+    }
     if (dt_out_path){ if (E != 1) die("--dt-out records one system's steps; use --member"); dt_out = fopen(dt_out_path, "w"); if (!dt_out){ perror(dt_out_path); exit(2); } }
+    if (att_out_path){
+        if (E != 1) die("--attempts-out records one system's attempts; use --member");
+        if (!(att_out = fopen(att_out_path, "w"))){ perror(att_out_path); exit(2); }
+    }
     use_ens_predict = engine_program && E > 1 && adaptive;
     if (engine_program) load_programs();
     if (do_dump) dump_constants();
@@ -4516,10 +4650,16 @@ int main(int argc, char **argv){
     vzero(SDTLAST, E); vzero(STPLAIN, E); vzero(STHI, E); vzero(STLO, E);
     vzero(gcs, N3);
     for (int m = 0; m < 7; m++){ vzero(g[m], N3); vzero(b[m], N3); vzero(e[m], N3); vzero(csb[m], N3); vzero(er[m], N3); vzero(br[m], N3); }
-    if (iters_out || iters_in){
+    if (iters_out || iters_in || att_out){
         char key[1536];
         sched_key(key, sizeof key, steps, sample, tol_shift);
-        sched_open(iters_out, iters_in, key, quiet);
+        if (iters_out || iters_in) sched_open(iters_out, iters_in, key, quiet);
+        /* the attempts record names the run it was written by, as a
+         * schedule does, so a tool can hold the two to one run */
+        if (att_out)
+            fprintf(att_out, ATT_MAGIC "\n# run %s\n# a line a step attempt, in the order they were tried: the dt it tried, "
+                    "then a where it was accepted or r where it was rejected; the last line is the dt the run takes next, "
+                    "then next\n", key);
     }
 
     if (E == 1) printf("# cft-rebound ias15 record v1\n");
@@ -4621,6 +4761,13 @@ int main(int argc, char **argv){
          * same dt_next: steps + 1 lines in all */
         char buf[160]; size_t len = 0; cft_to_hex_char(dev, F, E(SDT, 0), buf, sizeof buf, &len); fprintf(dt_out, "%s\n", buf);
         fclose(dt_out);
+    }
+    if (att_out){
+        /* the step the run would take next, which a replay of the record
+         * reports as its last dt_next; it ends the record */
+        char buf[160]; size_t len = 0; cft_to_hex_char(dev, F, E(SDT, 0), buf, sizeof buf, &len);
+        fprintf(att_out, "%s next\n", buf);
+        if (fclose(att_out)) die("--attempts-out: the attempts record could not be written");
     }
     cft_close(dev);
     return 0;
