@@ -974,9 +974,9 @@ static char (*body_names)[32];   /* NB */
 static char (*sys_names)[32];    /* E */
 /* A problem's `zonal` line (ROUND4.md, P0): body zonal_k of every system
  * is oblate about the z axis, with reference radius ZR and coefficients
- * ZJ2 and ZJ4, each exact in the run's format. read_problem() parses it
- * and refuses it by name until round 4's P1 builds the term in
- * src/ias15_zonal.inc; zonal_on is what gravity_body() asks. */
+ * ZJ2 and ZJ4, each exact in the run's format. read_problem() parses it,
+ * round 4's P1 builds the term in src/ias15_zonal.inc, and zonal_on is
+ * what gravity_body() asks. */
 static int    zonal_on;
 static size_t zonal_k;
 static V      ZR, ZJ2, ZJ4;
@@ -997,8 +997,9 @@ static long prob_active = -1;
  *                       massive and the rest test particles: REBOUND's
  *                       N_active, with testparticle_type 0, in the forces
  *                       and in the record's energy alike; one line
- *   zonal k R J2 J4     body k of every system is oblate about the z axis
- *                       (refused until round 4's P1)
+ *   zonal k R J2 J4     body k of every system is oblate about the z axis,
+ *                       with J2 and J4 at reference radius R (round 4's P1,
+ *                       src/ias15_zonal.inc); k must be an active body
  * Anything else is refused by name. */
 static void read_problem(const char *path){
     FILE *f = fopen(path, "r");
@@ -1087,7 +1088,6 @@ static void read_problem(const char *path){
             zonal_k = (size_t)k;
             ZR = from_text(fields[1], 1); ZJ2 = from_text(fields[2], 1); ZJ4 = from_text(fields[3], 1);
             zonal_on = 1;
-            die("a zonal line in %s: J2 and J4 in libcft's format are round 4's P1, not built yet (ROUND4.md)", path);
         }else die("unknown line '%s' in %s", tok, path);
     }
     fclose(f);
@@ -4368,6 +4368,7 @@ int main(int argc, char **argv){
     const char *iters_out = NULL, *iters_in = NULL;   /* --record-iters, --replay-iters */
     long steps = 1000, sample = 100;
     int tol_shift = -1, quiet = 0, do_dump = 0, do_probe = 0, do_door = 0, do_corr = 0;
+    int do_zonal = 0;              /* --zonal-selftest: J2 and J4 at fixed points, every operation traced */
     for (int i = 1; i < argc; i++){
         if (!strcmp(argv[i], "--format") && i + 1 < argc) fmtname = argv[++i];
         else if (!strcmp(argv[i], "--problem") && i + 1 < argc) problem = argv[++i];
@@ -4401,6 +4402,7 @@ int main(int argc, char **argv){
         else if (!strcmp(argv[i], "--record-iters") && i + 1 < argc) iters_out = argv[++i];
         else if (!strcmp(argv[i], "--replay-iters") && i + 1 < argc) iters_in = argv[++i];
         else if (!strcmp(argv[i], "--corrector-selftest")) do_corr = 1;
+        else if (!strcmp(argv[i], "--zonal-selftest")) do_zonal = 1;
         else if (!strcmp(argv[i], "--arith") && i + 1 < argc){ const char *m = argv[++i]; if (!strcmp(m, "rebound")) arith_fma = 0; else if (!strcmp(m, "fma")) arith_fma = 1; else die("--arith rebound|fma"); }
         else if (!strcmp(argv[i], "--engine") && i + 1 < argc){ const char *m = argv[++i]; if (!strcmp(m, "loop")) engine_program = 0; else if (!strcmp(m, "program")) engine_program = 1; else die("--engine loop|program"); }
         else if (!strcmp(argv[i], "--programs") && i + 1 < argc) programs_dir = argv[++i];
@@ -4444,6 +4446,7 @@ int main(int argc, char **argv){
     if (do_door){ int rc = door_selftest(artifact); cft_close(dev); return rc; }
     if (door_refuse_case){ int rc = door_refuse(door_refuse_case); cft_close(dev); return rc; }
     if (do_corr){ int rc = corrector_selftest(artifact); cft_close(dev); return rc; }
+    if (do_zonal){ int rc = zonal_selftest(); cft_close(dev); return rc; }
     if (!problem){
         if (do_dump){ NMAX = 8; make_constants(tol_shift, quiet); dump_constants(); return 0; }
         die("usage: ias15_cft --format F --problem FILE [--dt DT] [--epsilon EPS] [--steps N] [--sample K] [--cs kahan|augmented] [--member K] [--dt-file FILE]");
@@ -4473,6 +4476,7 @@ int main(int argc, char **argv){
      * drop-in's, which reb_integrator_cft.c sets every step - before
      * alloc_state() builds the rows from it */
     if (prob_active >= 0){ eng_active = (size_t)prob_active; eng_tptype = 0; }
+    if (zonal_on) zonal_ready();   /* the zonal term's constants, and its refusals, before anything is issued */
     make_constants(tol_shift, quiet);
     alloc_state();
     /* After alloc_state: the broadcast is NMAX wide and NMAX is not

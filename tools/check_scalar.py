@@ -29,6 +29,12 @@
 #      this parcel leaves, each of which is printed: a divide, a compare, or
 #      a site in dtnew_*() and choose_timestep(), which are nobody's this
 #      round. Anything else is a site the conversion missed.
+#      The source is read with each `.inc` file it includes: round 4's
+#      src/ias15_zonal.inc (P1) issues its operations through zcall(), whose
+#      operands are read at its sites, and its constants (the header's
+#      zonal[], broadcast in zonal_ready(), and G) are a printed kind of their
+#      own, left on today's call. A zonal problem is a case below, so the
+#      derived calls= also holds that the term takes nothing through the door.
 #      And each helper must be exactly its two statements: today's call on its
 #      own arguments with the route off, counting the fallback, then vrun_k(),
 #      with no site calling vrun_k() itself. Its fallback copies element 0 into
@@ -173,8 +179,41 @@ HELPERS = {
 NOT_SITES = {"vrun_k", "door_k", "door_selftest", "gravity_reference"} | set(HELPERS)
 # energy_all()'s 1/2, a quotient of two constants broadcast one line above its site.
 LOCAL_CONSTANTS = {"energy_all": {"halfb"}}
-CALL = re.compile(r"\b(vmulk|vfmak|vkmul|vaddk|vrun_k|vmul|vfma|vadd|vsub|vcopysign|vdiv|vcmplt|vcmple)\(")
+CALL = re.compile(r"\b(vmulk|vfmak|vkmul|vaddk|vrun_k|vmul|vfma|vadd|vsub|vcopysign|vdiv|vcmplt|vcmple|zcall)\(")
 COMPARES = ("vcmplt", "vcmple")
+# The functions whose assignments name a constant: make_constants() and
+# force_constants(), and the zonal term's zonal_ready() (round 4's P1,
+# src/ias15_zonal.inc), which broadcasts the header's zonal[] the same way.
+CONST_FUNCS = ("make_constants", "force_constants", "zonal_ready")
+# The zonal term (src/ias15_zonal.inc, ROUND4.md P1) issues every operation
+# through its own zcall(op, dn, d, an, a, bn, b, n), which hands a and b to
+# vadd(), vsub(), vmul(), vdiv() or vsqrt() as they are. So its operands are
+# read at its sites, and a constant among them is left on today's call and
+# printed, as dtnew_*()'s are: the route is opt-in and a card measured it
+# neutral, and the term's sites are not this route's conversion.
+ZONAL_KIND = ("the zonal term's (src/ias15_zonal.inc, round 4's P1), on today's call: the route is opt-in and was "
+              "measured neutral, and its sites were not converted")
+
+
+def with_includes(path, raw):
+    """The source, then each `#include "*.inc"` it names from its own
+    directory, appended in order: the file is compiled with them, so the
+    recount reads them, and the source's own line numbers stay its own.
+    Returns the text and [(first line, file)] for naming a line."""
+    segs = [(1, os.path.basename(path))]
+    out = raw if raw.endswith("\n") else raw + "\n"
+    for name in re.findall(r'^\s*#\s*include\s+"([^"]+\.inc)"', raw, re.M):
+        inc = os.path.join(os.path.dirname(path), name)
+        with open(inc, encoding="utf-8") as f:
+            text = f.read()
+        segs.append((out.count("\n") + 1, name))
+        out += text if text.endswith("\n") else text + "\n"
+    return out, segs
+
+
+def where(segs, line):
+    first, name = [s for s in segs if s[0] <= line][-1]
+    return "%s:%d" % (name, line - first + 1)
 
 
 def strip_comments(src):
@@ -268,16 +307,17 @@ def recount(path):
     """Everything the source says about the sites."""
     with open(path, encoding="utf-8") as f:
         raw = f.read()
+    raw, segs = with_includes(path, raw)
     src = strip_comments(raw)
     funcs = functions(src)
     bodies = {n: b for n, _, b in funcs}
     if "make_constants" not in bodies or "force_constants" not in bodies:
         raise SystemExit("check_scalar: no make_constants() or force_constants() in %s" % path)
-    # What is a constant is read from how it is filled: by the two functions
+    # What is a constant is read from how it is filled: by the functions
     # that derive them, or by vbcast(), one value into every lane.
     consts = set()
-    for fn in ("make_constants", "force_constants"):
-        consts |= set(re.findall(r"\b([A-Z]\w*)(?:\[[^\]]*\])*\s*=[^=;][^;]*?\b(?:kderived|kint|kdec|valloc)\(", bodies[fn]))
+    for fn in CONST_FUNCS:
+        consts |= set(re.findall(r"\b([A-Z]\w*)(?:\[[^\]]*\])*\s*=[^=;][^;]*?\b(?:kderived|kint|kdec|valloc)\(", bodies.get(fn, "")))
     consts |= {n for n in re.findall(r"\bvbcast\(\s*(\w+)\s*[,\[]", src) if n[0].isupper()}
     per_system = set(re.findall(r"\bbcast_sys\(\s*(\w+)\s*,", src))
     sites, left, bad = [], [], []
@@ -301,6 +341,22 @@ def recount(path):
             if call == "vrun_k":
                 bad.append("%s:%d: a site calls vrun_k() itself, whose fallback copies into scratch: the default route "
                            "must be today's call, through a helper" % (name, line))
+                continue
+            if call == "zcall":
+                # zcall(op, dn, d, an, a, bn, b, n): a and b are the operands
+                if len(args) != 8:
+                    bad.append("%s, %s: a zcall() that is not (op, dn, d, an, a, bn, b, n): %s"
+                               % (name, where(segs, line), ", ".join(args)))
+                    continue
+                if args[7] == "1":
+                    continue
+                hit = [base(o) for o in (args[4], args[6]) if base(o) in known]
+                if not hit:
+                    continue
+                op = {"'+'": "add", "'-'": "sub", "'*'": "mul", "'/'": "div"}.get(args[0], args[0])
+                why = ("a divide: cft_div has no scalar form, and is not an opcode cft_run_ex can take" if op == "div"
+                       else ZONAL_KIND)
+                left.append((why, name, hit[0], args[7], "zcall:" + op, line))
                 continue
             if call in HELPERS:
                 pos = HELPERS[call][3]
@@ -694,6 +750,8 @@ def main():
              ["--dt", "0.6", "--epsilon", "1e-9", "--steps", "60", "--sample", "20", "--max-iter", "60"]),
         Case("outer x3, adaptive", outer3, "systems", ["--dt", "40", "--epsilon", "1e-9", "--steps", "12", "--sample", "6", "--max-iter", "60"]),
         Case("outer x3, fixed: systems that share a step", outer3, "shared", ["--dt", "40", "--epsilon", "0", "--steps", "12", "--sample", "6"]),
+        Case("Saturn with J2 and J4, a moon and a test particle", p("zonal_saturn.txt"), "adaptive",
+             ["--dt", "100", "--epsilon", "1e-9", "--steps", "20", "--sample", "10"]),
     ]
     for c in cases:
         c.mixed = "mixed" in c.name

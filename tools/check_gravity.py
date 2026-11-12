@@ -58,10 +58,12 @@
 #      were all massless. And an ensemble of two systems with `active 5`
 #      against every body active, and its member against the system alone.
 #   2c. The problem lines' refusals: an active count of 0 or past N, a
-#      second active line, a zonal line (until round 4's P1 builds the
-#      term), and a corrector schedule recorded with `active 5` replayed
-#      without it - the run key names the line, so a schedule replays only
-#      its own N_active.
+#      second active line, and a corrector schedule recorded with `active 5`
+#      replayed without it - the run key names the line, so a schedule
+#      replays only its own N_active. And the zonal line, which P0 refused
+#      until round 4's P1 built the term: accepted now, named by the
+#      record's `# zonal` line and carried by the run key (the term itself
+#      is tools/check_zonal.py's).
 #   3. The body cap's refusal still holds one past it. The cap is read
 #      from src/ias15_limits.h, never typed here. (Its one force
 #      evaluation, at the cap, on the routes against the elementwise
@@ -399,9 +401,22 @@ def main():
         rc, out, err = run([cft, "--format", "fp64", "--problem", path, "--steps", "1", "--quiet"])
         verdict(rc != 0 and needle in err and ("1 to N = 8" in err or needle == "a second active line"),
                 "%s is refused by name (rc %d): %s" % (what, rc, err.strip()[-160:]))
-    rc, out, err = run([cft, "--format", "fp64", "--problem", p_zonal, "--steps", "1", "--quiet"])
-    verdict(rc != 0 and "round 4's P1" in err,
-            "a zonal line is refused by name until round 4's P1 builds the term (rc %d): %s" % (rc, err.strip()[-160:]))
+    # P0's refusal of the zonal line, replaced by round 4's P1: the line is
+    # accepted, the record names it and the run key carries it. The term
+    # itself is tools/check_zonal.py's.
+    zsched = os.path.join(scratch, "outer8_zonal.sched")
+    rc, out, err = run([cft, "--format", "fp64", "--problem", p_zonal, "--dt", "40", "--epsilon", "1e-9", "--steps", "2",
+                        "--sample", "1", "--quiet", "--record-iters", zsched])
+    zline = re.search(r"^# zonal body 0 of every system, about z: R= \S+ J2= \S+ J4= \S+; it acts on 7 bodies a system, "
+                      r"and body 0 takes the reaction of 4$", out, re.M)
+    zkey = ""
+    if rc == 0 and os.path.exists(zsched):
+        with open(zsched) as f:
+            zkey = next((l for l in f if l.startswith("# run ")), "")
+    verdict(rc == 0 and zline is not None and " zonal=0," in zkey,
+            "a zonal line is accepted (rc %d), named by the record's # zonal line (7 bodies feel it, 4 react, under active "
+            "5) and carried by the schedule's run key%s"
+            % (rc, "" if rc == 0 and zline and " zonal=0," in zkey else ": %s" % (err.strip()[-160:] or "no # zonal line or key")))
     sched = os.path.join(scratch, "outer8_active5.sched")
     common = ["--format", "fp64", "--dt", "40", "--epsilon", "1e-9", "--steps", "4", "--sample", "2", "--quiet"]
     rc1, _, err1 = run([cft, "--problem", p_a5, "--record-iters", sched] + common)

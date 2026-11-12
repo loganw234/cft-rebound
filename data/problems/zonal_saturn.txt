@@ -1,0 +1,33 @@
+# Saturn with J2 and J4, a Mimas-like moon and one ring particle: the
+# physics problem of the zonal term's gate (round 4's P1). Written by
+# `python tools/check_zonal.py --write-problem`, which derives every value
+# below and which the gate holds this file to, byte for byte.
+#
+# Units km and s, G = 1, each mass a GM in km^3 s^-2; each number is the
+# nearest binary64 to the source's decimal (or to the state its elements
+# give, computed in mpmath at 50 digits), written exactly as hex.
+#
+#   Saturn's GM, 37.931e6: NASA's Saturn fact sheet
+#     (nssdc.gsfc.nasa.gov/planetary/factsheet/saturnfact.html).
+#   J2 = 16290.573e-6 and J4 = -935.314e-6: Iess et al. 2019, Science 364,
+#     eaat2965 (Cassini's Grand Finale), as tabulated by Fortney et al.,
+#     arXiv:2304.09215, Table 4.1. Both read there by cft-fp256's study
+#     GPU-E, section 4, which names no reference radius for them.
+#   R = 60330 km, the radius those J2 and J4 are referred to: BELIEVED (the
+#     study's belief, and this file's), the reference radius of Cassini's
+#     gravity solutions. It is not Saturn's 1-bar equatorial radius,
+#     60,268 km: a J_n means something only with its own radius.
+#   The moon: Mimas's GM, 2.50349, and its a = 186,000 km and e = 0.02
+#     (JPL SSD, via the same study). Its inclination of 3 degrees, node,
+#     periapse and phase are synthetic.
+#   The ring particle: massless, a = 133,410 km (the Encke gap, NASA's ring
+#     fact sheet, via the study), e = 0.02 and i = 2 degrees, synthetic.
+#   Both orbits are Keplerian about Saturn alone at t = 0; in the oblate
+#   field they precess. `active 2`: the particle is a test particle.
+name zonal_saturn
+G 0x1.0000000000000p+0
+active 2
+zonal 0 0x1.d754000000000p+15 0x1.0ae79d91288f7p-6 -0x1.ea5fb854f9344p-11
+body saturn 0x1.2163fc0000000p+25 0x0.0p+0 0x0.0p+0 0x0.0p+0 0x0.0p+0 0x0.0p+0 0x0.0p+0
+body mimas 0x1.40725c3dee782p+1 -0x1.67e53105dc680p+16 0x1.32c60b77d514cp+17 0x1.260bb01771736p+13 -0x1.92b6575ae7dadp+3 -0x1.d51c1d2c0496fp+2 0x1.0992f322ff685p-3
+body ring 0x0.0p+0 -0x1.ea6ebc08f2789p+15 0x1.cfb8ed3cc919fp+16 -0x1.2254dd195b9b9p+12 -0x1.d4db5e42e90f4p+3 -0x1.0322741ee3b14p+3 0x1.73a94ed7f14d9p-4

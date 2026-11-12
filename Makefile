@@ -622,10 +622,17 @@ IN_CORRECTOR := --input tools/check_corrector.py $(IN_PROGRAM) $(IN_PROB) $(IN_P
 IN_GRAVITY  := --input tools/check_gravity.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) \
                --input tools/make_nbody.py --input tools/make_ensemble.py --input src/ias15_limits.h
 # tools/check_scalar.py: the program on every problem, on both engines, the
-# ensembles it generates, the source it recounts the sites from, and with
-# --library the drop-in gate and gate_real, the route forced on.
-IN_SCALAR   := --input tools/check_scalar.py --input src/ias15_cft.c $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) \
+# ensembles it generates, the source it recounts the sites from (with the
+# zonal term's include, which the recount reads too), and with --library the
+# drop-in gate and gate_real, the route forced on.
+IN_SCALAR   := --input tools/check_scalar.py --input src/ias15_cft.c --input src/ias15_zonal.inc $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) \
                --input tools/make_ensemble.py $(IN_DROPIN) $(IN_REAL)
+# tools/check_zonal.py (round 4's P1): the program, its selftest included, on
+# the zonal problem it derives and holds, on the program engine too, and the
+# golden model it runs from the pinned cft-fp256 clone (whose pin is MANIFEST).
+GOLDEN_PY   := $(wildcard third_party/cft-fp256/python/cft_golden/*.py)
+IN_ZONAL    := --input tools/check_zonal.py $(IN_PROGRAM) --input data/problems/zonal_saturn.txt $(IN_PROGS) \
+               $(patsubst %,--input %,$(GOLDEN_PY)) --input third_party/MANIFEST
 # tools/check_seams.py: gate_real through check_checkpoint's runner, and
 # the program on the problems, the program images and an ensemble
 IN_SEAMS    := --input tools/check_seams.py --input tools/check_checkpoint.py $(IN_REAL) \
@@ -649,6 +656,7 @@ check: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_door --mode full --input tools/check_door.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_door.py --build $(B)
 	$(GATE_CACHE) --leg check_corrector --mode full $(IN_CORRECTOR) $(IN_DROPIN) -- $(PYTHON) tools/check_corrector.py --build $(B) --library
 	$(GATE_CACHE) --leg check_gravity --mode full $(IN_GRAVITY) $(IN_DROPIN) -- $(PYTHON) tools/check_gravity.py --build $(B) --library
+	$(GATE_CACHE) --leg check_zonal --mode full $(IN_ZONAL) -- $(PYTHON) tools/check_zonal.py --build $(B)
 	$(GATE_CACHE) --leg check_scalar --mode full $(IN_SCALAR) -- $(PYTHON) tools/check_scalar.py --build $(B) --library
 	$(GATE_CACHE) --leg check_records --mode full --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B)
 	$(GATE_CACHE) --leg check_ensemble --mode full --input tools/check_ensemble.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_ensemble.py --build $(B)
@@ -678,6 +686,7 @@ check-quick: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_door --mode quick --input tools/check_door.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_door.py --build $(B) --formats fp64
 	$(GATE_CACHE) --leg check_corrector --mode quick $(IN_CORRECTOR) $(IN_DROPIN) -- $(PYTHON) tools/check_corrector.py --build $(B) --quick --library
 	$(GATE_CACHE) --leg check_gravity --mode quick $(IN_GRAVITY) $(IN_DROPIN) -- $(PYTHON) tools/check_gravity.py --build $(B) --quick --library
+	$(GATE_CACHE) --leg check_zonal --mode quick $(IN_ZONAL) -- $(PYTHON) tools/check_zonal.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_scalar --mode quick $(IN_SCALAR) -- $(PYTHON) tools/check_scalar.py --build $(B) --quick --library
 	$(GATE_CACHE) --leg check_records --mode quick --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_ensemble --mode quick --input tools/check_ensemble.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_ensemble.py --build $(B) --quick
@@ -710,6 +719,7 @@ check-light: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_door --mode quick --input tools/check_door.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_door.py --build $(B) --formats fp64
 	$(GATE_CACHE) --leg check_corrector --mode quick $(IN_CORRECTOR) $(IN_DROPIN) -- $(PYTHON) tools/check_corrector.py --build $(B) --quick --library
 	$(GATE_CACHE) --leg check_gravity --mode quick $(IN_GRAVITY) $(IN_DROPIN) -- $(PYTHON) tools/check_gravity.py --build $(B) --quick --library
+	$(GATE_CACHE) --leg check_zonal --mode quick $(IN_ZONAL) -- $(PYTHON) tools/check_zonal.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_scalar --mode quick $(IN_SCALAR) -- $(PYTHON) tools/check_scalar.py --build $(B) --quick --library
 	$(GATE_CACHE) --leg check_records --mode quick --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_ensemble --mode quick --input tools/check_ensemble.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_ensemble.py --build $(B) --quick

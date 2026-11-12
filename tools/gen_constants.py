@@ -24,6 +24,10 @@
 #      them - and the binary64 rounding is done twice by different
 #      code (this file's integer rounding and CPython's Fraction ->
 #      float), which must agree.
+#   3. J2 and J4's coefficients (round 4's P1, src/ias15_zonal.inc),
+#      derived from P2 and P4 with the polynomial routines below: the
+#      force they factorise must be minus mpmath's own derivative of the
+#      potential, at points off the equatorial plane.
 #
 # A mismatch in either check means the wrong thing was derived, and
 # the script exits non-zero without writing anything.
@@ -203,6 +207,97 @@ def derive_arrays(h):
 
 
 # --------------------------------------------------------------------
+# J2 and J4's coefficients (ROUND4.md, P1), from P2 and P4
+# --------------------------------------------------------------------
+# Body k's zonal potential at r = (x, y, z) from it, u = z/r, is
+#   Phi_n = G M J_n R^n r^-(n+1) P_n(u),   n = 2 and 4,
+# the J part of Phi = -(G M / r)[1 - J2 (R/r)^2 P2(u) - J4 (R/r)^4 P4(u)].
+# Its gradient, with du/dx = -u x / r^2 and du/dz = (1 - u^2) / r, is
+#   -dPhi_n/dx = G M J_n R^n x r^-(n+3) [(n+1) P_n + u P_n'],
+#   -dPhi_n/dz = G M J_n R^n z r^-(n+3) [(n+1) P_n + u P_n' - P_n'/u].
+# Both brackets are polynomials in s = u^2 (n is even). Written over
+# P_n's own denominator d_n, the force is (n+1)/d_n times an integer
+# polynomial `fac` in s, and z's bracket is fac plus an integer `zoff`:
+# that is the factorisation src/ias15_zonal.inc evaluates (3.*J2 ... /2.
+# and 5.*J4 ... /8.), and the potential is d_n P_n over d_n. Every value
+# is a small integer, exact in every format; signed, so the integrator
+# adds each one. check 3 holds the algebra to mpmath's own derivative.
+ZONAL_NAMES = ("J2_NUM", "J2_DEN", "J2_S1", "J2_S0", "J2_Z0",
+               "J4_NUM", "J4_DEN", "J4_S2", "J4_S1", "J4_S0", "J4_Z0", "J4_Z1",
+               "P2_S1", "P2_S0", "P2_DEN", "P4_S2", "P4_S1", "P4_S0", "P4_DEN")
+
+def zonal_coefficients():
+    """{name: Fraction}: each degree's prefactor (n+1)/d_n as its two
+    integers, fac's and zoff's coefficients in s (S<i> multiplies s^i), and
+    d_n P_n's, all from the Legendre polynomials above."""
+    from math import gcd
+    out = {}
+    for n in (2, 4):
+        P = legendre_coeffs(n)
+        den = 1
+        for c in P:
+            den = den * c.denominator // gcd(den, c.denominator)
+        dP = poly_deriv(P)
+        Q = poly_add(poly_scale(P, Fraction(n + 1)), poly_mul_x(dP))   # (n+1) P + u P'
+        k = Fraction(den, n + 1)
+        if any(P[i] for i in range(1, len(P), 2)) or any(Q[i] for i in range(1, len(Q), 2)) or \
+           any(dP[i] for i in range(0, len(dP), 2)):
+            raise SystemExit("P_%d is not even: the zonal derivation does not apply" % n)
+        fac = [Q[2 * i] * k for i in range(n // 2 + 1)]                # in s, low -> high
+        zoff = [-dP[2 * i + 1] * k for i in range(n // 2)]              # - P'/u, in s
+        pot = [P[2 * i] * den for i in range(n // 2 + 1)]
+        if any(v.denominator != 1 for v in fac + zoff + pot):
+            raise SystemExit("J%d's coefficients are not integers over P_%d's denominator" % (n, n))
+        out["J%d_NUM" % n], out["J%d_DEN" % n] = Fraction(n + 1), Fraction(den)
+        for i, v in enumerate(fac):
+            out["J%d_S%d" % (n, i)] = v
+        for i, v in enumerate(zoff):
+            out["J%d_Z%d" % (n, i)] = v
+        for i, v in enumerate(pot):
+            out["P%d_S%d" % (n, i)] = v
+        out["P%d_DEN" % n] = Fraction(den)
+    if sorted(out) != sorted(ZONAL_NAMES):
+        raise SystemExit("the zonal derivation gives %s, and the header names %s" % (sorted(out), sorted(ZONAL_NAMES)))
+    return out
+
+
+def check_zonal(z):
+    """Check 3: the factorised force is minus the gradient of the potential,
+    and the potential is P_n, each at points off the plane, against mpmath's
+    own numerical derivative of Phi_n = r^-(n+1) P_n(z/r) (G M J_n R^n = 1)."""
+    ok = True
+    tol = mpf(10) ** (-(DPS - 30))
+    q = lambda f: mpf(f.numerator) / f.denominator
+    pts = [(mpf("0.37"), mpf("-1.21"), mpf("0.83")), (mpf("-2.6"), mpf("0.4"), mpf("-1.9")),
+           (mpf("0.05"), mpf("0.11"), mpf("1.7"))]
+    for n in (2, 4):
+        Pn = lambda u, n=n: mpmath.legendre(n, u)
+        phi = lambda x, y, zz, n=n: (x * x + y * y + zz * zz) ** (-mpf(n + 1) / 2) * \
+            Pn(zz / mpmath.sqrt(x * x + y * y + zz * zz))
+        pref = z["J%d_NUM" % n] / z["J%d_DEN" % n]
+        for (x, y, zz) in pts:
+            r = mpmath.sqrt(x * x + y * y + zz * zz)
+            s = (zz / r) ** 2
+            fac = sum(q(z["J%d_S%d" % (n, i)]) * s ** i for i in range(n // 2 + 1))
+            zf = fac + sum(q(z["J%d_Z%d" % (n, i)]) * s ** i for i in range(n // 2))
+            c = q(pref) * r ** (-(n + 3))
+            want = (c * x * fac, c * y * fac, c * zz * zf)
+            got = [-mpmath.diff(phi, (x, y, zz), d) for d in ((1, 0, 0), (0, 1, 0), (0, 0, 1))]
+            pot = sum(q(z["P%d_S%d" % (n, i)]) * s ** i for i in range(n // 2 + 1)) / q(z["P%d_DEN" % n])
+            for w, g in zip(want, got):
+                if abs(w - g) > tol * (abs(g) + abs(w)):
+                    ok = False
+                    print("FAIL J%d at %s: the factorised force %s, -grad Phi %s" %
+                          (n, (mpmath.nstr(x, 4), mpmath.nstr(y, 4), mpmath.nstr(zz, 4)), mpmath.nstr(w, 20), mpmath.nstr(g, 20)))
+            if abs(pot - Pn(zz / r)) > tol:
+                ok = False
+                print("FAIL P%d at a point: d_n P_n / d_n is not P_n" % n)
+    print("  J2 and J4: %d coefficients from P2 and P4, the force minus the potential's gradient at %d points "
+          "off the plane, %s" % (len(z), len(pts), "all agree" if ok else "MISMATCHES"))
+    return ok
+
+
+# --------------------------------------------------------------------
 # Correct rounding to a binary format, done on exact integers
 # --------------------------------------------------------------------
 def mpf_to_fraction(x):
@@ -374,13 +469,18 @@ def main():
         worst = max(worst, abs(h[i] - mpf(lits["h"][i])))
     print("  max |h_derived - h_literal(31 digits)| = %s" % mpmath.nstr(worst, 3))
 
-    if not (ok1 and ok2):
+    print("check 3: J2 and J4's coefficients against the potential's gradient")
+    zonal = zonal_coefficients()
+    ok3 = check_zonal(zonal)
+
+    if not (ok1 and ok2 and ok3):
         print("DERIVATION CHECK FAILED - nothing written")
         return 1
 
     # ---------------- emission ----------------
     everything = dict(arrays)
     everything.update(derived)
+    everything["zonal"] = [mpf(zonal[k].numerator) / zonal[k].denominator for k in ZONAL_NAMES]
     out = {"dps": DPS, "dec_digits": DEC_DIGITS, "formats": {}, "decimal": {}}
     for name, vals in everything.items():
         out["decimal"][name] = [decimal_text(mpf_to_fraction(v), DEC_DIGITS) for v in vals]
@@ -423,6 +523,14 @@ def main():
         w("/* rinv[i] = 1/rr[i]; hf[7*(n-1) + lvl] = h[n] * (j+1)/(j+3) with j = 6 - lvl,\n")
         w(" * the FMA-form predictor's factor at the b_j level of substep n. Both are\n")
         w(" * exact rationals rounded once, for --arith fma. */\n")
+        w("/* zonal[]: J2 and J4's coefficients, small integers derived from P2 and P4\n")
+        w(" * (tools/gen_constants.py, zonal_coefficients()), each exact in every format,\n")
+        w(" * for src/ias15_zonal.inc. J<n>_NUM/J<n>_DEN is the force's (n+1)/d_n, with\n")
+        w(" * d_n P_n's denominator; J<n>_S<i> multiplies s^i, s = (z/r)^2, in its\n")
+        w(" * polynomial fac and J<n>_Z<i> in z's addend; P<n>_S<i> and P<n>_DEN are\n")
+        w(" * d_n P_n and d_n, for the potential. */\n")
+        for i, k in enumerate(ZONAL_NAMES):
+            w("#define IAS15_ZONAL_%s %d\n" % (k, i))
         w("\n")
         for name, vals in everything.items():
             n = len(vals)
