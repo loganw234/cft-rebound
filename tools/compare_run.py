@@ -60,6 +60,11 @@
 # least SHA-256 of (seed, index), so a seed picks the same members on every
 # host and every Python. P2's generator sorts waves by radius, so the index
 # is radius. Every member whose trailer shows a rejected step is added.
+# The sample trusts the trailers it is testing (V4 measured it): a member
+# whose trailer under-reports its rejections leaves the sample, and an
+# unsampled member's lines are never rerun. Its trailer is still held to
+# the record's total and its lines to their places, but its bits are not
+# compared. The driver says so beside the sample.
 #
 # THE COUNTERS, beside each member's verdict:
 #   - steps, rejections, mean and largest passes and cap hits, from the
@@ -90,9 +95,11 @@
 # Until P3's tools are in the tree the driver prints
 #     particles: not sampled (no particle replay in this tree)
 # and once they are, while this place is still empty, it says they are NOT
-# WIRED - so tools/check_compare_run.py, which asserts the line above,
-# fails until the seam is done. A stand-in that outlives the thing it stood
-# in for is METHOD.md's canonical failure.
+# WIRED, ends RESULT: FAIL and exits 1, whatever the members did. So a
+# caller that reads only the exit code sees it too, and
+# tools/check_compare_run.py, which asserts both, fails until the seam is
+# done. A stand-in that outlives the thing it stood in for is METHOD.md's
+# canonical failure.
 #
 # LIMITS, stated:
 #   - the record does not carry --adaptive-mode, --softening, --min-dt or
@@ -106,8 +113,10 @@
 #     record line that names it is P1's to write.
 #   - the record is read twice, as a stream, so its size is not held in
 #     memory; the problem file is.
+#   - the sample trusts the trailers it is testing (THE SAMPLE, above).
 #
-#   exit 0: every sampled member identical; 1: a FAIL; 2: refused
+#   exit 0: every sampled member identical; 1: a FAIL, or particles due and
+#   not wired; 2: refused
 
 import argparse
 import hashlib
@@ -157,6 +166,10 @@ FLOOR = re.compile(r"^FLOOR (\S+) vs (\S+): (\d+) common samples, last step (\d+
 # P1's measurement that rounding a term to binary64 in BOTH runs leaves
 # binary128 against binary256 where the correct build has it).
 FORMAT_DIFF_SCOPE = "the difference shows the narrower format's round-off on these steps; a narrowing both runs share passes it"
+# What the sample cannot see, printed beside it (V4, 2026-11-12): it is
+# chosen from the trailers under test.
+SAMPLE_LIMIT = ("sample: it trusts the trailers it is testing: a member whose trailer under-reports its rejections "
+                "leaves the sample, and an unsampled member's lines are never rerun")
 
 
 class Refused(Exception):
@@ -689,9 +702,13 @@ def hold_rerun(rec, s, mine, engine):
     # both ways for the active line: massless test particles run all active
     # give the same bits, so only this line says which run it was
     if mine.active != rec.active:
-        raise Refused("%s: %s here, and %s in the record" % (
-            what, "active %d" % mine.active[0] if mine.active else "no `# active` line",
-            "active %d" % rec.active[0] if rec.active else "no `# active` line"))
+        if not mine.active or not rec.active:
+            raise Refused("%s: %s here, and %s in the record" % (
+                what, "active %d" % mine.active[0] if mine.active else "no `# active` line",
+                "active %d" % rec.active[0] if rec.active else "no `# active` line"))
+        for field, a, b in zip(("active count", "bodies a system", "pairs a force evaluation"), mine.active, rec.active):
+            if a != b:
+                raise Refused("%s: the `# active` line's %s is %d here, and %d in the record" % (what, field, a, b))
     # the rest one way: every line this tree writes must be the record's
     # too; a line only the record has is its producer's own
     absent = [l for l in mine.other if l not in rec.other]
@@ -882,6 +899,7 @@ def compare_run(args):
         print("sample: seed %d, %d strata by member index (%s): %s; with a rejected step: %s; %d of %d members" % (
             args.seed, len(ranges), ", ".join("%d-%d" % (lo, hi - 1) for lo, hi in ranges),
             ", ".join(str(m) for m in picks), ", ".join(str(s) for s in rej) or "none", len(members), rec.E))
+        print(SAMPLE_LIMIT)
     else:
         members = [0]
         print("sample: the record's one system%s" % (", member %d of its problem" % rec.member
@@ -942,13 +960,18 @@ def compare_run(args):
     finally:
         if not args.keep:
             shutil.rmtree(work, ignore_errors=True)
-    if failed or whole:
-        print("RESULT: FAIL: %d of %d sampled member(s) identical; FAIL: %s%s" % (
-            same, len(members), ", ".join("member %d" % rec.label_of(s) for s in sorted(failed)) or "none",
-            "; and the record as a whole" if whole else ""))
+    if failed or whole or not particles_whole:
+        why = []
+        if failed:
+            why.append("FAIL: " + ", ".join("member %d" % rec.label_of(s) for s in sorted(failed)))
+        if whole:
+            why.append("FAIL: the record as a whole")
+        if not particles_whole:
+            why.append("particles are due and NOT sampled: P3's replay is in this tree and this driver does not call it")
+        print("RESULT: FAIL: %d of %d sampled member(s) identical; %s" % (same, len(members), "; ".join(why)))
         return 1
-    print("RESULT: PASS: %d sampled member(s) of %d, every one identical to this tree's rerun, its counters beside it%s"
-          % (same, rec.E, "" if particles_whole else "; particles due and NOT sampled"))
+    print("RESULT: PASS: %d sampled member(s) of %d, every one identical to this tree's rerun, its counters beside it"
+          % (same, rec.E))
     return 0
 
 

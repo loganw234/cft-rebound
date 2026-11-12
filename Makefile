@@ -633,10 +633,14 @@ IN_SEAMS    := --input tools/check_seams.py --input tools/check_checkpoint.py $(
 # tools/check_compare_run.py: the driver it holds and every script the
 # driver imports or runs, the program the driver reruns, REBOUND's own
 # program (whose record the driver must refuse) on the problem it reads, and
-# the program images for the program-engine case (ROUND4.md, P4).
+# the program images for the program-engine case (ROUND4.md, P4). P3's two
+# files are inputs whenever they exist: the driver's verdict turns on their
+# presence (its particle place), so a pass from before they landed must not
+# satisfy a run after.
 IN_COMPARE  := --input tools/check_compare_run.py --input tools/compare_run.py --input tools/check_ensemble.py \
                --input tools/check_records.py --input tools/check_equivalence.py --input tools/compare_formats.py \
-               --input tools/oracle.py $(IN_PROGRAM) $(IN_REF) --input data/problems/kepler.txt $(IN_PROGS)
+               --input tools/oracle.py $(IN_PROGRAM) $(IN_REF) --input data/problems/kepler.txt $(IN_PROGS) \
+               $(patsubst %,--input %,$(wildcard tools/extract_particle.py tools/check_replay.py))
 
 # The pins, checked at build time and not only at fetch time: a clone
 # under third_party/ that is not at its MANIFEST commit fails every tier

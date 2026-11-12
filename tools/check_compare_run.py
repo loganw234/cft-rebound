@@ -18,11 +18,14 @@
 # massless test particles, `active 2`. Member k's particles start at radii
 # 0.5 + k/16 + j/64, so the member index is radius, as in P2's generator.
 # Orbits are near circular and inclined about 1.8 degrees, alternately up
-# and down, from Pythagorean triples: every value is one or two correctly
-# rounded binary64 operations, so the file is the same on every host. A
-# first step of 0.3 is rejected by the innermost members and accepted by
-# the rest, so the sample's "every member with a rejected step" is
-# exercised, and its strata are a proper subset.
+# and down, from Pythagorean triples. Every coordinate is a chain of
+# correctly rounded binary64 operations - divides, multiplies and one square
+# root, and no other library function: a particle's x takes two roundings,
+# its y, z and vx four, and its vy and vz six (V4 counted them) - so the
+# file is the same on every IEEE host. A first step of 0.3 is rejected by
+# the innermost members and accepted by the rest, so the sample's "every
+# member with a rejected step" is exercised, and its strata are a proper
+# subset.
 # Member 8, the last, holds the other kind of rejection: its first particle
 # is retrograde in the moon's own plane, 1/128 outside its radius, and meets
 # it head on near t = 1, after the first attempt and a few more steps have
@@ -50,7 +53,9 @@
 #      and member 8's state is the record's in every value but dt_next,
 #      which differs only on a sample line printed just before a rejected
 #      attempt.
-#   2. The particles line, exactly: no particle replay is in this tree.
+#   2. The particles line, exactly: no particle replay is in this tree; and
+#      beside the sample, its limit, exactly: it trusts the trailers it is
+#      testing.
 #   3. The sample: --plan for seeds 1 to 10, each with every rejecting
 #      member and one member a stratum; not all ten alike; seed 1's is case
 #      1's.
@@ -66,7 +71,12 @@
 #   a. one byte of one sampled member's last sample line (an x of a test
 #      particle, its last hex digit): FAIL, naming that member and line and
 #      the column; every other sampled member IDENTICAL; and a2, the same
-#      in case 5's one-system record;
+#      in case 5's one-system record. Each of those moves a binary64 bit,
+#      and a driver comparing binary64 values passed them all (V4); so
+#      a3, the sign of a zero flipped (a sample-0 dt_last made -0), and a4,
+#      one hex digit past binary64 changed in case 4's binary128 record
+#      (its binary64 value, asserted here, unmoved): each FAIL, naming the
+#      member, the line and the column;
 #   b. one byte of a sampled member's trailer (mean_pc_iterations): FAIL,
 #      naming the member and the counter;
 #   c. every line of one member that is not sampled deleted: FAIL, naming
@@ -82,7 +92,13 @@
 #   g. a different problem file under the record's name: a test particle's
 #      mass 0 made 2^-40, the active line dropped (neither changes a bit:
 #      ROUND4.md P0's inert claim), one initial coordinate moved one ulp,
-#      and the name changed. Each REFUSED, naming what differs.
+#      and the name changed. Each REFUSED, naming what differs;
+#   h. the record's `# active` line with one more pair than this tree's
+#      rows: REFUSED, naming the pair count;
+#   i. P3's tools in the tree and the particle place empty: a copy of the
+#      driver beside an empty stand-in for each of P3's two files in turn
+#      says NOT WIRED, ends RESULT: FAIL and exits 1, though its member is
+#      IDENTICAL; beside neither, it passes with the line in case 2.
 #
 # Every case runs a fixed seed and fixed bits, so the verdict is the same
 # on every run (tools/gate_cache.py). None of its step counts is scaled by
@@ -92,6 +108,7 @@ import argparse
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -101,6 +118,7 @@ import mpmath
 here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, here)
 from check_ensemble import parse as parse_samples          # noqa: E402
+from check_equivalence import hex_to_fraction               # noqa: E402
 from oracle import parse as oracle_parse, F2m               # noqa: E402
 
 root = os.path.dirname(here)
@@ -116,6 +134,10 @@ INC = (4095, 128, 4097)        # cos and sin of about 1.8 degrees, exactly ratio
 # degrees ahead of it (cos, sin = -5/13, 12/13), so they meet near t = 1.
 FLYBY, FLYBY_R, FLYBY_AT = E - 1, 1.0 + 1.0 / 128, (-5, 12, 13)
 PARTICLES = "particles: not sampled (no particle replay in this tree)"
+NOT_WIRED = "particles: NOT SAMPLED, and NOT WIRED: P3's tools/%s is in this tree"
+# The sample's limit, as V4 measured it: printed beside the sample.
+SAMPLE_LIMIT = ("sample: it trusts the trailers it is testing: a member whose trailer under-reports its rejections "
+                "leaves the sample, and an unsampled member's lines are never rerun")
 # What --format-diff must say beside its number (the lead's ruling,
 # .ledger/urgent/lead-gate4-ruling.md), and the note a rejecting member's
 # difference must carry, by whether its first attempt was rejected. Stated
@@ -198,6 +220,18 @@ def columns(text):
     return nlead, per
 
 
+def scalar_tok(text, name):
+    """Where a field before the bodies is in a split sample line, read from
+    the record's own `# columns:` line: "system s" is two tokens, the word
+    sample one more, and each name after it one."""
+    line = next(l for l in text.splitlines() if l.startswith("# columns:"))
+    head = line.split(":", 1)[1].split(" then per body ")[0].split()
+    pre = 0
+    if head[:1] == ["system"]:
+        head, pre = head[2:], 2
+    return pre + 1 + head.index(name)
+
+
 def value_index(text, name):
     """Where a field is in check_ensemble.parse()'s list of a sample's values
     (every field after the sample's index and step), read from the record's
@@ -254,8 +288,8 @@ def main():
             f.write(out)
         return path, out
 
-    def drive(rec, fmt, arith="rebound", extra=(), problem=None):
-        cmd = [py, driver, rec, "--problem", problem or waves, "--format", fmt, "--arith", arith,
+    def drive(rec, fmt, arith="rebound", extra=(), problem=None, via=None):
+        cmd = [py, via or driver, rec, "--problem", problem or waves, "--format", fmt, "--arith", arith,
                "--exe", cft, "--programs", progs, "--strata", "3", "--seed", "1"] + list(extra)
         rc, out, err = run(cmd)
         if err.strip():
@@ -350,6 +384,8 @@ def main():
                 "gate's mpmath from tools/oracle.py's parse to %s relative, at the samples they name%s" % (
                     label, n, mpmath.nstr(worst, 3), "; " + ", ".join(missing + at_wrong) if missing or at_wrong else ""))
         verdict(out.count("\n" + PARTICLES + "\n") == 1, "%s: the particles line, exactly: '%s'" % (label, PARTICLES))
+        verdict(out.count("\n" + SAMPLE_LIMIT + "\n") == 1 and out.find(SAMPLE_LIMIT) > out.find("\nsample: seed "),
+                "%s: beside the sample, its limit, exactly: '%s'" % (label, SAMPLE_LIMIT))
         if fdiff:
             diffs = {int(m.group(1)): m for m in re.finditer(
                 r"^  member (\d+): format difference: (\S+) against (\S+) on the same (\d+) accepted steps .*?"
@@ -468,13 +504,16 @@ def main():
 
     # ---------------------------------------------------------------- case 4
     print("check_compare_run: case 4 - the same problem at binary128 and in the FMA form, held as recorded")
-    rec128, _ = record("waves_fp128_short.rec", "fp128", 4, 2)
+    rec128, text128 = record("waves_fp128_short.rec", "fp128", 4, 2)
     recfma, _ = record("waves_fma_short.rec", "fp64", 4, 2, arith="fma")
+    smp128 = None
     for label, rec, fmt, arith in (("fp128", rec128, "fp128", "rebound"), ("fp64 FMA form", recfma, "fp64", "fma")):
         rc, out = drive(rec, fmt, arith) if rec else (-1, "no record")
         lines = member_lines(out)
         verdict(rc == 0 and "\nRESULT: PASS: " in out and lines and all(v[0] == "IDENTICAL" for v in lines.values()),
                 "%s: held at its own format and arithmetic, PASS, %d members IDENTICAL" % (label, len(lines)))
+        if fmt == "fp128":
+            smp128 = sampled(out)
 
     # ---------------------------------------------------------------- case 5
     print("check_compare_run: case 5 - one system's records: a --member run's, and a single problem's")
@@ -576,6 +615,54 @@ def main():
             "a2. one byte of the --member %d record's line %d: FAIL naming member %d (w%d), line %d and the column (rc %d)"
             % (k6, i + 1, k6, k6, i + 1, rc))
 
+    # The next two are V4's (2026-11-12): a comparison of binary64 values,
+    # not of bits, passed every control above. Every one of them moves a
+    # binary64 bit; these two move none.
+    # a3. the sign of a zero: a sampled member's sample-0 dt_last made -0
+    k = smp64["members"][0]
+    i = min(i for i in lines64 if rows[i].startswith("system %d sample 0 " % k))
+    toks = rows[i].split()
+    t = scalar_tok(text, "dt_last")
+    tok = toks[t]
+    toks[t] = "-" + tok
+    rc, out = drive(write("control_signed_zero.rec", rows[:i] + [" ".join(toks)] + rows[i + 1:]), "fp64")
+    lines = member_lines(out)
+    others = [m for m in lines if m != k]
+    verdict(hex_to_fraction(tok) == (0, False) and rc == 1 and "\nRESULT: FAIL: " in out and
+            lines.get(k, ("",))[0] == "FAIL" and
+            ("first differing line: record line %d (system %d sample 0, step 0): dt_last: record -%s, here %s"
+             % (i + 1, k, tok, tok)) in lines[k][1] and others and all(lines[m][0] == "IDENTICAL" for m in others),
+            "a3. the sign of a zero, member %d's dt_last %s made -%s on line %d: FAIL naming member %d, line %d and "
+            "dt_last; the other %d sampled IDENTICAL (rc %d)" % (k, tok, tok, i + 1, k, i + 1, len(others), rc))
+
+    # a4. one hex digit past binary64, in case 4's binary128 record: tp0's x
+    # in a sampled member's last line, its last hex digit, which leaves the
+    # value's binary64 rounding where it was
+    if smp128 and text128:
+        rows128 = text128.splitlines()
+        nlead128, per128 = columns(text128)
+        k = smp128["picks"][-1]
+        i = max(i for i, l in enumerate(rows128) if l.startswith("system %d sample " % k))
+        toks = rows128[i].split()
+        t = nlead128 + 2 * len(per128) + per128.index("x")
+        tok = toks[t]
+        mant = tok.split("p")[0]
+        toks[t] = mant[:-1] + "%x" % (int(mant[-1], 16) ^ 1) + tok[len(mant):]
+        digits = len(mant.split(".")[1]) if "." in mant else 0
+        past64 = digits > 13 and float(hex_to_fraction(toks[t])[0]) == float(hex_to_fraction(tok)[0])
+        rc, out = drive(write("control_past64.rec", rows128[:i] + [" ".join(toks)] + rows128[i + 1:]), "fp128")
+        lines = member_lines(out)
+        others = [m for m in lines if m != k]
+        verdict(past64 and rc == 1 and "\nRESULT: FAIL: " in out and lines.get(k, ("",))[0] == "FAIL" and
+                ("first differing line: record line %d (system %d sample " % (i + 1, k)) in lines[k][1] and
+                ("x of body 2 (tp0): record %s, here %s" % (toks[t], tok)) in lines[k][1] and
+                others and all(lines[m][0] == "IDENTICAL" for m in others),
+                "a4. one hex digit past binary64 (digit %d of %d, the same binary64 value): member %d's tp0 x %s made %s "
+                "on line %d of the binary128 record: FAIL naming member %d, line %d and the column; the other %d "
+                "sampled IDENTICAL (rc %d)" % (digits, digits, k, tok, toks[t], i + 1, k, i + 1, len(others), rc))
+    else:
+        verdict(False, "a4. case 4's binary128 record and its sample, to change a digit past binary64 in")
+
     # b. one byte of a sampled member's trailer
     k = smp64["picks"][0]
     i = next(i for i, l in enumerate(rows) if l.startswith("# system %d steps_done=" % k))
@@ -654,6 +741,51 @@ def main():
         verdict(rc == 2 and needle in out and "IDENTICAL" not in out,
                 "g. a different problem file under the record's name, %s: REFUSED by name (rc %d)%s"
                 % (label, rc, "" if rc == 2 and needle in out else ": " + out[-600:]))
+
+    # h. the record's `# active` line with another pair count than this
+    # tree's rows: refused at the first rerun, naming the field that differs
+    i = next(i for i, l in enumerate(rows) if l.startswith("# active "))
+    m = re.match(r"^(# active \d+ of \d+ bodies a system: )(\d+)( pairs .*)$", rows[i])
+    pairs = int(m.group(2))
+    rc, out = drive(write("control_pairs.rec", rows[:i] + [m.group(1) + str(pairs + 1) + m.group(3)] + rows[i + 1:]),
+                    "fp64")
+    verdict(rc == 2 and ("the `# active` line's pairs a force evaluation is %d here, and %d in the record"
+                         % (pairs, pairs + 1)) in out and "IDENTICAL" not in out,
+            "h. the record's `# active` line saying %d pairs a force evaluation where this tree's rows make %d: REFUSED, "
+            "naming the field (rc %d)" % (pairs + 1, pairs, rc))
+
+    # i. P3's tools in the tree and the particle place still empty: a copy of
+    # the driver, with what it imports and runs, beside a stand-in for each of
+    # P3's two files in turn, and beside neither, on case 5's kepler record.
+    # The stand-in is an empty file: only its presence is under test.
+    p3 = os.path.join(scratch, "p3_present", "tools")
+    shutil.rmtree(os.path.dirname(p3), ignore_errors=True)
+    os.makedirs(p3)
+    for f in ("compare_run.py", "check_ensemble.py", "check_records.py", "check_equivalence.py", "compare_formats.py",
+              "oracle.py"):
+        shutil.copy2(os.path.join(here, f), p3)
+    for present in ((), ("extract_particle.py",), ("check_replay.py",)):
+        for f in ("extract_particle.py", "check_replay.py"):
+            path = os.path.join(p3, f)
+            if f in present:
+                with open(path, "w", newline="\n") as fh:
+                    fh.write("# check_compare_run's stand-in for P3's file: only that it is here is tested\n")
+            elif os.path.exists(path):
+                os.remove(path)
+        rc, out = drive(reck, "fp64", problem=kep, via=os.path.join(p3, "compare_run.py"))
+        lines = member_lines(out)
+        result = (re.findall(r"^RESULT: .*$", out, re.M) or ["no RESULT line"])[-1]
+        if not present:
+            verdict(rc == 0 and result.startswith("RESULT: PASS: ") and out.count("\n" + PARTICLES + "\n") == 1 and
+                    lines.get(0, ("",))[0] == "IDENTICAL",
+                    "i. the driver's copy beside neither of P3's files: '%s', PASS, rc %d" % (PARTICLES, rc))
+        else:
+            verdict(rc == 1 and (NOT_WIRED % present[0]) in out and PARTICLES not in out and
+                    result.startswith("RESULT: FAIL: ") and "particles are due and NOT sampled" in result and
+                    lines.get(0, ("",))[0] == "IDENTICAL",
+                    "i. the driver's copy beside a stand-in tools/%s: NOT WIRED, RESULT: FAIL and rc %d, though member 0 "
+                    "is IDENTICAL" % (present[0], rc))
+    shutil.rmtree(os.path.dirname(p3), ignore_errors=True)
 
     print("RESULT: %s" % ("PASS" if allok else "FAIL"))
     return 0 if allok else 1
