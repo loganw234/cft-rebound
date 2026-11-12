@@ -21,10 +21,10 @@ Written 2026-09-10, after the port ran on the FP256 tile.
 > 2026-09-14, is not: `reb_integrator_cft.c` sets it from
 > `cft_ias15_default_max_iter(format)` when the caller leaves it at 0
 > (see "A footgun found by building on it" for why it once was not).
-> The last section, "What round 3 measured", is the newest text in this
-> file and the one to read first if you only read one. docs/VALIDATION.md
-> entries 39 through 45 are its measurements, and 25 through 28 are the
-> first round's.
+> The last section, "What round 4 built, and the GPU half next", is the
+> newest text in this file and the one to read first if you only read
+> one. docs/VALIDATION.md entries 46 through 51 are its measurements, 39
+> through 45 are round 3's, and 25 through 28 are the first round's.
 
 The hard part is done and it is the part that is normally hard:
 **correctness**. At binary64 this is REBOUND's own IAS15 bit for bit;
@@ -825,3 +825,115 @@ In the order the measurements rank them.
 9. **The identity is formatted in two places,** the program's `main()` and
    the shim. Their equality was measured once, not gated.
 10. **What the card did not reach.** Entry 45 lists it.
+
+## What round 4 built, and the GPU half next
+
+*Written 2026-11-12, as the round ended. ROUND4.md was the plan,
+docs/VALIDATION.md entries 46 to 51 are the record, and docs/RING.md is
+the ring run's CPU half as it stands. Everything here was measured on
+this desktop's CPU, on the software backend, unless it says believed.
+Nothing ran on a GPU, a card or WSL.*
+
+Logan asked for an IAS15 run that fills an MI300X, a ring around a world
+like Saturn. cft-fp256's study GPU-E sized it: 10^6 test particles in
+64-body waves, each with Saturn's J2 and J4 and six moons. A GPU wave
+can be held to this port only if everything it computes exists here
+first, so round 4 built that half.
+
+**What a GPU ring run will be held to now exists here.**
+- **Test particles in the standalone program,** a problem's `active n`
+  line: REBOUND's `N_active` with `testparticle_type` 0, in the forces and
+  the energy (entry 46).
+- **J2 and J4 in libcft's format,** a problem's `zonal k R J2 J4` line:
+  every operation a correctly rounded library call, held to cft-fp256's
+  golden model, to mpmath's gradient of the potential at 200 digits, and
+  to first-order theory's apsidal and nodal rates (entry 47).
+- **The ring:** `tools/make_ring.py` writes Saturn, six moons and test
+  particles as 64-body waves, GPU-E's shape a2, the same bytes from the
+  same arguments (entry 48).
+- **One particle replays out of its wave,** rejected attempts included,
+  bit for bit with its counters (entry 49).
+- **A driver holds a run's records against this tree,** by bits, its
+  members and particles sampled, every column it compares held by a
+  planted change (entries 50 and 51).
+
+**No record line moved.** Every verifier's untouched-path comparison
+held, from V0's 117 of 117 runs to VL's 60 of 60, and the six digests of
+entry 45 are unchanged at `9a42b1d` and `291c99c`. Entry 51 has the last
+two suites.
+
+**What the round found that changes the GPU half.**
+- **A format difference cannot see a narrowing both runs share** (entry
+  47). The term rounded to binary64 in both runs left binary128 against
+  binary256 at 3.371e-33, the correct build at 3.402e-33. GPU-E's section
+  6, item 3(b) proposes that check for exactly that defect. Believed, by
+  message: cft-fp256's lead confirmed it wrong and will correct it.
+- **J2 and J4 cost a body 3 sub, 34 mul, 14 add, 1 sqrt and 10 div a force
+  evaluation,** in REBOUNDx's order as recalled. GPU-E estimated 1 DIV,
+  21 MUL, 6 FMA and 6 ADD (entry 47).
+- **10^6 particles is 17,544 waves of 57, 1,000,008 particles.** An
+  ensemble's systems all have N bodies, so a short last wave cannot be
+  written here (entry 48).
+- **Pan caps the step of every wave outside its orbit,** at 1,388.09 s,
+  where those waves' innermost particles would set 1,423 and 1,471 s:
+  about 3% more steps over the ring, computed from a uniform radius, not
+  run (entry 48).
+- **Only a rejection before a wave's first accepted step leaves state.**
+  The attempts form is needed for those waves and for the counters
+  (entry 49).
+- **A record names no non-default `--adaptive-mode`, `--softening`,
+  `--min-dt` or `--no-flag-abort`,** so a GPU record must name it, and
+  the driver must learn to read it (entry 50).
+
+### The GPU half, next
+
+ROUND4.md's "After this round", in its order, with what the round added:
+1. **The pin moves to G1B** once it merges, at Logan's word (decision 7).
+   `make check` must show the software bits unchanged.
+2. **This tree on `hip:0` as it is,** the study's route with no port, in
+   a slot from cft-fp256. It finds what G1B refuses on this engine's
+   default path. Believed: the clock's augmented sum calls `vaugadd` at
+   every step and G1B refuses AUGADD, and the record's exact-time pair,
+   which `compare_run` holds, comes from it.
+3. **A divide and square root inside a kernel,** cft-fp256's work and the
+   study's question 2 (decision 3), at binary64, binary128 and binary256,
+   round to nearest, with the five flags and host `cft_div`'s and
+   `cft_sqrt`'s bits. The zonal term adds 10 divides and a square root a
+   body a force evaluation to gravity's one each a pair.
+4. **The wave kernel,** one wave a system, held to this round's CPU
+   references through `tools/compare_run.py`. Its first brief carries the
+   GPU seam test: the driver pointed at the first GPU record, with a
+   difference planted in that record shown caught. To sample its
+   particles without a rerun, a GPU run must write each wave's attempts
+   record and corrector schedule, and the driver must take them: not
+   built (docs/RING.md).
+5. **The ladder:** the RX 7600 at 3 x 10^4 particles, then the RTX 5060
+   Ti at 10^5, each rung's records compared with the others' and the
+   CPU's.
+6. **The MI300X,** when AMD's time is approved.
+
+P5, the wave kernel at the hardware's binary64, needs Logan's yes and a
+GPU slot (decision 6).
+
+### The decisions that are Logan's
+
+ROUND4.md's list, as the round leaves it:
+1. **Merges and pushes:** delegated to the lead on 2026-11-11, on round
+   3's bar.
+2. **The study's questions 1, 3 and 5,** the workload, the form and the
+   formats: open. The CPU half serves every answer.
+3. **Its question 2, the device divide before cft-fp256's exp family:**
+   open. It decides when step 3 starts.
+4. **REBOUNDx as a pinned upstream:** open. The term's order is
+   REBOUNDx's as recalled, not read; one operation-for-operation
+   comparison at binary64 would confirm or correct it.
+5. **The moons' phases:** synthetic. An epoch's needs JPL's tables.
+6. **P5:** open.
+7. **The pin's move to G1B:** open, once G1B merges.
+
+GPU-E's question 4 asked for J2 and J4 verified by the golden model and
+the format-difference check. The second cannot see the defect it was
+meant for (entry 47).
+
+Round 3's list, "What the next round starts with" above, still waits, as
+ROUND4.md said it would.

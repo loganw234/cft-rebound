@@ -5434,3 +5434,1178 @@ rather than risk the card's nightly job:
 - **Why the runs and the divides rise at 512 bodies.** The buckets say
   where the gain goes, and not why.
 - **A second card, or a second host.** Every card row is one U50's.
+
+## 46. Round 4's P0: a problem's `active` and `zonal` lines, and a seam for the zonal term; sent back once, and changed in no record line
+
+**2026-11-11.** This desktop, on the software backend only, shared with
+cft-fp256's agents and at 100% load at 17:22; the suites' logs print
+mpmath 1.3.0, and no compiler version. Pins:
+REBOUND at bdfda4bd and cft-fp256 at 922c2ad (ABI 0.18). P0 is the
+lead's. Its commits on `round4-p0`, from `7a7a279`, are `4b52705` and,
+after V0, `9a42b1d`. main fast-forwarded to `9a42b1d` and was pushed on
+2026-11-11.
+
+ROUND4.md is the round's plan and has P0's design; docs/RING.md is what
+the round left. The round's ledger is to be archived as
+`archive/round4-ledger.zip`. This entry is what ran.
+
+### What P0 is, in one paragraph
+
+Every parcel reads or writes problem files, and three of them write
+src/ias15_cft.c, so the shared part landed first.
+- **`active n`.** The first n bodies of every system, 1 to N, are
+  massive and the rest test particles, through the engine's own
+  `eng_active` with `testparticle_type` 0, the path the drop-in already
+  takes. The record says so in a header line with the pairs its rows
+  fold, `# active 5 of 8 bodies a system: 25 pairs a force evaluation, a
+  system`. Only a problem with the line prints it, so no older record
+  moves.
+- **`zonal k R J2 J4`.** Parsed, stored and keyed, then refused by name
+  until P1 built the term.
+- **The seam.** `src/ias15_zonal.inc`, empty and unreachable.
+  `gravity_body()` calls it after the fold, and `energy_all()` and the
+  record's header call it too.
+- **The run key** names both lines, only when a problem has them, so no
+  older key moves.
+- **The energy follows `N_active`,** from `9a42b1d`: `energy_all()` runs
+  REBOUND's two loops. With no active line every body is active and the
+  sums are the ones they were.
+
+### The gate, and the controls that show it can fail
+
+`tools/check_gravity.py` gains two parts. The problem is outer with two
+more massless bodies, made from Pluto by a quarter and a half turn about
+z, so every value is exact.
+- **2b.** `active 5` against every body active, at every format, on the
+  loop engine in both forms and on the program engine. Each of the 9
+  rows, here the first from `291c99c`'s suite:
+
+```
+ok   fp64, loop engine, rebound form: 5 sample lines identical, 25 pairs a force evaluation against 28 all active, the test particles move, a 2^-40 mass changes nothing under active 5 (energy included) and everything without it, and the two-system ensemble and its member agree
+```
+
+- **2c.** Refused by name: an active count of 0 or past N, and a second
+  active line. The zonal line was refused here until P1's merge made the
+  case an acceptance, and `291c99c` added three refusals (entry 47).
+- **The replay key.** A schedule recorded with `active 5` replays with
+  it and is refused without it.
+
+The plan's control, a mass of 1e-30, would be inert at binary64, below
+its last bit, so the gate's is 2^-40. Four sabotages, each built from a
+copy and deleted by the lead:
+
+| sabotage | with it |
+|---|---|
+| (a) the active line parsed and `eng_active` never set | FAIL at all three engine and form rows: no 25-pair line, and the 2^-40 control does not bite |
+| (b) the run key not naming the line | FAIL: the replay without it is accepted, rc 0 |
+| (c) `testparticle_type` 1 | FAIL at all three rows |
+| (d) the energy counting every body | FAIL at all three rows |
+
+(c) and (d) are the gate's answer to V0's two findings, below.
+
+### The verifier, twice
+
+**On `4b52705`: SENT BACK.**
+- **The untouched path held.** 117 runs of data/problems/ and a
+  4-member ensemble, at binary64, binary128 and binary256 on both engines
+  and in both forms, were byte-identical between `7a7a279` and `4b52705`
+  once the timing fields were masked. The schedule key was
+  byte-identical in 9 of 9 cases, and the seam is unreachable in all
+  three builds.
+- **Defect: `energy_all()` summed every body.** REBOUND's
+  `reb_simulation_energy` (third_party/rebound/src/tools.c:108) counts
+  only the active bodies under `testparticle_type` 0. The gate missed it
+  because its test particles were all massless.
+- **Defect: `testparticle_type` 0 was unheld.** A copy at type 1 passed
+  `check_gravity --quick`.
+- **Minor.** `active 0` was accepted and then aborted on a 0/0 at the
+  first step, and a second active line silently won.
+
+`9a42b1d` runs REBOUND's two loops in the energy, requires that a test
+particle's 2^-40 mass change nothing under `active 5`, the energy column
+included, adds a two-system ensemble and its member, and refuses
+`active 0` and a second line.
+
+**On `9a42b1d`: READY.** The record's E column equals REBOUND's own
+`sim.energy()` (the rebound 5.1.1 wheel, with `N_active` and
+`testparticle_type` 0) bit for bit at 7 samples on three problems:
+kepler under `active 1`, the star's kinetic energy alone; outer and two
+test particles under `active 5`, one of them at mass 2^-40, where the
+all-active sum would differ; and kepler under `active 2`. That compared
+energies at the same states; no stepped trajectory went through the
+wheel. 117 of 117 untouched-path runs identical, and both new controls
+bite at all three rows. Believed by V0: `testparticle_type` 0 is held as
+a consequence, a test particle's mass changing nothing, not by an
+assertion of the type itself.
+
+### No record line moved, and the suites
+
+- **The first full `make check`, on `4b52705`,** ended rc 2 at leg 7 of
+  19. `check_corrector`'s forced drop-in run (`check_dropin --light` with
+  `CFT_REBOUND_ROUTE_REDUCE_SEG=on`) returned rc 1 with no cases, and the
+  log ends in MSYS fork failures: `child_copy`, Win32 error 299, and
+  "couldn't create signal pipe", Win32 error 5. Run alone, the same run
+  gave rc 0 and 170 ok. The host was at 100% CPU. Believed by the lead:
+  environmental.
+- **The full `make check` on `9a42b1d`,** from PowerShell, read from its
+  log: 18:49:08 to 21:08:53, 2 h 20 min on a shared host;
+  - rc 0, 19 legs, each `--mode full` once;
+  - **857 `ok`, 0 FAIL**, no fork errors; 11 `RESULT: PASS`,
+    `gate_real` PASS at all three formats, `gate_subprocess` PASS,
+    `check_dropin` "every case passed", `--wide` passed, `check_archive`
+    gates 1-3 PASS, and "78 constants compared, all match";
+  - the forced drop-in run that died on `4b52705` passed;
+  - `check_gravity` 2b at all 9 rows, and 2c's 4 refusals and the
+    replay-key case;
+  - the six digests of entry 45 are in the log:
+    `e08541bc0af9b3ec`/`56bacf3bf63f19a7`,
+    `5d7cf4588fad050e`/`cd16e6dc29aa0589`,
+    `a1052750e206bebe`/`ba4d447c8e58bd20`.
+- **Counting `ok` lines depends on the pattern** (P4). That log has 857
+  lines matching `^  ok ` and 858 matching `^\s+ok\b`, because one
+  `check_dropin` line is indented one space. Compare counts by one
+  pattern only; the full suites' counts in entries 46 to 51 are by the
+  first.
+
+### Stated limits, not closed
+
+- **`tools/make_ensemble.py` refuses `active` lines** (V0). An ensemble
+  with test particles is written whole, as P2's generator does.
+- **A problem file through a pipe is refused, not misread.**
+  `read_problem()` rewinds between its two passes, and a pipe cannot
+  rewind. Measured by P3 on 2026-11-12: kepler.txt through a Windows
+  named pipe is refused by name, "read 0 bodies, expected 2", rc 3. The
+  dt file's reader had the same shape and misread (entry 49); this one
+  refuses, so it stays.
+- **Inline comments,** from `291c99c`, are refused by name on the active
+  and zonal lines, and ignored after a body line's seventh field, as
+  before round 4.
+- **P0's parser accepted a second zonal line and a fifth field
+  silently.** That was unreachable while the line was refused. V1 found
+  it once P1 lifted the refusal, and `291c99c` refuses both (entry 47).
+
+### What this does not establish
+
+- **The card, or Linux.** No artifact was opened and nothing ran in
+  WSL, in P0 or anywhere in round 4.
+
+## 47. Round 4's P1: J2 and J4 of one body in libcft's format, held to the golden model, to mpmath's gradient and to theory's rates; and a format difference cannot see a narrowing both formats share
+
+**2026-11-11 and 2026-11-12.** This desktop, on the software backend,
+shared with the other three parcels and their verifiers. Pins as in
+entry 46. P1 branched from `9a42b1d`. Its commits are `c0c99be`,
+`06adb1a`, `b3f664b` and `22ca3de`. `4dd53f3` merges `22ca3de` on
+`round4-int`, and `291c99c` is the lead's fix after V1, on top. main
+fast-forwarded to `291c99c` and was pushed on 2026-11-12.
+
+### What P1 is, in one paragraph
+
+`src/ias15_zonal.inc` fills P0's seam.
+- **The term.** Body k's J2 and J4 on every other body of its system,
+  in the run's own format, every operation a correctly rounded library
+  call, no FMA, added after gravity's fold. So one order serves both
+  `--arith` forms.
+- **The reaction on k,** `(G m_j) prefac fac d`: the plan's "term times
+  m_j/M", with no divide by M. It is taken only from the bodies that act
+  on active ones, so under `active n` a test particle feels the term and
+  gives no reaction, whatever its mass, as `testparticle_type` 0 says.
+- **The potential** in `energy_all()`, after the pair terms, and a
+  `# zonal` record line naming R, J2, J4, the bodies that feel the term
+  and those whose reaction k takes.
+- **The order** is REBOUNDx's `gravitational_harmonics.c` as recalled,
+  not as read. Believed: REBOUNDx is not pinned (decision 4), and the
+  include's head says so.
+- **`--zonal-selftest`** evaluates the term and the potential at fixed
+  points and traces every library operation, its operands and result as
+  bits, and every element moved between them.
+- **The constants.** `tools/gen_constants.py` derives the 19 integer
+  coefficients from P2 and P4, and its check 3 holds them to mpmath's
+  derivative of the potential. The header and the JSON gain them,
+  additions only.
+- **`data/problems/zonal_saturn.txt`:** Saturn with Cassini's J2 and J4,
+  a Mimas-like moon inclined 3 degrees and a massless ring particle at the
+  Encke gap inclined 2 degrees, under `active 2`. `check_zonal.py
+  --write-problem` derives it, and the gate holds the file to that byte
+  for byte. Its R = 60,330 km is believed, GPU-E's belief: its J4 table
+  names no reference radius.
+
+**What the term costs, measured by V1.** Counted by hand, and equal to
+the trace: a body a force evaluation pays 3 sub, 34 mul, 14 add, 1 sqrt
+and 10 div, two of the divides by 2 and 8 and so exact. P1 first counted
+"21 mul (+13 for a reacting body)". The 13 reaction multiplies are as
+wide as the bodies, so every body pays them, test particles included,
+and a test particle's are thrown away. GPU-E prices the term at "1 DIV,
+21 MUL, 6 FMA, 6 ADD" a body an evaluation (its section 2), an estimate
+made before the code existed.
+
+### The gate, and the controls that show it can fail
+
+`tools/check_zonal.py`, one leg in each tier:
+1. **Arithmetic.** Every traced operation against cft-fp256's golden
+   model, bits and flags, and every operand a declared input or the
+   trace's own last result.
+2. **Formula.** 14 points, 10 off the plane and 4 on it, and each
+   system's reaction and potential, against minus the gradient of the
+   potential, taken by `mpmath.diff` at 200 digits. The bound is derived
+   from the trace's own dataflow, and the dataflow evaluated exactly must
+   equal mpmath's within 1e-150.
+3. **Physics,** on zonal_saturn: (a) energy and (c) momentum at every
+   format, and (b) the apsidal and nodal rates at binary64 against
+   first-order theory in J2 and J4.
+4. **Format difference.** binary128 and binary256 on binary128's own
+   steps.
+
+Then both engines, an ensemble against its members, the 2^-40 test
+particle, the record line, the run key's `zonal=` field and three
+refusals. From `291c99c`'s suite, 87 `ok`:
+
+```
+ok   126 operations, 1382 elements, each against the golden model's bits and flags (flags seen 0x10), ...: 0 mismatches   [at each format]
+ok   fp256: the bound is 1.33e-69 of the term at its widest, against the 1e-68 asked
+ok   fp64, 1100 steps adaptive: the energy, Phi's J terms included, moves 1.56e-15 of itself; the same orbits without the term, 1.22e-15 (the integrator's own level; the bound is 10 times it)
+ok   the apsidal rate (wanted positive: the apsides advance): 6.61078e-7 rad/s over 30.2 orbits; first-order theory 6.6178e-7 (n - kappa); off by 0.00106, against the second order's 0.00359 (...)
+ok   the nodal rate (wanted negative: the node regresses): -6.5874e-7 rad/s over 30.2 orbits; first-order theory -6.6178e-7 (n - nu); off by 0.00459, against the second order's 0.00866 (...)
+ok   the nodal rate, J4 resolved: the same theory without J4 gives -6.4278e-7, 0.0248 off the measured rate (wanted past the second order's 0.00866)
+ok   121 samples on the same 120 steps: the positions differ by 3.4e-33 of the distance from Saturn at most, against binary128's round-off, u128 * steps^2 = 1.39e-30 (binary64's: 1.6e-12), and must differ at all; the term itself moved them 0.201. Its scope: a precision that differs between the formats, never a narrowing both share (parts 1 and 2 hold that)
+```
+
+Seven sabotages, each built by P1 from a copy of src/, run through
+`check_zonal --quick` and deleted:
+
+| sabotage | with it |
+|---|---|
+| the term rounded to binary64 before it is added, in both runs (the plan's control for gate 4) | **gate 4 passes**: 3.371e-33 over 120 steps, the correct build's 3.402e-33. Gate 1 fails at operation 29; gate 2 at 1.4e-17 to 8.3e-17 of the term, against bounds near 1e-32; 3(c)'s momentum at 2.22e-20 against 1.55e-34 |
+| the same rounding at binary128 only (gate 4's control, from the ruling below) | gate 4 fails: 4.0e-18 over 120 steps |
+| J4's z part dropped, through the trace's own arithmetic | gate 1 passes; gate 2 fails at all 30 checks off the plane (at u = -0.998, 2.37e-2 of the term against a bound of 3.16e-14) and passes all 12 on it |
+| the force's z sign flipped, the potential left alone | 3(a) fails at every format, the energy moving 4.35e-5 at binary64 and 4.16e-5 above, against 1.2e-15 and 7e-31; the node advances, +1.32e-6 rad/s |
+| the reaction on k dropped | 3(c) fails, momentum moving 5.97e-3 and 5.06e-3 of \|m v\|; gate 2's line for body k fails at 0.998 of the reaction |
+| one traced result one ulp off (operation 54, element 5) | gate 1 alone fails, at each format, naming it |
+| the reaction taken from test particles too | gate 2's line for body k fails at 1.19e-4 against 1.5e-14, and the 2^-40 case says "THEY DIFFER" |
+
+**P1 found a dead check in its own gate.** The dropped-reaction control
+first passed gate 2's line for body k, "|error| 0.998, the bound 0.998":
+the bound added |exact dataflow - reference|, which absorbed the missing
+reaction. `06adb1a` gives every component a fixed 1e-150 allowance and
+requires the exact dataflow to equal the reference within it.
+
+### A format difference cannot see a narrowing both formats share
+
+**Measured by P1, 2026-11-11, in an urgent file** (the ledger's
+`urgent/P1-gate4-blind.md`). The plan's first control, the term rounded
+to binary64 before it is added, leaves binary128 against binary256 on
+the same 120 steps at 3.371e-33 of the distance from Saturn; the correct
+build gives 3.402e-33, so gate 4 passes it. Rounded at binary128 only,
+the difference is 4.029e-18 and gate 4 fails. The control was caught
+instead by the gates that compare with a reference without the defect:
+the golden model, gate 1, and mpmath, gate 2. V1's own copy of the
+control gave 1.32e-33 against gate 4's 1.39e-30 at 120 steps.
+
+Believed by P1, the mechanism, not measured apart: rounding to binary64
+is a deterministic function, and the two runs' terms agree to about
+1e-33, so both round to the same binary64 value and the defect cancels
+in their difference. The same holds for any binary64 bottleneck two runs
+of one build share, the drop-in's binary64 `additional_forces` among
+them (README, "A force routine is evaluated at binary64").
+
+**The lead's ruling, 2026-11-12 01:33** (`urgent/lead-gate4-ruling.md`).
+Gate 4 stays, and its head states its scope: it can fail on a defect that
+differs between the two formats, and cannot fail on a narrowing both
+share. Its control is the binary128-only rounding. The plan's control is
+kept, asserted to fail gates 1 and 2, with its gate 4 number reported as
+the measured blind spot. P4's format difference prints its scope beside
+its number (entry 50).
+
+GPU-E's section 6, item 3(b) proposes this check as "the check that
+fails on exactly the defect the README names". It cannot. Believed here,
+by message: cft-fp256's lead confirmed it and will correct the study
+(entry 51). P1's urgent file reached the ledger 3 h 17 min after it was
+written (entry 51).
+
+### The verifier
+
+**On `22ca3de`: READY.** V1 built `22ca3de` and `9a42b1d` from clean.
+- **The force, derived by hand,** against `--zonal-selftest` at every
+  format, decoded by V1's own decoder in mpmath: worst relative error
+  6.7e-16, 2.5e-34 and 1.6e-71, reaction and potential included. Gate
+  2's reference matches V1's closed form to 2.8e-201.
+- **The count.** 70 `zcall()` sites and no other library call in the
+  term; a hand count, 80 + 46 = 126 operations and 1,382 elements,
+  equals the trace.
+- **No FMA, measured.** An instrumented copy hashed x and a around
+  every `zonal_accel()` call. The program engine in the FMA form equals
+  the loop engine's at all 160, 349 and 510 calls, by format, and
+  REBOUND's form equals the FMA form at all 62 calls whose state matched
+  before the term.
+- **The constants,** regenerated into scratch, reproduce the header and
+  JSON byte for byte, and four copies with a coefficient moved each fail
+  check 3.
+- **Seven controls rebuilt from copies,** each failing where claimed, by
+  9.6 to 150 decades over gate 2's bound at its least favourable point.
+- **The untouched path.** 100 configurations identical between the
+  commits, timing masked and `calls=` included. `check_records` PASS,
+  9 of 9. `make check-light` from a clean export: rc 0, 20 legs, 671 ok,
+  0 FAIL, no cache skips.
+- **A limit, stated.** At binary64, dz^2/r^2 underflows when |dz| is
+  below about 2e-149 km at the Encke gap, and the run aborts, "div raised
+  0x18". Gravity's own window is 1.5e-154 km. Neither is reachable.
+
+Its findings, all taken in `291c99c`:
+1. `check_zonal.py:82` gave gate 4's bound as "eleven decades" under
+   binary64's; u128/u64 = 2^-60, eighteen.
+2. The cost: 34 mul, above.
+3. **A seam in P0's parser, reachable once P1 lifted the refusal.** A
+   second `zonal` line was accepted and replaced the first, so a problem
+   written with two oblate bodies ran with one, rc 0, and a fifth field
+   was ignored. A second `active` line was already refused.
+4. The record's reaction count came from `zonal_ready()`, not from the
+   loop that subtracts: with every body's reaction taken, the record
+   still said 1.
+5. `check_scalar`'s `bodies.get("zonal_ready", "")` would have dropped
+   the term's constants from the recount, silently, had the function been
+   renamed.
+
+And `src/ias15_zonal.inc:16` and `:240` stated REBOUNDx's order flat;
+only `:38` said believed.
+
+### The lead's fix, `291c99c`, and the suites
+
+- `read_problem()` refuses a second zonal line, a fifth zonal field and
+  a second active field, by name, and `check_gravity` 2c holds the three,
+  with nothing printed. P1's build ran all three files with rc 0, and with
+  two zonal lines made body 1, the second line's, the oblate one: the
+  cases fail without the fix.
+- `zonal_gives()` is the one predicate behind the record's reaction
+  count and `zonal_apply()`'s loop.
+- The include's two sentences say believed; the selftest's R = 1.5 and
+  `check_gravity`'s R = 1 are labelled synthetic; `check_zonal.py:82`
+  says eighteen; `check_scalar` requires each `CONST_FUNCS` body by name.
+- The refactor moves no bit: `--zonal-selftest` at every format, and
+  zonal_saturn at 3 formats on 3 engine and form settings, are identical
+  to P1's build with timing masked.
+
+The suites, read from their logs:
+- **P1's own, on `b3f664b`:** rc 0, 2 h 32 min on a shared host, 20
+  legs in full, **977 `ok`, 0 FAIL**. Seventeen of the 19 existing legs
+  had P0's counts; `check_corrector` +24 and `check_scalar` +9, from
+  zonal_saturn. `22ca3de` changes only check_zonal.py's head and one
+  verdict, and P1 reran that gate in full on it: 87 ok, PASS.
+- **The lead's, on `291c99c`,** the tree that landed: 03:47:46 to
+  06:34:31, 2 h 47 min on a shared host;
+  - rc 0, 20 legs, each `--mode full` once;
+  - **980 `ok`, 0 FAIL**, no fork errors, 12 `RESULT: PASS`;
+  - leg by leg P0's counts, but `check_corrector` 302 (+24),
+    `check_gravity` 44 (+3, the fix's refusals), `check_scalar` 99 (+9)
+    and the new `check_zonal` 87;
+  - the six digests of entry 45 are in the log.
+
+### Stated limits, not closed
+
+- **The order is REBOUNDx's as recalled** (decision 4). The formula and
+  the physics hold it either way; only an operation-for-operation binary64
+  comparison with REBOUNDx would confirm the order.
+- **The rates are measured at binary64 only.**
+- **No J2 or J4 on the drop-in.** The library half compiles a stub, and
+  ROUND4.md says why.
+- **The constants leg does not check that src/ias15_constants.h is
+  current.** `gen_constants.py --no-write` returns after its derivation
+  checks, so a stale header passes every tier (P1). The lead's to
+  decide.
+- **A file in data/problems/ binds two gates.** check_scalar fails
+  unless every file there is one of its cases, and check_corrector runs
+  every one at binary64 from dt 0.01, which on zonal_saturn exercises the
+  replay and nothing physical (P1; V1).
+- **The usage block at the head of src/ias15_cft.c does not name
+  `--zonal-selftest`.** The README does, from this round's docs.
+
+### What this does not establish
+
+- **That 60,330 km is the radius Cassini's J2 and J4 are referred to.**
+- **Agreement with REBOUNDx,** at any format.
+- **The card.**
+
+## 48. Round 4's P2: the ring generator and its gate; Pan caps the step, and 10^6 particles in waves of 57 is 1,000,008; sent back once, for moons in Saturn's plane
+
+**2026-11-11 and 2026-11-12.** Host and pins as in entry 47. P2 branched
+from `9a42b1d`. Its commits are `94b0daa`, work in progress, `250789e`,
+and `8bb49b9` after V2. `9dd4051` merges `8bb49b9` on `round4-int2`,
+which with the lead's seam and P4 became `round4-int4`, at `7d50392`.
+
+### What P2 is, in one paragraph
+
+`tools/make_ring.py` writes Saturn, six moons and test particles, as one
+system or as an ensemble of 64-body waves, 7 massive bodies then 57
+particles: GPU-E's shape a2.
+- **The constants** are read in GPU-E's section 4: Saturn's GM and
+  radius from NASA's fact sheet, J2 and J4 from Cassini via Fortney et
+  al., the moons' GM, a and e from JPL. R = 60,330 km is believed. The
+  moons' inclinations, nodes, pericentres and phases are synthetic
+  (decision 5), small and not zero.
+- **The particles** come from Python's `random.Random(seed)`, inclined
+  1e-4 to 1e-3 rad, sorted by radius and cut into waves. A start within 5
+  Hill radii of a moon is drawn again, and counted in the file's head.
+- **Exactness.** Everything is computed in mpmath at 160 bits, and each
+  written value is rounded to binary64 once; the moons by REBOUND's own
+  `reb_particle_from_orbit`; the frame is the massive bodies' barycentre.
+- **Each file is circular in its own field:** with its
+  `zonal 0 R J2 J4` line, at the oblate field's circular speed in the
+  equatorial plane; with `--no-zonal`, a point mass's. `active 7` comes
+  with every file.
+
+docs/RING.md describes the ring and its generator in full.
+
+### The gate, and the controls that show it can fail
+
+`tools/check_ring.py`, one leg in each tier: the generator's bytes and
+its file, one wave at every format on both engines, `active 7` against
+every body active, REBOUND's own IAS15 on a wave, the ensemble against
+its members, and the physics. From P2's full suite at `250789e`, 37 ok:
+
+```
+ok   the same arguments twice give the same 41859 bytes, and seed 2 gives other bytes (differing)
+ok   fp64: the loop engine in REBOUND's form runs it, differing from the FMA form (first at sample 2, dt_next), its largest relative difference 1.698e-11 against a bound of 2^-26.5 = 1.1e-08 ...
+ok   fp256 loop engine rebound form: `active 7` against all 64 active, 3 sample lines identical, the trailer too: 420 pairs a force evaluation against 2016
+ok   fp64: w00001 as one system of 64, every body active: REBOUND's own IAS15 (ias15_ref) against ias15_cft in REBOUND's form at its defaults: 7 samples, 2716 values identical
+ok   the moons act: with their masses zeroed the wave differs; after 6 steps a particle (p0000110) is 2.161e-02 km from where the moons put it, 1.6e-07 of its radius
+ok   the far wave w00000 (radii to 132941 km, wholly inside pan's pericentre less 5 Hill radii, 133510 km): 35.89 steps an orbit of p0000000, its shortest (47845 s), over steps 12 to 24 at epsilon 1e-9, against GPU-E's MEASURED 36.2: -0.9% (the bound is 10%)
+```
+
+Over the gate's 23 runs every particle stays in the annulus and off
+Saturn, the largest change of a radius 0.149 km.
+
+Controls, each from a copy, deleted:
+- **The plan's.** In the ensemble's copy, p0000143's x one ulp up:
+  "FAIL w00002: first difference at sample 0, body 36 x", while w00000,
+  w00001 and w00003 still match.
+- **A flat ring,** P2's own: every inclination zero. The |z| counter
+  fails, and 42 physics lines with it, while all 27 bit comparisons still
+  pass: ROUND4.md's silent wrong answer, caught by the counter alone.
+- **The moons flat and the particles inclined,** V2's, below.
+
+### What P2 measured that the plan did not have
+
+1. **Pan caps the step of every wave outside its orbit.** On a
+   228-particle ring at binary64, REBOUND's form, epsilon 1e-9, waves
+   w00002 and w00003, wholly outside Pan's orbit at 133,600 km, settle to
+   exactly 1,388.09 s: Pan's period, 49,819 s, over 35.89. Their own
+   innermost particles would give 1,423 and 1,471 s. w00003 takes 38.4
+   steps per orbit of its innermost particle and 39.3 per its outermost.
+   PRS23's minimum runs over every body, so a system's shortest orbit sets
+   its step. Computed by P2 from a uniform radius, not run: about 3% more
+   steps over the whole ring. GPU-E's cost model does not carry it. The
+   far wave's own figure holds, 35.89 steps an orbit, 0.9% under 36.2.
+2. **10^6 is not a multiple of 57.** `--particles 1000000` is refused by
+   name, rc 1, and no file is written. 17,544 waves hold 1,000,008
+   particles: `--particles 1000008` wrote 174,691,521 bytes, the particles
+   from 130,000.025 to 141,999.987 km and the largest |z| from Saturn
+   141.850 km, with 49 of 1,000,057 draws refused (Pan 2, Prometheus 19,
+   Pandora 28). The file was read and deleted. An ensemble's systems all
+   have N bodies, so a short last wave cannot be written here.
+3. **The plan's "oblate speed" and "the gates use `--no-zonal`" cannot
+   hold for one file.** Computed from a file with its zonal line, read in
+   a point mass's field: each particle is on an orbit of e 0.0045 to
+   0.0053, its apocentre 1,275 to 1,396 km out, the outermost reaching
+   143,253 km, past the annulus. So each file is circular in its own
+   field, and the zonal line is isolated by deleting it from a file, never
+   by comparing with a `--no-zonal` one.
+4. **The two forms differ in the step, not at round-off.** On w00001 at
+   binary64, `--arith fma` and `--arith rebound` agree in dt_next to 7e-13
+   after 2 steps and 1.7e-11 after 3, and positions then differ by 3e-12.
+   Believed by P2: PRS23 builds the step from the high b coefficients,
+   which amplify round-off. Records are compared like with like.
+5. **The brief's third_party clone loop is refused by the worktree
+   guard.** Plain, separate `git clone` and `git checkout` worked.
+
+### The verifier, twice
+
+**On `250789e`: SENT BACK.** V2 built `250789e` and `9a42b1d`;
+`ias15_cft.exe` is byte-identical between them, and so are the 66
+program images.
+- **Defect: nothing held the moons out of the plane.** Control C, the
+  generator with the six moons' inclinations set to 0 and the particles
+  untouched, passed: 31 ok, PASS, rc 0. On such a ring every z term of J2
+  and J4 on a moon stays exactly zero, and so does the z of its reaction
+  on Saturn; the particles are massless, so the moons carry all of the
+  ring's reactions. A wrong reaction z would match bit for bit, here and
+  through P4's driver.
+- **Notes.** The gate neither checked ias15_ref's `impl=` nor printed its
+  build time, so a stand-in at that path would pass; PER_WAVE = 57 was
+  typed, not derived; `--exclude-hill 1000` never finished.
+- **Confirmed.**
+  - Determinism: ten runs, one sha256, under another PYTHONHASHSEED,
+    without gmpy and to another path. An independent 400-bit
+    recomputation reproduced every value, 1,645 in the 228-particle ring
+    and 399,049 in a 57,000-particle ring with its zonal line.
+  - Every constant against GPU-E's section 4, and the orbits against
+    REBOUND's tools.c:972-992, term for term.
+  - The 420 pairs read from the record; 36.22 steps an orbit by the
+    study's own method, the mean of its halves.
+  - The exclusion at the default refuses 2 of 57,002 draws at 57,000
+    particles, the same two V2's own replay of the draws refuses.
+  - The untouched path: 72 runs a build, 315 sample lines, identical with
+    timing masked. `check_records` PASS. `make check-light` rc 0.
+
+**On `8bb49b9`: READY.** The gate asserts each moon's sin i, from r x v
+relative to Saturn in the written file, above zero: not |z|, since Pan
+starts at its node with z = 0. ias15_ref's record must say
+`impl=rebound`, and both binaries' build times are printed. PER_WAVE is
+derived as WAVE - MASSIVE, the file's N and active are held to the
+generator's, and the exclusion's redraws are bounded.
+- `git diff --stat 250789e 8bb49b9` is the two tools only, and the
+  generator's bytes are `250789e`'s on five rings, one of them 57,000
+  particles with zonal lines.
+- Control C fails by name: 33 ok, 1 FAIL, "the moons are not flat: ...
+  0.0000 degrees". V2's own control, Pan flat and the other five
+  inclined, fails by name too, so the check is moon by moon.
+- A copy of `ias15_cft.exe` at ias15_ref's path passes the bit
+  comparison, 1,940 values, and fails the identity line,
+  "program=cft impl=libcft-0.18".
+- `--exclude-hill 1000` stops after 6,644 refused draws, rc 1, no file.
+- The gate in full: 40 ok, PASS; with `--quick`, 34 ok.
+
+### No record line moved, and the suite
+
+- **P2's own full `make check`, on `250789e`:** rc 0, 2 h 36 min on a
+  shared host, 20 legs in full, **894 `ok`**, main's 857 plus the leg's
+  37, 0 FAIL, no fork errors, and every other verdict line present.
+- **The merged tree's suite** is entry 51's.
+
+### Stated limits, not closed
+
+- **One host.** mpmath's two backends give the same bytes here. The same
+  file on every host is believed; the check across hosts waits for a WSL
+  slot.
+- **The wide-format form comparisons are two runs of one build.** At
+  binary128 and binary256 the two forms agree to 4.3e-30 and 1.9e-68.
+  They share gravity, `pc_error` and the step control, so a binary64
+  bottleneck there would cancel, as in entry 47 (believed by P2). They
+  show the forms agree, not that a ring runs at full width. At binary64,
+  REBOUND's own IAS15 is an independent build, and agrees bit for bit.
+- **The ensemble comparison runs at binary64,** on the program engine.
+  check_ensemble covers ensembles at every format.
+- **No rejected step and no close encounter** in the gate's runs, which
+  are 2 to 24 steps.
+- **mpmath is not a gate-cache input.**
+- **"The engine computes all 2,016 pairs"** with every body active is
+  inferred from the code.
+- **check_ring runs `--no-zonal` rings.** The ring with its zonal line is
+  the seam test's (entry 51).
+
+### What this does not establish
+
+- **The ring at the study's size, integrated.** It was written and read,
+  not run.
+- **An epoch's moons** (decision 5).
+
+## 49. Round 4's P3: a test particle replayed out of its wave, rejected attempts included; only a rejection before the first accepted step leaves state; sent back once, for a dt file through a pipe
+
+**2026-11-11 and 2026-11-12.** Host and pins as in entry 47. P3 branched
+from `9a42b1d`. Its commits are `60457ce`, `569ee4e` and, after V3,
+`2638e72`. `7ece3e3` merges `2638e72` on `round4-int5`, after P2 and P4.
+A first merge of P3, `3b69eae` on `round4-int3`, was set aside when the
+merge order changed (entry 51); `7ece3e3`'s src is identical to it.
+
+### What P3 is, in one paragraph
+
+- **`--attempts-out FILE`** writes one system's every step attempt:
+  `# cft-rebound attempts v1`, `# run` and the run's key, a legend, a
+  line an attempt (its dt as exact hex, then `a` or `r`), and last the dt
+  the run takes next. An ensemble is refused by name.
+- **`--dt-file`** reads that form by its first line and replays it. The
+  recorded outcome and next dt take `choose_timestep()`'s place, so a
+  recorded rejection restores the step's start and predicts from `er`
+  and `br` as the run did. An accepted-steps dt file reads and runs as
+  before.
+- **The run key** hashes the outcomes with the dts under that form, and
+  names it `dt_file=attempts`. No older key moves.
+- **`--run-key`** prints the key and exits. It reads the problem and any
+  dt file, and opens no output file.
+- **`tools/extract_particle.py`** writes one test particle alone with its
+  wave's G, active and zonal lines and first N_active bodies, verbatim and
+  in order, after asserting by the program's own key that the attempts
+  record and the schedule are this wave's. Then it re-keys the wave's
+  corrector schedule for the sub-system. Not a key that leaves the test
+  particles out: every wave of a ring starts its massive bodies from one
+  state, so such a key could not tell one wave's schedule from another's.
+  No Python hashes anything, so no copy of the key can drift from
+  `sched_key()`.
+
+### What the plan had wrong: a rejection after an accepted step leaves no state
+
+ROUND4.md said the replay cannot carry a rejected step, since a
+rejection changes the next step's prediction. Measured by P3 on
+2026-11-11, then by P4 and V3:
+- **The mechanism, read and then run.** After an accepted step `er` and
+  `br` are copied from the corrected e and b before that step's
+  prediction. A later rejection's prediction, from `er` and `br` at the
+  ratio of dt_next to dt_last_done, is the same call on the same inputs
+  the accepted step's own prediction would have made. Before the first
+  accepted step dt_last_done is 0, nothing is predicted, and the rejected
+  attempt's corrected b is the next attempt's first guess. That is the
+  only state a rejection leaves.
+- **The old accepted-steps replay,** its schedule with the rejections
+  after accepted steps deleted and re-keyed: 0 of 7 record lines differ,
+  at binary64 and binary128. With one rejection as the first attempt (a
+  ring wave from dt0 1e5 s, kepler from 1.0, kepler_e099 from 0.01): 5 of
+  5, 7 of 7 and 7 of 7 lines differ.
+- **The one token it moves** is the dt_next of a sample printed just
+  before the rejected attempt, which carries that attempt's dt. P4
+  measured it on its member 8 at binary64 and binary128 (steps 4, 8 and
+  10), and V3 on its own wave at binary256 and binary64.
+- **A rejected attempt's own dt moves no bit either.** One ulp on each of
+  five rejections after accepted steps changed 0 of 48 comparisons, where
+  one ulp on an accepted attempt changed 19 and 21.
+
+So the attempts form is needed for waves that reject before their first
+accepted step, and for the counters. The plan's fallback, rerunning every
+wave that rejects, narrows to those waves.
+
+### The gate, and the controls that show it can fail
+
+`tools/check_replay.py`, one leg in each tier. Three hand-made waves,
+Saturn, six moons and eight test particles under `active 7`, every value
+one correctly rounded binary64 operation from exact decimals: A rejects
+nothing; B starts from a dt0 far too large and rejects its first attempt;
+C adds a particle aimed past Janus, which rejects after accepted steps.
+Each runs at every format, and B and C on the loop engine in both forms
+and on the program engine too. Three particles a wave are replayed
+alone, each held to the wave's bits for itself and all seven massive
+bodies, every sample's head and exact-time pair, and five counters. The
+massive bodies are held because they match only if the particle adds
+exactly nothing to them. From P3's full suite, 276 ok at `569ee4e`:
+
+```
+ok   a rejection before any step is accepted: 1
+ok   body 7 replayed alone: 5 samples, the particle and all 7 massive bodies, 240 values, and every sample's step, t, dt_next, dt_last, E and exact-time pair are the wave's
+ok     and its counters are the wave's: steps_done=40 steps_rejected=1 iterations_max_exceeded=0 mean_pc_iterations=3.293 max_pc_iterations=6
+ok   attempt 2, a rejection after an accepted step, deleted from both records and re-keyed: every bit is the wave's (0 mismatches) and only the counters see it, steps_rejected 4 against 5
+```
+
+Sabotages, each built by P3 from a copy and deleted:
+
+| sabotage | with it |
+|---|---|
+| one accepted attempt's dt moved one ulp, re-keyed | FAIL at every format, all three of wave A's particles at 26 mismatches each; not re-keyed, refused by name |
+| the rejected first attempt deleted | the bits differ, 37 mismatches a particle at every format |
+| a rejection after an accepted step deleted | every bit matches, and only the counters fail: steps_rejected 4 against 5, and at binary256 max_pc_iterations 29 against 42 |
+| after a recorded rejection, the replay predicts as after an accepted step (a source copy) | FAIL at every format, engine and form: wave B, 34 to 36 mismatches of 40; wave C at binary256, 21 to 22; wave C at binary64 and binary128 in REBOUND's form, only the flyby particle, 5 |
+
+**Bits alone cannot hold the passes:** the sub-system's own exit test
+took other passes in up to 33 of 64 attempts with identical bits, so the
+gate holds the counters too. Run outside the gate at binary64: a 64-body
+wave, 4 particles at 240 values each, 0 mismatches; the flyby wave over
+400 steps with 5 rejections, 3 particles at 432 values, 0 mismatches.
+
+The last row matters for the GPU half. After a mid-run rejection at
+binary64 and binary128 in REBOUND's form, a wrong prediction showed in
+the particle that caused the rejection alone. So a driver sampling a rejecting wave
+should take that particle (P3); `compare_run` takes each member's least
+closest approach (entry 51).
+
+### The verifier, twice
+
+**On `569ee4e`: SENT BACK.**
+- **D1, a defect.** `read_dt_file()` read the first line, then called
+  `rewind()` without checking it. A pipe cannot rewind, and the C
+  runtime drops its 4,096-byte buffer. Through a Windows named pipe,
+  `9a42b1d` read old-form dt files exactly as from a file; `569ee4e`
+  refused kepler's ("has 0 steps") and outer's, and ran a file padded to
+  32-byte lines with rc 0 from its line 129, all 6 sample lines wrong
+  and nothing printed. No gate covered it.
+- **F2, a false comment.** The head said a replay with `--replay-iters`
+  of the run's own schedule is that run, bit for bit. That schedule is
+  refused, rc 3, its key differing in epsilon and `dt_file=attempts`.
+- **Confirmed.** On V3's own waves, the 64-body one included, every
+  particle alone: 6,528 values, 0 mismatches. 144 of 144 base schedules
+  replay unchanged; no older key moves in 72 configurations; `--dt-out`
+  is byte-identical in 72; check_corrector's leg is P0's. The
+  massive-body comparison is load bearing: with test particles pulling
+  on the massive bodies, only Saturn differs at binary64. Both controls
+  re-run and fail; the untouched path holds; `make check-light` rc 0.
+- **A note.** Wave C's deletion case held only because no sample fell
+  just before the deleted attempt.
+
+`2638e72` reads the first line by the same `fgets()` the accepted-steps
+loop uses, and starts the loop from it: nothing is read twice or rewound.
+A new case feeds wave A's `--dt-out`, padded to 385 lines of 32 bytes,
+12,320 bytes, and its attempts record through a named pipe
+(`/dev/stdin` on a POSIX host). F2's sentence is corrected and gated:
+every wave, at every format and form, replays whole through its attempts
+record with no schedule. C's precondition is asserted by name, and where
+a rejection does have a sample just before it, only that line's dt_next
+may move. B's deletion must move the bodies' state, 32 of 40 pairs, not
+only a dt_next.
+
+**On `2638e72`: READY.** Through a named pipe, kepler, outer,
+kepler_e099 and a padded outer read identically at `9a42b1d` and
+`2638e72`, and an attempts record differs in 0 of 61 lines. From regular
+files, 31 configurations are identical, and 62 of 62 base-recorded
+schedules replay to the base's run. The pipe case fails on a build with
+the old reader: 118 ok, 1 FAIL. Nothing is loosened. The gate in full:
+303 ok, PASS; with `--quick`, 119.
+
+### No record line moved, and the suite
+
+- **P3's own full `make check`, on `569ee4e`:** 22:52:32 to 01:29:13,
+  2 h 36 min on a shared host; rc 0, 20 legs in full, **1,133 `ok`**,
+  P0's 857 plus the leg's 276, 0 FAIL, no fork errors; every existing leg
+  at P0's count, and all 21 wide-state digest lines P0's.
+- **The merged tree's suite** is entry 51's.
+
+### Stated limits, not closed
+
+- **The gate compares two runs of one build.** A defect in code both
+  share, gravity, the corrector or the prediction itself, would cancel,
+  as entry 47's format difference does. Agreement with REBOUND is
+  check_equivalence's and check_dropin's.
+- **The POSIX pipe branch has not run** on this host. Believed.
+- **A wider format's record replayed at a narrower one is rounded, not
+  refused,** as the older dt file is.
+- **The replay's `flags_seen` and `calls` are not compared.** The replay
+  runs neither the step control nor the exit test.
+- **`ATT_MAGIC` is a hand copy in the tool.** If it drifts, every
+  extraction is refused, loudly.
+- **The zonal path is the seams'.** P3's waves have no zonal line, and
+  extract_particle refuses one whose body is not massive, since the
+  sub-system keeps only the indices below N_active (entry 51, part 2).
+
+### What this does not establish
+
+- **A replay from another producer's records.** Every attempts record
+  and schedule here is this tree's own; taking a GPU run's is not built
+  (entry 51).
+
+## 50. Round 4's P4: `tools/compare_run.py` holds a run's records against this tree, by bits; resumed three times, twice because a driver comparing less passed the gate
+
+**2026-11-11 and 2026-11-12.** Host and pins as in entry 47. P4 branched
+from `9a42b1d`. Its commits are `c640f65`; `517e8d5`, after the lead's
+ruling on entry 47's finding; and `f27f9c6` and `79bd206`, after V4.
+`801e2be` merges `79bd206` on `round4-int4`, and `7d50392` is the lead's
+hardening of control a5, from V4's last note.
+
+### What P4 is, in one paragraph
+
+`compare_run.py RECORD --problem FILE --format F --arith A` reads only
+the record format, the lines `ias15_cft`'s `main()` writes, never the
+program's internals, so an engine that writes the same records is held
+with no change to the driver.
+- **Refused, rc 2, by name, before anything is compared:** a file that is
+  not a record, or whose header lacks a field the rerun is built from; a
+  record of another format or arithmetic than `--format` and `--arith`
+  name; a problem file that is not the record's problem, held by name, G,
+  systems, every body's name and mass, the `active` line and every
+  system's sample 0; a record run from a dt file; and a rerun whose own
+  header is not the record's run.
+- **FAIL, rc 1, by member:** a member missing or incomplete, every
+  member checked; a sampled member's first differing line, by the
+  record's line number, sample, step and column; its five trailer
+  counters; and the members' rejections against the record's total.
+- **The sample:** strata of member index, which is radius in P2's waves,
+  one member from each by the least SHA-256 of seed and index, so a seed
+  picks the same members on every host, and every member whose trailer
+  shows a rejection.
+- **Beside each verdict:** steps, rejections, passes and cap hits; each
+  test particle's closest approach to each active body at the samples;
+  and with `--format-diff`, the difference at a second format on the
+  same accepted steps, by `tools/compare_formats.py`.
+- **Parsing is imported,** `check_ensemble.parse()` and
+  `check_records.header_args()`, neither changed.
+- **The particles' place** was named and empty, with a tripwire: once
+  P3's tools were in the tree the driver said NOT WIRED and its gate
+  failed, in whichever order the two merged, until the lead's P3 x P4
+  seam filled it (entry 51).
+
+### The gate, and the controls that show it can fail
+
+`tools/check_compare_run.py`, one leg in each tier. Its ensemble is made
+by hand, because `make_ensemble.py` refuses `active` lines: 9 waves, each
+a primary, a moon and three massless test particles inclined about 1.8
+degrees, under `active 2`, every value a chain of correctly rounded
+binary64 operations. From dt0 0.3, members 0 and 1 reject their first
+attempt and the rest accept it. Member 8, appended at `517e8d5`, has a
+retrograde particle that meets the moon head on near t = 1, so its 3
+rejections all follow accepted steps; members 0 to 7 kept their bits.
+Every control is permanent, asserted to FAIL or be refused by name:
+
+| control | what it plants |
+|---|---|
+| a, a2 | one byte of a sampled member's line, in an ensemble's record and in a one-system one |
+| a3 | the sign of a zero, a sample-0 dt_last made -0x0p+0, binary64 |
+| a4 | one hex digit past binary64 in a binary128 record, its binary64 value asserted unmoved |
+| a5 | one change in each column the record's own `# columns:` line names: t, dt_next, dt_last, E, the last body's six fields, one field of every other body, and t_hi and t_lo |
+| b | one byte of a trailer counter |
+| c, d | a member deleted; the record cut short |
+| e, f | a record of another format, of another arithmetic, and REBOUND's own ias15_ref record, which shares the first line |
+| g | four problem files under the record's name: a test particle's mass 0 made 2^-40, the active line dropped, a coordinate one ulp off, the name changed. The first two move no bit |
+| h | the `# active` line with one pair too many |
+| i | an empty stand-in for each of P3's two files: the driver must say NOT WIRED and exit 1 |
+
+P4 ran one-defect copies of the driver through their own gate: 12 at
+`c640f65`, 14 at `517e8d5`, 18 at `f27f9c6` and 21 at `79bd206`, each
+caught, the unmutated copy passing. With the problem check removed, a
+problem with a test particle's mass made 2^-40, or one initial x one ulp
+off, in a member the sample does not rerun, passed with rc 0: only the
+problem check refuses those. Case 1 at binary64, from `517e8d5`:
+
+```
+ok   fp64: the sample [0, 1, 2, 3, 6, 8] holds every rejecting member [0, 1, 8] and one member of each stratum [(0, 2), (3, 5), (6, 8)], and is 6 of 9
+ok   fp64: member 8, whose 3 rejected attempts all followed an accepted step, replayed from its dt file at fp64: every value but dt_next is the record's at all 3 samples (dt_next differs at 0), so they leave no state bit, as its note says
+```
+
+**The scope beside the number, after the ruling (`517e8d5`).** Every
+`--format-diff` line ends with the ruling's words, "the difference shows
+the narrower format's round-off on these steps; a narrowing both runs
+share passes it", and the gate states the text itself rather than read
+it from the driver. The note on a rejecting member follows whether its
+first attempt was rejected: the dt file's first step is the record's dt0
+exactly when that attempt was accepted. V4 read why that cannot misfire
+(src/ias15_cft.c:2545-2553, :2964 and :3001-3002) and measured it against
+a one-step run's rejection count: 17 of 17 members at binary64, 17 of 17
+at binary128 and 9 of 9 at binary256.
+
+### The verifier, three times
+
+**On `517e8d5`: SENT BACK.**
+- **D: the gate could not tell bits from binary64 values.** A copy
+  comparing `float(a[0]) != float(b[0])`, binary64 values without their
+  sign, passed the whole gate in full, 54 ok. It also passed the binary64
+  record whose sample-0 dt_last is -0 and a binary128 record one hex
+  digit off below binary64, both of which the shipped driver fails. Every
+  byte-change control was on a binary64 record, and none flipped a zero's
+  sign.
+- **Notes.** NOT WIRED exited 0 with RESULT: PASS. P3's file names were
+  not inputs of the leg's cache key, so check-quick and check-light
+  would skip the leg when only P3's files changed. A comment's rounding
+  count was wrong, and the pair-count refusal named the wrong field. The
+  sample trusts the trailers it tests, a limit of the briefed design.
+- **Confirmed.** Five planted differences each FAIL by name. A record
+  rewritten as another producer's, `program=gpu impl=hip-6.2
+  backend=hip:0` with one extra header and one extra trailer line, passes,
+  so the driver reads only the record format. The sampling, recomputed
+  independently; members 0 to 7 byte-identical to `c640f65`'s; the
+  untouched path, 144 of 144; `check_records` PASS; `make check-light`
+  rc 0, cold, all 20 legs run.
+
+`f27f9c6` adds a3 and a4, makes NOT WIRED end RESULT: FAIL and exit 1
+(control i), puts P3's two files in the leg's key in all three tiers,
+prints the sample's limit beside the sample, and fixes the text.
+
+**On `f27f9c6`: SENT BACK.** V4's float() mutant now fails through a3 and
+a4, and a sign-only mutant through a3 alone. **Defect:** a copy skipping
+the exact-time pair, `zip(rv[:-2], mv[:-2])`, which is what
+`check_equivalence.parse_record` does, passed the full gate, 63 ok. The
+shipped driver fails a planted t_hi digit, and the mutant passes it with
+rc 0. That pair comes from `vaugadd`, the path G1B is expected to refuse
+as AUGADD on hip:N.
+
+`79bd206` adds a5: it reads the record's own `# columns:` line and plants
+one change in each of its 12 columns, one column a sampled member, over
+2 records. It also makes `--exe` absolute: a relative path written with
+forward slashes passed the file check, and Windows' CreateProcess could
+not run it.
+
+**On `79bd206`: READY.** a5's columns are derived: a `# columns:` line
+with three invented columns gave 15, unedited. The pair-skipping mutant
+fails through a5 alone, and so does V4's own, which skips the
+velocities. **Not blocking:** a5 planted body fields in the last body
+only, and a copy skipping body 0's six values passed, 42 ok. Body 0 is
+the primary, whose last bits the zonal reaction can move alone.
+
+The lead's `7d50392` plants one field of every other body as well, the
+fields in turn, 16 columns over 3 records. A copy skipping body 0 fails
+a5 by name, "NOT: x of body 0 (primary) in member 0: IDENTICAL". The gate
+in full at `79bd206`: 64 ok, PASS; with `--quick` at `7d50392`, 42 ok.
+
+### The suite
+
+**P4's own full `make check`, on `c640f65`:** 22:50:46 to 01:27:14, 2 h
+36 min on a shared host; rc 0, 20 legs in full, **907 `ok`**, P0's 857
+plus the leg's 50, 0 FAIL, each existing leg at P0's count. The merged
+tree's suite is entry 51's.
+
+### Stated limits, not closed
+
+- **What a record does not carry.** `# program=` has format, backend,
+  problem, E, N, steps, sample, cs, arith, engine, pc_tol_shift,
+  max_iter, member and system, and dt_file; `# dt0=` has dt0, epsilon, G
+  and pc_tol. Nothing names `--adaptive-mode`, `--softening`, `--min-dt`
+  or `--no-flag-abort`, though the corrector schedule's run key names the
+  first three (P4, read in `main()`). The rerun takes their defaults, so a
+  run made otherwise passes only where the setting moved no bit.
+  ias15_ref's record prints adaptive_mode=2; ias15_cft's does not.
+- **A record's first line does not name its producer:** ias15_ref
+  writes `# cft-rebound ias15 record v1` too.
+- **The sample trusts the trailers it tests,** measured by V4: a member
+  whose trailer under-reports its rejections, the record's total
+  adjusted to match, leaves the sample, and the record passes. An
+  unsampled member's lines are never rerun. The driver prints this
+  beside the sample.
+- **Not built:** sampling by a close approach to a moon, for which no
+  threshold was defined, the closest approach staying a counter; steps
+  and passes an orbit, since a record carries no period and a wave's step
+  is its shortest orbit's (entry 48); both format pairs in one call.
+- **The format difference is a counter, not a detector** (entry 47).
+- **A record whose sample 0 is not the problem file's** is refused as
+  the wrong problem, rc 2, not reported as a FAIL (V4).
+- **`check_records.header_args()` returns nothing for ias15_ref's
+  unspaced `# dt0=` line;** the driver falls back to its own reading.
+
+### What this does not establish
+
+- **A GPU's record.** Every record the driver has held is this tree's,
+  or one of them rewritten by hand as another producer's. The GPU seam
+  test, a difference planted in the first GPU record and shown caught, is
+  the GPU half's (entry 51).
+
+## 51. Round 4's integration: three seams, the P3 x P4 wiring, a verifier of the lead's own commits that sent them back twice, the merges and suites, and two lapses
+
+**2026-11-11 and 2026-11-12.** Host and pins as in entry 47. The lead's
+commits: `4b52705` and `9a42b1d` (entry 46); `291c99c` (entry 47); the
+seams, `ecd2b20`, `110834f` and `acf9fff`; the wiring, `e5636a9`;
+`7d50392` (entry 50); and, after VL, `7a339d1` and `d9c8c8c`. The merges
+are `4dd53f3` (P1), `9dd4051` (P2), `801e2be` (P4) and `7ece3e3` (P3).
+
+### The merges
+
+Logan delegated the round's merges and pushes to the lead on 2026-11-11,
+on round 3's bar: ROUND4.md's decision 1. The bar is a parcel's READY,
+then a full `make check` on the merged tree, read from its log, before
+main moves. Each merge is `--no-ff`, on an integration branch:
+- **P1** on `round4-int`: `4dd53f3`, no conflict, then the fix
+  `291c99c`. main fast-forwarded `9a42b1d..291c99c` and was pushed after
+  its suite (entry 47).
+- **P2 and P4 under one suite,** as ROUND4.md allows two parcels that
+  share no file beyond a leg each: `9dd4051`, no conflict, and seam part
+  1 on `round4-int2`; then `801e2be`, the Makefile's four conflicts each
+  kept both ways, and `7d50392` on `round4-int4`. `round4-int`
+  fast-forwarded to `7d50392`.
+- **P3** after them, on `round4-int5`: `7ece3e3`, one conflict, P1's
+  `do_zonal` beside P3's `do_key` in `main()`, both kept; `acf9fff`, seam
+  part 2, cherry-picked from the first P3 merge's branch, a Makefile
+  conflict resolved; then the wiring and VL's fixes.
+
+The order changed at 05:38 on 2026-11-12, to three suites rather than
+four. Each parcel added a leg to all three tiers, and the seams one: 19
+at P0, then check_zonal, check_ring, check_ring_seams, check_compare_run
+and check_replay, 24 at `d9c8c8c`, counted from the Makefile's `--leg`
+lines. VL measured each merge's tiers to be the union of its parents',
+the three listing the same legs in the same order.
+
+### The seams, `tools/check_ring_seams.py`
+
+One leg in each tier. Each part holds two parcels together where
+neither's gate looks.
+
+**Part 1, the ring in its own field (P1 x P2),** `ecd2b20` and `110834f`.
+A ring generated with its zonal line, against the same file with the
+line deleted:
+- **without the line,** each particle starts too fast by
+  delta = 3/2 J2 (R/r)^2 - 15/8 J4 (R/r)^4, so it moves outward on an
+  orbit of eccentricity delta: in full mode 1,169 to 1,233 km over 24
+  steps, within 2.0% of delta r (1 - cos M), against a bound of 10%;
+- **with the line,** P1's field holds each particle's distance from
+  Saturn to 0.18 km, 1.5e-4 of that excursion, against a bound of 1e-3
+  (3.5e-5 over the 12 steps of `--quick`);
+- **the control, permanent:** J4 zeroed in the zonal line moves each
+  particle outward 16.6 to 18.1 km, within 1.8% of J4's share of delta,
+  18 times the bound, so the bound resolves J4;
+- **the nodes,** ROUND4.md's precession counter: over about ten orbits
+  each particle's node, from h = r x v relative to Saturn, regresses at
+  n - nu, first-order theory in J2 and J4, to 9.0e-4 at worst against
+  5e-3, and the same theory without J4 misses by 2.8e-2 at least, 31
+  times as far, so the run resolves J4's vertical force. In `--quick`,
+  8.3e-3 against 2e-2 over three orbits, J4 not claimed;
+- **the energy,** the zonal potential included, moves 1.2e-15 over 360
+  steps;
+- **the bits,** with the line: the two engines agree at every format,
+  `active 7` gives every body active's samples (420 pairs against none, a
+  reaction of 6 against 63), a two-wave ensemble gives each wave alone,
+  and the record's `# zonal` line is the file's, its counts derived from N
+  and active.
+
+**Part 2, a ring particle replayed with its zonal line (P2 x P3, P1 x
+P3),** `acf9fff`. P2's waves with P1's line; three particles a wave
+replayed alone through P3's `extract()`, imported, from a first step of
+100 s and from one of 1e5 s, whose first attempt is rejected, asserted.
+Fifteen replays at binary64, binary128 and binary256, 192 to 432 values
+each, give the wave's bits for the particle, all seven massive bodies,
+every head and exact-time pair, and the counters, with the record naming
+the term felt by 7 bodies and 6 reacting. The control, permanent: a
+sub-system with its zonal line deleted and its schedule re-keyed by hand
+through `--run-key` replays to other bits in 64 of 72 sample-and-body
+pairs, so the line is load bearing in the replay.
+
+**Part 3, the driver on the ring's own shape (P2 x P4, P1 x P4),**
+`7a339d1`, on VL's finding that no gate ran it. A two-wave ensemble of
+P2's ring with its zonal line, recorded from a first step far too large,
+each wave rejecting at least once: `compare_run` holds both members
+IDENTICAL, and 4 particles, replayed with the zonal line, IDENTICAL. The
+control, permanent: one hex digit of a moon's x on wave 0's last line
+fails wave 0 and both its particles' replays by name, while wave 1 stays
+IDENTICAL.
+
+`check_ring_seams --quick` at `7a339d1`: 21 ok, PASS. VL derived part
+1's excursion and its n and nu independently, and its own copies of
+`ias15_zonal.inc` each fail part 1 in full: J2's x and y factor times 1.01
+fails the circular check, 1.17e-2 against 1e-3; J4's z factor zeroed
+passes it and fails the node counter, 3.72e-2 against 5e-3; the z factor
+negated makes the nodes advance. The node fit's residual is short-period
+noise, 31 times under J4's signal.
+
+### The P3 x P4 wiring, `e5636a9`
+
+P4 left `compare_run`'s `sample_particles()` empty and failing once
+P3's tools were in the tree. Now:
+- each rerun member's rerun also writes its attempts record and
+  schedule, which move no record line (VL: 30 of 30 configurations);
+- two test particles of each rerun member are sampled: its least closest
+  approach to an active body at the samples, since a rejection's path can
+  show in that particle alone (entry 49), and one by the seed;
+- each is written alone with the member's massive bodies and its zonal
+  line by P3's `extract()`, replayed, and held to the record's own lines,
+  not the rerun's: every head field, the particle and every massive body,
+  the exact-time pair, and the trailer's counters;
+- P3's tools present and not callable FAIL by name.
+
+`check_compare_run` asserts the picks, the least being the body the
+gate's own mpmath distances name, and gains control p: a digit planted
+in a sampled particle's x fails exactly that particle's replay, and one
+in the primary's x fails both. In full: 66 ok, PASS, 12 particles a
+format replayed alone and IDENTICAL to the record.
+
+### VL, a verifier of the lead's own commits
+
+No parcel's verifier saw the fix after V1, the seams, the a5 hardening,
+the wiring or the merges, so VL was dispatched on them at 06:00 on
+2026-11-12. It did not block the merges, whose bar is a parcel's READY
+and the suite; its findings were to be fixed before the round closed.
+
+**On `e5636a9`: SENT BACK.**
+- **Defect: the particle path was held in two values.** A copy whose
+  `particle_compare` checked only the particle's x and the primary's x
+  passed `check_compare_run --quick`, 44 ok, while still printing "N
+  values and the trailer's counters": control p planted x columns only.
+  The hole V4 sent P4 back for, in the lead's code.
+- **A combination no gate ran:** `compare_run` on P2's ring with P1's
+  zonal line, the shape a GPU record will have. By hand it passed, and a
+  digit planted in Mimas's x failed the member and both its particles.
+- **Four texts:** check_ring_seams' header gave the `--quick` residual as
+  the full one, and credited J4 to the 10% check, where J4's share of
+  delta is 1.4%; compare_run's header had two stale lines about P1's
+  zonal line; `read_problem()`'s comment did not say an inline comment is
+  refused on the active and zonal lines.
+- **Confirmed:** `291c99c`'s refusals, with 24 of 24 valid files still
+  running in CRLF and with trailing blanks, and `zonal_gives()` moving no
+  bit, 12 of 12 and 9 of 9 configurations; part 1's physics and controls,
+  above; part 2 by hand at binary128, 406 of 406 tokens, its control
+  biting through the bits; a5, a skip-body-1 copy failing; the wiring's
+  picks, and its records unmoved; the four merges, each resolution
+  keep-both with nothing lost; the untouched path, 60 of 60 identical;
+  `make check-light` cold, 24 legs, 890 ok, 0 FAIL.
+
+`7a339d1` adds p2: a planted change in every column `particle_compare`
+compares, read from `# columns:`, 24 a particle, and a trailer counter,
+each failing the least-closest particle's replay by column, 25 held.
+Three mutants of `particle_compare` each fail p2 alone, on exactly what
+they drop. And part 3, and the four texts.
+
+**On `7a339d1`: SENT BACK.** p2's plan is derived, 29 columns from a
+line with invented ones, and the two-x mutant fails p2 alone. **Defect:**
+a `particle_compare` comparing every column on the last sample line only
+passed, 45 ok: control p and every p2 plant sat on the last line. It
+would have missed a replay that differs only in an intermediate line's
+dt_next, the one difference entry 49 measured can occur alone.
+
+`d9c8c8c`: p2's plants cycle over each member's sample lines after sample
+0, which the problem check refuses on, and the gate asserts that more
+than one line is planted; three non-structural trailer counters are
+planted, one a member. The lead's two line mutants, applied: the last
+line only fails p2 alone, 15 of 27 held; one middle line only fails p2
+and control p.
+
+**On `d9c8c8c`: READY.** The tree: 45 ok, p2 27 held on lines 1 and 2.
+VL's last-line mutant fails p2 alone, 15 held, and its new one, the
+particle's fields on every line and the rest on the last line only, 18
+held. p2 is neither inert nor self-confirming: its planting reads
+`# columns:` apart from the driver's reader, each check names its line,
+its column and both values, line coverage is enforced, a shifted pick
+fails, and the trailer plants are isolated.
+
+Every commit of the round then had a verifier's READY: P0 (V0), P1 (V1),
+P2 (V2), P3 (V3), P4 (V4), and the lead's (VL).
+
+### The suites
+
+Read from their logs, each on a shared host:
+
+| commit | tree | legs | result |
+|---|---|---|---|
+| `4b52705` | P0's first | 19 | rc 2 at leg 7: MSYS fork failures (entry 46) |
+| `9a42b1d` | P0 | 19 | rc 0, 857 `ok`, 0 FAIL, 2 h 20 min (entry 46) |
+| `291c99c` | P1 and the fix | 20 | rc 0, 980 `ok`, 0 FAIL, 2 h 47 min (entry 47) |
+
+LEAD-FILL: the P2 + P4 suite on `7d50392` (started 2026-11-12 06:35:43): end, rc, legs, ok and FAIL by `^  ok `, each leg's ok against `291c99c`'s, the six digests, and main's fast-forward and push.
+LEAD-FILL: P3's final suite on `round4-int5` with these docs: its commit, start and end, rc, legs, ok and FAIL by `^  ok `, each leg's ok against `7d50392`'s, the six digests, and main's fast-forward and push.
+
+### The lead's two lapses
+
+**The drop went unwatched from 21:20 to 01:31.** Agents in isolated
+worktrees cannot write `.ledger/`, so their entries go to a drop the lead
+places.
+At dispatch, 21:20 on 2026-11-11, the lead armed no watcher on it. P1's
+urgent file, complete at 22:14, and every drop entry before 01:31
+reached the ledger at 01:31: P1's finding 3 h 17 min late, the earliest
+entries up to 4 h, P3's and P4's addressed to each other and P1's to the
+other three among them. P2's, P3's and P4's full suites had all ended,
+01:27 to 01:29, before it was placed, and P4's format difference took its
+scope in a follow-up, `517e8d5`. From 01:33 a watcher places every drop
+file every 60 s and wakes the lead on any urgent one.
+
+**A mutant run that ran no mutant.** At 08:05 on 2026-11-12, testing the
+fix for VL's line defect, the lead's "last line" and "first line"
+mutants of `particle_compare` both passed. They had never been mutated:
+a heredoc edit of the mutation script put a raw newline in a string, the
+script died on a SyntaxError, and the runner went on and ran the
+unmutated copies. A stand-in passing for a control, the shape this round
+hunted. The script now exits non-zero unless its replacement applies
+exactly once, and the runner writes "=== NOT MUTATED" and runs nothing
+when it does not. Re-run, both mutants fail (above).
+
+### What went to cft-fp256
+
+At Logan's word, one status message at 05:55 on 2026-11-12, before VL's
+report: P0 pushed, P1 to P4 READY; GPU-E's section 6, item 3(b) cannot
+fail on a shared binary64 bottleneck (entry 47); the term costs a body 3
+sub, 34 mul, 14 add, 1 sqrt and 10 div a force evaluation; 17,544 waves
+hold 1,000,008 particles; Pan caps the step; only a first-attempt
+rejection leaves state; a record names no non-default `--adaptive-mode`,
+`--softening`, `--min-dt` or `--no-flag-abort`; the exact-time pair comes
+from `vaugadd`; R = 60,330 km is still believed.
+
+Believed here, by message from cft-fp256's lead: finding 1 is confirmed,
+and GPU-E's item 3(b) and its question 4, which leans on it, are to be
+corrected in a new commit on cft-fp256's main, credited as measured
+here. Its J2 and J4 row, an estimate made before code existed, is to
+become P1's operations as read at `291c99c`. Its cost model takes
+ceil(N/57), a last wave of 49 particles, which this tree cannot write.
+Measured on 2026-11-12: at cft-fp256's `be40005b`, the study's file is
+unchanged since `56006987`.
+
+### Stated limits, not closed
+
+- **A producer's own attempts records.** A particle is sampled only in a
+  member this tree reran, from the rerun's own records. Taking a GPU
+  run's attempts records and schedules, so particles are sampled without
+  a rerun, is not built (docs/RING.md).
+- **p2 does not plant steps_done or steps_rejected,** which stay with the
+  record's structure checks and the member path, and it plants each
+  column on one line (VL).
+- **Part 3's control finds its token with `compare_run`'s own column
+  reader.** `check_compare_run`'s independent reader covers a bug shared
+  there (VL).
+- **The GPU seam test,** a difference planted in the first GPU record and
+  shown caught, belongs to the GPU half's first brief (ROUND4.md).
+
+### What this does not establish
+
+- **Anything on a GPU, a card or WSL.** None was used in round 4.
+- **A full suite on Linux** at any of these merges.

@@ -125,7 +125,9 @@ offers a callback, so there is nowhere wider to hand a routine its
 inputs or take its answer back. Gravity stays wide; a component the
 routine writes is binary64 from that node on, and one it leaves alone
 keeps its wide value exactly. That is a real ceiling of the feature, not
-a detail.
+a detail. The standalone program has one force beside gravity at the
+run's own width: a problem's `zonal` line, J2 and J4 of one body
+(src/ias15_zonal.inc, docs/RING.md). The drop-in has no such line.
 
 **What it costs, and this is the part to weigh.** The arithmetic is a
 software library, not the hardware's doubles. On the outer solar
@@ -193,6 +195,8 @@ Nothing is vendored by hand.
     examples/Makefile        a REBOUND program's makefile with the added lines,
                              marked, for each of the two ways in
     src/ias15_cft.c          the port: every floating-point operation is a cft.h call
+    src/ias15_zonal.inc      J2 and J4 of one body in the run's own format, the
+                             term a problem's `zonal` line names
     src/ias15_engine.h       the same file as a library: the entry points the shim
                              drives (-DIAS15_CFT_LIBRARY, no main)
     src/ias15_constants.h    GENERATED: the Gauss-Radau constants at every format
@@ -218,6 +222,8 @@ Nothing is vendored by hand.
     tools/make_problems.py   the problems as exact binary64 bit patterns
     tools/make_ensemble.py   E perturbed copies of a problem as one ensemble file
     tools/make_nbody.py      a deterministic N-body problem of any size
+    tools/make_ring.py       a Saturn ring: Saturn with J2 and J4, six moons and test
+                             particles, as one system or as 64-body waves
     tools/embed_programs.py  compiles sequencer images into the binary, for the
                              library half, which loads nothing from disk
     tools/check_equivalence.py     the gate: binary64 port == REBOUND, bit for bit
@@ -238,21 +244,39 @@ Nothing is vendored by hand.
                                    negative control that must differ
     tools/check_dropin.c           the gate: the registered integrator == REBOUND's
                                    own ias15, and every refusal refused
+    tools/check_zonal.py           the gate: J2 and J4 against cft-fp256's golden
+                                   model, mpmath's gradient and theory's rates
+    tools/check_ring.py            the gate: the ring's generator, and a wave at
+                                   every format against REBOUND and its ensemble
+    tools/check_replay.py          the gate: a test particle replayed out of its wave,
+                                   rejected attempts included, bit for bit
+    tools/check_compare_run.py     the gate: compare_run, a planted change in every
+                                   column it compares failing by name
+    tools/check_ring_seams.py      the gate: round 4's parts together - the ring in
+                                   its own field, a replay with the zonal line, the driver
     tools/oracle.py          scores a record from its exact bits (mpmath)
     tools/compare_formats.py the round-off floor: one run at two formats, differenced
     tools/horizon.py         percentiles of an ensemble's error against time, and crossings
     tools/divergence.py      members of an ensemble against member 0: the Lyapunov measurement
     tools/reversal.py        forward N steps, back N steps, from the exact recorded state
     tools/state_to_problem.py      a record's sample as a problem file, bit for bit
+    tools/extract_particle.py      one test particle alone with its wave's massive
+                                   bodies, and the wave's schedule re-keyed for it
+    tools/compare_run.py     a run's records against this tree: sampled members and
+                             particles rerun here, bit for bit, by name
     tools/sweep.py           the precision-versus-error measurement
     tools/tabulate.py        its tables and figure
     programs/*.cfta          GENERATED: 66 orbit-sequencer programs
     data/problems/           kepler.txt (e = 1/2), kepler_e09.txt, kepler_e099.txt,
-                             pythagorean.txt (Burrau's problem), outer.txt
+                             pythagorean.txt (Burrau's problem), outer.txt,
+                             zonal_saturn.txt (Saturn's J2 and J4, a moon, a ring
+                             particle)
     data/ias15_constants.json
     results/                 the sweep's per-sample tables and summary
     docs/VALIDATION.md       what ran and what it said, failures included
     docs/ENSEMBLE.md         E systems in one run: the layout, the step decision, the gate
+    docs/RING.md             the Saturn ring's CPU half: what a GPU run's records
+                             will be held to, and how
     docs/HORIZON.md          when binary64 stops being enough, measured
     docs/HARDWARE.md         the resident design, its break-even, what is unverified
     docs/BITSTREAM.md        the f128 image: fp32/fp64/fp128 tiles with binary256
@@ -510,10 +534,47 @@ convention for a fixed step.
   integrates all its systems in one run, each with its own adaptive
   step (docs/ENSEMBLE.md); `--member K` runs system K of it alone,
   which is what the ensemble gate diffs against.
+- A problem file is one line each, its values exact hex floats and its
+  counts integers, `#` and blank lines skipped: `name`, `G`, `N`, `E`,
+  `system` and `body NAME m x y z vx vy vz` (src/ias15_cft.c,
+  `read_problem()`).
+  Round 4 added two:
+  - `active n`: the first n bodies of every system, 1 to N, are massive
+    and the rest test particles, REBOUND's `N_active` with
+    `testparticle_type` 0, in the forces and in the record's energy
+    alike. The record says so in an `# active` line with the pairs a
+    force evaluation folds.
+  - `zonal k R J2 J4`: body k of every system, which must be an active
+    one, is oblate about the z axis, with J2 and J4 at reference radius
+    R, computed in the run's own format (src/ias15_zonal.inc). The
+    record names it in a `# zonal` line.
+
+  Each is one line: a second line, or a field past the last, is refused
+  by name, so an inline comment is refused there, where a body line
+  ignores anything after its seventh field. Anything else unknown is
+  refused by name too, and the corrector schedule's run key names both
+  lines when a problem has them.
 - `--dt-file FILE` replays a prescribed step sequence (one hex float
   per step, shared by every system; needs `--epsilon 0`) and
   `--dt-out FILE` records one; `--dt` and `--epsilon` take a decimal
-  or an exact hex float.
+  or an exact hex float. `--dt-file` also reads the attempts form
+  below, by its first line.
+- `--attempts-out FILE` writes one system's every step attempt,
+  rejected ones included: the dt it tried, `a` or `r` for its outcome,
+  and last the dt the run takes next, under the run's key. `--dt-file`
+  replays it, a recorded rejection taken as the run took it, so a run
+  replays bit for bit through it alone. An ensemble is refused by name;
+  use `--member`. `tools/extract_particle.py` writes one test particle
+  alone with its wave's massive bodies and re-keys the wave's corrector
+  schedule (`--record-iters`) for it, so the particle replays as it
+  moved in its wave (docs/RING.md).
+- `--run-key` prints the run's key, the `# run` line its corrector
+  schedule or attempts record would carry, and exits. It reads the
+  problem and any dt file, and opens no output file.
+- `--zonal-selftest` evaluates the zonal term and its potential at
+  fixed points, prints every library operation it makes as bits, and
+  exits; `tools/check_zonal.py` holds the trace to cft-fp256's golden
+  model.
 
 ### The two suite targets, and why one of them skips
 

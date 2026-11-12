@@ -26,13 +26,15 @@ inherit the PATH from an earlier successful build in the same session.
 
 ## The three suite tiers
 
-| target | what it means | cost |
+| target | what it means | last measured |
 |---|---|---|
-| `make check` | every gate at every format, **never skips** | 2 h 36 min |
-| `make check-quick` | cheaper arguments + the gate cache | 42 min cold, 13 s warm |
-| `make check-light` | cheaper arguments + cache + **scaled step counts** | 31 min cold |
+| `make check` | every gate at every format, **never skips** | 2 h 47 min, 20 legs, `291c99c`, 2026-11-12, shared host |
+| `make check-quick` | cheaper arguments + the gate cache | 42 min cold, 13 s warm, 19 legs, `9e9879f`, 2026-11-06 |
+| `make check-light` | cheaper arguments + cache + **scaled step counts** | 63 min cold, 24 legs, `e5636a9`, 2026-11-12, shared host |
 
-19 legs each. The times are from clean, build included, on 2026-11-06.
+24 legs each at `d9c8c8c`: count the `--leg` lines under each target,
+since every round adds some. A time from a shared host is that host's
+load as much as the suite's.
 
 `make check` is the one whose meaning must not change, so it always
 executes. The cache (`tools/gate_cache.py`) keys on the **artifacts a leg
@@ -50,7 +52,7 @@ Scaling a merge case makes it a run where nothing happens.
 `CFT_REBOUND_ARTIFACT` is part of every cache key, so a pass on the
 software backend can never satisfy a run against a card.
 
-## Three ways this suite has lied
+## Ways this suite has lied
 
 - **Bit-identity is not validity.** Identical results prove the two
   backends agree, not that the problem was the one you meant. Massless
@@ -63,6 +65,30 @@ software backend can never satisfy a run against a card.
 - **Read the log, not the exit code.** The first green `make check-light`
   printed `400 steps` over a leg that ran 40; the only contrary evidence
   was the leg finishing in 159 s instead of 585.
+- **A format difference cannot see a narrowing both runs share.** The
+  zonal term rounded to binary64 in both runs left binary128 against
+  binary256 at 3.37e-33, where the correct build gives 3.40e-33. A shared
+  binary64 bottleneck shows only against a reference without it: the
+  golden model, mpmath, another build (entry 47).
+- **A planted control holds only the column, line and format it sits
+  in.** Round 4 sent gates back four times for that one shape: every
+  control on a binary64 record, none on the exact-time pair, only the
+  particle's x, only the last sample line. Each time a copy comparing
+  less passed the gate (entries 50, 51). Plant one change a column,
+  on more than one line, and run the mutant that skips each. A mutation
+  script that fails to apply its edit runs the clean copy as the
+  "mutant": make it refuse unless the edit lands exactly once.
+
+## A rejection leaves state only before the first accepted step
+
+After an accepted step `er` and `br` already hold the next prediction's
+inputs, so a later rejection moves no state bit: deleted from a replay,
+it shows only in the counters and in the `dt_next` of a sample printed
+just before it. A rejection before any accepted step keeps its corrected `b`
+as the next first guess and moves every line. So a control that deletes
+or nudges a rejected attempt bites only on a first-attempt one, a replay
+is held by its counters as well as its bits, and a comparison of the last
+sample line misses the one difference that can occur alone (entry 49).
 
 ## On a card, tile count is a cost
 

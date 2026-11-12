@@ -3,7 +3,12 @@
 
 # Round 4: the ring's CPU half - what a GPU wave will be held to, built here first
 
-**Status, 2026-11-11: planned. P0 is the lead's and starts tonight.**
+**Status, 2026-11-12: built on the CPU, and every commit READY by its
+verifier. P0 and P1 are on main at `291c99c`; P2, P4, P3, the seams and
+the wiring land on the suites docs/VALIDATION.md entry 51 records.
+Entries 46 to 51 are the round's record, docs/RING.md is the ring's CPU
+half as it stands, and "What the round found against this plan" is at
+the end. The plan below is as it was written.**
 
 > "When time comes to run the MI300X trials, I'd also like to do an IAS15
 > run, but utilizing as many resources from the MI300X as possible, perhaps
@@ -668,3 +673,50 @@ limit.** P4 then reruns the whole wave wherever a rejection happened.
   the other.
 - **The software backend's cost** (ROADMAP.md item 2) has a proposal of
   its own.
+
+---
+
+## What the round found against this plan
+
+Each item is measured unless it says otherwise. The urgent files and
+ledger entries named are in the round's ledger, archived as
+`archive/round4-ledger.zip`; docs/VALIDATION.md carries the numbers.
+
+1. **P1's gate-4 control could not fail as written.** The term rounded
+   to binary64 before it is added, in both runs, leaves binary128 against
+   binary256 on the same 120 steps at 3.371e-33; the correct build gives
+   3.402e-33. Rounded at binary128 only: 4.029e-18 (P1,
+   `urgent/P1-gate4-blind.md`). The lead's ruling of 2026-11-12 01:33
+   (`urgent/lead-gate4-ruling.md`): gate 4 stays with its scope stated,
+   its control is the binary128-only rounding, the control above is
+   asserted to fail gates 1 and 2, and P4's format difference prints its
+   scope. Entry 47.
+2. **"The replay cannot carry a rejected step" holds only for a
+   rejection before the first accepted step.** After an accepted step a
+   rejection leaves no state bit: deleted from the accepted-steps replay,
+   0 of 7 record lines differ at binary64 and binary128, where one
+   first-attempt rejection moves 5 of 5, 7 of 7 and 7 of 7 on three
+   problems (P3's ledger, 2026-11-11 21:58; P4's member 8; V3). P3 built
+   the attempts form all the same, for those waves and for the counters,
+   so the fallback above never ran, and it would have needed only waves
+   that reject first. Entry 49.
+3. **10^6 particles is 17,544 waves of 57, 1,000,008 particles.**
+   `--particles 1000000` is refused by name, and an ensemble's systems all
+   have N bodies, so a 49-particle last wave cannot be written (P2's
+   ledger, 2026-11-11 22:35; the lead's, 2026-11-12 05:59). And "each wave
+   on its own adaptive step" hides a cap: a wave outside Pan's orbit steps
+   at Pan's rate, about 3% more steps over the ring, computed by P2 from a
+   uniform radius. Entry 48.
+4. **The parcels' clone loop was refused by the worktree guard.** The
+   briefs' `while read ... git -C` loop over third_party/ was refused by
+   the worktree-isolation check; plain, separate `git clone` and
+   `git checkout` commands worked (P2's and P4's reports).
+5. **Decision 1 was delegated.** Logan delegated round 4's merges and
+   pushes to the lead on 2026-11-11, on round 3's bar (the lead's ledger,
+   21:15). Entry 51 has the merges.
+6. **The lead's own seams and wiring got a verifier, VL.** No parcel's
+   verifier saw the fix after V1, the seams, the a5 hardening, the P3 x P4
+   wiring or the merges, so VL was dispatched on them (the lead's ledger,
+   2026-11-12 05:52). It sent them back twice, each time for a control
+   that held less than its comparison, and was READY on `d9c8c8c`.
+   Entry 51.
