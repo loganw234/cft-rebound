@@ -40,11 +40,15 @@
 #      operands, as its own exact value, one monomial; each divisor, here
 #      a sum of squares, its root, or an exact constant, by its own exact
 #      value, which the gate checks it is). So
-#          |computed - reference| <= gamma_k * |abs evaluation| + |exact - reference|,
-#      and the dataflow evaluated exactly at 200 digits must equal the
-#      reference too, to 1e-150 of its scale: that is the formula, held
-#      apart from its rounding. At binary256 the bound must itself be 1e-68
-#      of the term or tighter at every point. Beside it, the physics: J4's z
+#          |computed - reference| <= gamma_k * |abs evaluation| + 1e-150 * scale,
+#      the last mpmath's own allowance at 200 digits, and the dataflow
+#      evaluated exactly must equal the reference within that allowance:
+#      that is the formula, held apart from its rounding, at every point,
+#      for body k's reaction and for the potential alike. At binary256 the
+#      bound must itself be 1e-68 of the term or tighter at every point.
+#      (The first version added |exact - reference| to the bound and held
+#      only the points to it, so a reaction left out passed its own line:
+#      the dropped-reaction control found it.) Beside it, the physics: J4's z
 #      part, the potential's gradient with J4 and without, is many bounds
 #      above the rounding at every point off the plane, so a dropped or
 #      wrong J4 z term cannot hide.
@@ -276,6 +280,17 @@ def reference(prob, s, j, j4=True):
     return grad, phi(*d), d
 
 
+def held(fmtname, p, nd, ref, scale):
+    """One computed component against its reference: (|error|, its bound,
+    whether the dataflow evaluated exactly is the reference). The bound is
+    gamma_k times the absolute evaluation, plus 1e-150 of the scale for
+    mpmath's own error at 200 digits; the exact dataflow must be within
+    that allowance of the reference, or the formula itself is wrong."""
+    allow = mpf(10) ** -150 * (nd.absv + scale)
+    err = abs(value(FORMATS[fmtname], nd.bits) - ref)
+    return err, gamma(nd.k, p) * nd.absv + allow, abs(nd.exact - ref) <= allow
+
+
 def gate_formula(fmtname, prob, res_acc, res_pot, verdict, quiet=False):
     """Gate 2 at one format: a line a point, and the system's sums."""
     p = FORMATS[fmtname].prec
@@ -303,11 +318,8 @@ def gate_formula(fmtname, prob, res_acc, res_pot, verdict, quiet=False):
             plane = d[2] == 0
             errs, bounds, exacts = [], [], []
             for c in range(3):
-                nd = nds[c]
-                comp = value(FORMATS[fmtname], nd.bits)
-                errs.append(abs(comp - ref[c]))
-                bounds.append(gamma(nd.k, p) * nd.absv + abs(nd.exact - ref[c]))
-                exacts.append(abs(nd.exact - ref[c]) <= mpf(10) ** -150 * (nd.absv + norm))
+                e_, b_, x_ = held(fmtname, p, nds[c], ref[c], norm)
+                errs.append(e_), bounds.append(b_), exacts.append(x_)
             ok = all(e <= b for e, b in zip(errs, bounds)) and all(exacts)
             relb = max(bounds) / norm
             worst_rel_bound = max(worst_rel_bound, relb)
@@ -325,19 +337,19 @@ def gate_formula(fmtname, prob, res_acc, res_pot, verdict, quiet=False):
         # body k: the interacting bodies' reactions; the potential
         nds = res_acc[(s, k)]
         norm = mpmath.sqrt(sum(v * v for v in react))
-        errs = [abs(value(FORMATS[fmtname], nds[c].bits) - react[c]) for c in range(3)]
-        bounds = [gamma(nds[c].k, p) * nds[c].absv + abs(nds[c].exact - react[c]) for c in range(3)]
-        ok = all(e <= b for e, b in zip(errs, bounds)) and norm > 0
+        hk = [held(fmtname, p, nds[c], react[c], norm) for c in range(3)]
+        ok = all(e <= b and x for e, b, x in hk) and norm > 0
         ok_all &= ok
         lines.append((ok, "system %d body %d (the oblate one): the reaction of the %d bodies that act on it, |error| %s of "
-                      "it, the bound %s" % (s, k, ni - 1, mpmath.nstr(max(errs) / norm, 3), mpmath.nstr(max(bounds) / norm, 3))))
-        nd = res_pot[s]
-        perr = abs(value(FORMATS[fmtname], nd.bits) - upot)
-        pb = gamma(nd.k, p) * nd.absv + abs(nd.exact - upot)
-        ok = perr <= pb and abs(nd.exact - upot) <= mpf(10) ** -150 * nd.absv
+                      "it, the bound %s%s" % (s, k, ni - 1, mpmath.nstr(max(h[0] for h in hk) / norm, 3),
+                                              mpmath.nstr(max(h[1] for h in hk) / norm, 3),
+                                              "" if all(h[2] for h in hk) else "; THE FORMULA ITSELF differs from the gradient")))
+        perr, pb, px = held(fmtname, p, res_pot[s], upot, abs(upot))
+        ok = perr <= pb and px
         ok_all &= ok
-        lines.append((ok, "system %d potential, the J terms of the %d interacting bodies: |error| %s of it, the bound %s"
-                      % (s, ni - 1, mpmath.nstr(perr / abs(upot), 3), mpmath.nstr(pb / abs(upot), 3))))
+        lines.append((ok, "system %d potential, the J terms of the %d interacting bodies: |error| %s of it, the bound %s%s"
+                      % (s, ni - 1, mpmath.nstr(perr / abs(upot), 3), mpmath.nstr(pb / abs(upot), 3),
+                         "" if px else "; THE FORMULA ITSELF differs from the potential")))
     for ok, text in lines:
         if not quiet or not ok:
             verdict(ok, "%s: %s" % (fmtname, text))
@@ -651,17 +663,19 @@ def main():
                 if any(nd is None or value(FORMATS[fmtname], nd.bits) == 0 for nd in nds):
                     wrongs.append("system %d body %d is off the plane and a component of its term is 0" % (s, j))
         verdict(not bad and not wrongs and ops > 0,
-                "%d operations, %d elements, each the golden model's bits and flags (flags seen 0x%x), every operand "
-                "a declared input or the trace's own last result, every printed result the trace's; %d points off the "
-                "plane with every component nonzero, %d on it with z's exactly 0%s"
-                % (ops, els, fl, live, dead, "".join("\n         " + b for b in (bad + wrongs)[:12])))
+                "%d operations, %d elements, each against the golden model's bits and flags (flags seen 0x%x), each "
+                "operand against a declared input or the trace's own last result, each printed result against the "
+                "trace: %d mismatches; %d points off the plane (every component wanted nonzero) and %d on it (z's "
+                "wanted exactly 0): %d wrong%s"
+                % (ops, els, fl, len(bad), live, dead, len(wrongs), "".join("\n         " + b for b in (bad + wrongs)[:12])))
         print("check_zonal at %s: the term against the potential's gradient, mpmath at %d digits" % (fmtname, mp.dps))
         ok, worst, least = gate_formula(fmtname, prob, res_acc, res_pot, verdict)
         if fmtname == "fp256":
             verdict(worst <= mpf("1e-68"), "fp256: the bound is %s of the term at its widest, against the 1e-68 asked"
                     % mpmath.nstr(worst, 3))
-        verdict(least is not None and least > 1000, "%s: J4's z part is at least %s bounds above the rounding at every "
-                "point off the plane, so it cannot hide in it" % (fmtname, mpmath.nstr(least, 3) if least else "no"))
+        verdict(least is not None and least > 1000, "%s: J4's z part over the bound, at its least off the plane: %s "
+                "(wanted above 1000, so that it cannot hide in the rounding)"
+                % (fmtname, mpmath.nstr(least, 3) if least else "no point"))
 
     work = os.path.join(args.build, "check_zonal")
     os.makedirs(work, exist_ok=True)
@@ -679,8 +693,9 @@ def main():
             committed = f.read()
     except OSError:
         committed = None
-    verdict(committed == problem_text(), "%s is what --write-problem derives from its sources' values, byte for byte"
-            % os.path.relpath(PROBLEM, root).replace(os.sep, "/"))
+    verdict(committed == problem_text(), "%s against what --write-problem derives from its sources' values, byte for "
+            "byte: %s" % (os.path.relpath(PROBLEM, root).replace(os.sep, "/"),
+                          "the same" if committed == problem_text() else "DIFFERENT (regenerate it, and review the diff)"))
     nozonal = write("zonal_saturn_nozonal.txt", problem_text(zonal=False))
     head = problem_text()
     R_hex, J2_hex, J4_hex = re.search(r"^zonal 0 (\S+) (\S+) (\S+)$", head, re.M).groups()
@@ -737,18 +752,21 @@ def main():
         th0 = theory(GM, R, J2, mpf(0), meas["n"])
         second = 2 * (meas["e"] ** 2 + meas["sini"] ** 2)
         orbits = meas["span"] * meas["n"] / (2 * mpmath.pi)
-        for key, name, sense in (("apse", "the apsides advance", 1), ("node", "the node regresses", -1)):
+        for key, name, sense in (("apse", "the apsidal rate (wanted positive: the apsides advance)", 1),
+                                 ("node", "the nodal rate (wanted negative: the node regresses)", -1)):
             first, exact, got, nj4 = th[key], th[key + "_exact"], meas[key], th0[key]
             tol = abs(exact - first) + abs(first) * second
             ok = abs(got - first) <= tol and got * sense > 0
-            verdict(ok, "%s at %s rad/s over %s orbits; first-order theory %s (n - %s), off by %s, within the second "
-                    "order's %s: the J terms squared %s and 2(e^2 + sin^2 i) = %s, e = %s, i = %s deg"
+            verdict(ok, "%s: %s rad/s over %s orbits; first-order theory %s (n - %s); off by %s, against the second "
+                    "order's %s (the J terms squared %s, and 2(e^2 + sin^2 i) = %s with e = %s, i = %s deg)"
                     % (name, mpmath.nstr(got, 6), mpmath.nstr(orbits, 3), mpmath.nstr(first, 6),
                        "kappa" if key == "apse" else "nu", mpmath.nstr(abs(got / first - 1), 3), mpmath.nstr(tol / abs(first), 3),
                        mpmath.nstr(abs(exact / first - 1), 3), mpmath.nstr(second, 3), mpmath.nstr(meas["e"], 3),
                        mpmath.nstr(mpmath.degrees(mpmath.asin(meas["sini"])), 3)))
-            verdict(abs(got - nj4) > tol, "%s: without J4 the theory would give %s, %s off, outside that, so the run "
-                    "resolves J4" % (name, mpmath.nstr(nj4, 6), mpmath.nstr(abs(got / nj4 - 1), 3)))
+            verdict(abs(got - nj4) > tol, "%s, J4 resolved: the same theory without J4 gives %s, %s off the measured "
+                    "rate (wanted past the second order's %s)"
+                    % (key == "apse" and "the apsidal rate" or "the nodal rate", mpmath.nstr(nj4, 6),
+                       mpmath.nstr(abs(got / nj4 - 1), 3), mpmath.nstr(tol / abs(first), 3)))
 
     # 4: binary128 against binary256 on the same steps
     print("check_zonal: 4. binary128 against binary256 on binary128's own steps (--dt-out, then --dt-file at epsilon 0)")
@@ -761,10 +779,10 @@ def main():
             moved = max(moved, mpmath.sqrt(sum((sn[i][c] - sb[i][c]) ** 2 for c in range(3))) / r)
     bound = mpf(2) ** -113 * sw ** 2
     verdict(len(a) == len(b) == sw + 1 and 0 < worst <= bound,
-            "%d samples on the same %d steps: the positions differ by %s of the distance from Saturn at most, within "
-            "binary128's round-off, u128 * steps^2 = %s (binary64's would be %s); the term itself moved them %s"
-            % (len(a), sw, mpmath.nstr(worst, 3), mpmath.nstr(bound, 3), mpmath.nstr(mpf(2) ** -53 * sw ** 2, 3),
-               mpmath.nstr(moved, 3)))
+            "%d samples on the same %d steps: the positions differ by %s of the distance from Saturn at most, against "
+            "binary128's round-off, u128 * steps^2 = %s (binary64's: %s), and must differ at all; the term itself "
+            "moved them %s" % (len(a), sw, mpmath.nstr(worst, 3), mpmath.nstr(bound, 3),
+                               mpmath.nstr(mpf(2) ** -53 * sw ** 2, 3), mpmath.nstr(moved, 3)))
 
     # Both engines and both forms see the term
     print("check_zonal: both engines and both forms, and an ensemble against its members")
@@ -779,9 +797,10 @@ def main():
                 recs[(engine, arith, tag)] = [l for l in out.splitlines() if l.startswith("sample ")] if rc == 0 else None
         same = recs[("loop", "fma", "zonal")] is not None and recs[("loop", "fma", "zonal")] == recs[("program", "fma", "zonal")]
         seen = all(recs[(e, a_, "zonal")] and recs[(e, a_, "zonal")] != recs[(e, a_, "none")] for e, a_ in eng)
-        verdict(same and seen, "%s: the program engine gives the loop engine's FMA-form record, %d samples identical, and "
-                "on each engine and form the record differs from the one without the zonal line"
-                % (fmt, len(recs[("loop", "fma", "zonal")] or [])))
+        verdict(same and seen, "%s: the program engine against the loop engine's FMA-form record, %d samples: %s; each "
+                "engine and form against its run without the zonal line: %s"
+                % (fmt, len(recs[("loop", "fma", "zonal")] or []), "identical" if same else "NOT identical",
+                   "every one differs" if seen else "NOT every one differs, or one did not run"))
     lines = problem_text().splitlines()
     heads = [l for l in lines if l and not l.startswith("body ")]
     bodies = [l for l in lines if l.startswith("body ")]
@@ -799,7 +818,9 @@ def main():
         members.append(rc_k == 0 and mine and mine == [l for l in out_k.splitlines() if l.startswith("sample ")])
     differ = [w[2] for w in whole if w[1] == "0"] != [w[2] for w in whole if w[1] == "1"]
     verdict(rc == 0 and all(members) and differ, "an ensemble of two (the second moon three times as massive): each "
-            "system's lines are its member's run alone, and the two systems differ")
+            "system against its member run alone: %s; the two systems against each other: %s"
+            % ("both identical" if all(members) else "NOT both identical (rc %d)" % rc,
+               "they differ" if differ else "THE SAME, so the comparison cannot fail"))
 
     # A test particle's mass moves no active body here either
     t40 = problem_text().replace("body ring 0x0.0p+0 ", "body ring 0x1.0000000000000p-40 ")
@@ -807,10 +828,11 @@ def main():
     rc1, o1, _ = run([cft, "--format", "fp64", "--problem", PROBLEM, "--steps", "12", "--sample", "4", "--quiet"] + adapt)
     rc2, o2, _ = run([cft, "--format", "fp64", "--problem", m40, "--steps", "12", "--sample", "4", "--quiet"] + adapt)
     s1 = [l for l in o1.splitlines() if l.startswith("sample ")]
-    verdict(rc1 == 0 and rc2 == 0 and s1 and s1 == [l for l in o2.splitlines() if l.startswith("sample ")]
-            and t40 != problem_text(),
-            "under active 2, the ring particle given a mass of 2^-40 changes nothing, the energy column included: "
-            "a test particle takes the term and gives no reaction (%d samples)" % len(s1))
+    same40 = bool(s1) and s1 == [l for l in o2.splitlines() if l.startswith("sample ")]
+    verdict(rc1 == 0 and rc2 == 0 and same40 and t40 != problem_text(),
+            "under active 2, the ring particle with a mass of 2^-40 against massless, %d samples, the energy column "
+            "included: %s (a test particle takes the term and gives no reaction; rc %d, %d)"
+            % (len(s1), "identical" if same40 else "THEY DIFFER", rc1, rc2))
 
     # 5. The zonal line: accepted, its record line, its run key, its refusals
     print("check_zonal: 5. the zonal line, its record line, the run key's zonal= field, and the refusals")
@@ -820,9 +842,9 @@ def main():
     want = (0, hexval(R_hex), hexval(J2_hex), hexval(J4_hex), 2, 0, 1)
     got = (int(m.group(1)), hexval(m.group(2)), hexval(m.group(3)), hexval(m.group(4)), int(m.group(5)), int(m.group(6)),
            int(m.group(7))) if m else None
-    verdict(rc == 0 and got == want, "the zonal line is accepted (rc %d), and the record says so: body 0, R, J2 and J4 "
-            "the file's values, acting on 2 bodies (N - 1) and taking the reaction of 1 (active 2, less body 0)%s"
-            % (rc, "" if got == want else ": %s" % (m.group(0) if m else "no # zonal line")))
+    verdict(rc == 0 and got == want, "the zonal line: rc %d, and the record's # zonal line against the file's body 0, "
+            "R, J2 and J4, acting on 2 bodies (N - 1) and taking the reaction of 1 (active 2, less body 0): %s"
+            % (rc, "all of them" if got == want else (m.group(0) if m else "no # zonal line")))
 
     def kv(line):
         return dict(t.split("=", 1) for t in line.split() if "=" in t)
@@ -837,10 +859,12 @@ def main():
     rcs, outs, _ = run([cft, "--problem", PROBLEM, "--replay-iters", sched] + kcommon)
     attempts = sum(1 for l in open(sched) if not l.startswith("#")) if rc0 == 0 else 0
     lines0 = [l for l in out0.splitlines() if l.startswith("sample ")]
+    lines_r = [l for l in outs.splitlines() if l.startswith("sample ")]
     verdict(rc0 == 0 and zfield.startswith("0,") and len(zfield.split(",")) == 4 and rcs == 0 and attempts > 0 and lines0
-            and lines0 == [l for l in outs.splitlines() if l.startswith("sample ")],
-            "a schedule recorded with the zonal line (%d attempts) carries zonal=%s, and replays under it to the same %d "
-            "sample lines (rc %d)" % (attempts, zfield, len(lines0), rcs))
+            and lines0 == lines_r,
+            "a schedule recorded with the zonal line, %d attempts, its key's zonal=%s; replayed under it: rc %d, %d of %d "
+            "sample lines the recording's" % (attempts, zfield or "(none)", rcs,
+                                              sum(1 for x, y in zip(lines0, lines_r) if x == y), len(lines0)))
 
     def nudge(text, idx):
         # the zonal line's field idx (1 R, 2 J2, 3 J4), its last hex digit moved
@@ -857,15 +881,17 @@ def main():
         moved = sorted(k for k in set(kv(mm.group(1))) | set(kv(mm.group(2)))
                        if kv(mm.group(1)).get(k) != kv(mm.group(2)).get(k)) if mm else []
         verdict(rc == 3 and "was recorded from a different run" in err and moved == ["zonal"],
-                "the schedule replayed under another %s is refused by name (rc %d); the keys differ in %s, and in nothing "
-                "else" % (label, rc, ", ".join(moved) or "nothing"))
+                "the schedule replayed under another %s: rc %d, %s; the keys differ in %s (wanted refused by name, the "
+                "keys differing in zonal= alone)" % (label, rc, "refused by name" if "was recorded from a different run"
+                                                     in err else "not refused by name", ", ".join(moved) or "nothing"))
     refusals = (("a zonal body that is a test particle", head.replace("zonal 0 ", "zonal 2 "), "is a test particle"),
                 ("a zonal body past N", head.replace("zonal 0 ", "zonal 3 "), "k is a body of each system"),
                 ("a short zonal line", re.sub(r"(?m)^(zonal \S+ \S+ \S+) \S+$", r"\1", head), "a short zonal line"))
     for label, text, needle in refusals:
         rc, out, err = run([cft, "--format", "fp64", "--problem", write("zonal_refused.txt", text), "--steps", "1", "--quiet"])
-        verdict(rc != 0 and needle in err and not out.strip(), "%s is refused by name, before any record (rc %d): %s"
-                % (label, rc, err.strip()[-150:]))
+        verdict(rc != 0 and needle in err and not out.strip(), "%s: rc %d, %s of stdout (wanted a refusal by name, "
+                "before any record): %s" % (label, rc, "nothing" if not out.strip() else "%d lines" % len(out.splitlines()),
+                                             err.strip()[-150:]))
 
     print("RESULT: %s" % ("PASS" if allok else "FAIL"))
     return 0 if allok else 1
