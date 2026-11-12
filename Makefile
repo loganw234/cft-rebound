@@ -648,6 +648,17 @@ IN_RING     := --input tools/check_ring.py --input tools/make_ring.py --input to
 # file of data/problems/
 IN_RSEAMS   := --input tools/check_ring_seams.py --input tools/make_ring.py --input tools/check_ensemble.py \
                --input tools/check_equivalence.py $(IN_PROGRAM) $(IN_PROGS)
+# tools/check_compare_run.py: the driver it holds and every script the
+# driver imports or runs, the program the driver reruns, REBOUND's own
+# program (whose record the driver must refuse) on the problem it reads, and
+# the program images for the program-engine case (ROUND4.md, P4). P3's two
+# files are inputs whenever they exist: the driver's verdict turns on their
+# presence (its particle place), so a pass from before they landed must not
+# satisfy a run after.
+IN_COMPARE  := --input tools/check_compare_run.py --input tools/compare_run.py --input tools/check_ensemble.py \
+               --input tools/check_records.py --input tools/check_equivalence.py --input tools/compare_formats.py \
+               --input tools/oracle.py $(IN_PROGRAM) $(IN_REF) --input data/problems/kepler.txt $(IN_PROGS) \
+               $(patsubst %,--input %,$(wildcard tools/extract_particle.py tools/check_replay.py))
 
 # The pins, checked at build time and not only at fetch time: a clone
 # under third_party/ that is not at its MANIFEST commit fails every tier
@@ -672,6 +683,7 @@ check: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_records --mode full --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B)
 	$(GATE_CACHE) --leg check_ensemble --mode full --input tools/check_ensemble.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_ensemble.py --build $(B)
 	$(GATE_CACHE) --leg check_ring --mode full $(IN_RING) -- $(PYTHON) tools/check_ring.py --build $(B)
+	$(GATE_CACHE) --leg check_compare_run --mode full $(IN_COMPARE) -- $(PYTHON) tools/check_compare_run.py --build $(B)
 	$(GATE_CACHE) --leg check_archive --mode full --input tools/check_archive.py $(IN_ARCHIVE) -- $(PYTHON) tools/check_archive.py --build $(B)
 	$(GATE_CACHE) --leg check_bodycount --mode full --input tools/check_bodycount.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_bodycount.py --build $(B)
 	$(GATE_CACHE) --leg gate_real_fp64 --mode full $(IN_REAL) -- $(B)/gate_real$(EXE) --fp64
@@ -704,6 +716,7 @@ check-quick: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_records --mode quick --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_ensemble --mode quick --input tools/check_ensemble.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_ensemble.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_ring --mode quick $(IN_RING) -- $(PYTHON) tools/check_ring.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_compare_run --mode quick $(IN_COMPARE) -- $(PYTHON) tools/check_compare_run.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_archive --mode quick --input tools/check_archive.py $(IN_ARCHIVE) -- $(PYTHON) tools/check_archive.py --build $(B)
 	$(GATE_CACHE) --leg check_bodycount --mode quick --input tools/check_bodycount.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_bodycount.py --build $(B) --quick
 	$(GATE_CACHE) --leg gate_real_fp64 --mode quick $(IN_REAL) -- $(B)/gate_real$(EXE) --fp64
@@ -739,6 +752,7 @@ check-light: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_records --mode quick --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_ensemble --mode quick --input tools/check_ensemble.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_ensemble.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_ring --mode quick $(IN_RING) -- $(PYTHON) tools/check_ring.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_compare_run --mode quick $(IN_COMPARE) -- $(PYTHON) tools/check_compare_run.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_archive --mode quick --input tools/check_archive.py $(IN_ARCHIVE) -- $(PYTHON) tools/check_archive.py --build $(B)
 	$(GATE_CACHE) --leg check_bodycount --mode quick --input tools/check_bodycount.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_bodycount.py --build $(B) --quick
 	$(GATE_CACHE) --leg gate_real_fp64 --mode quick $(IN_REAL) -- $(B)/gate_real$(EXE) --fp64
