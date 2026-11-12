@@ -9,15 +9,16 @@
 # file continues from precisely the recorded state - which is what a
 # reversal test (integrate forward, then back with -dt) needs.
 #
-# The problem is the record's, every line of it: name, G, N and the
-# bodies, and the `active` and `zonal` lines (ROUND4.md, P0) from the
-# record's `# active` and `# zonal` lines, which the program writes only
-# for a problem that has them, so a record without them gives the file it
-# always gave. Until VALIDATION entry 52 this tool dropped those two lines,
-# and tools/reversal.py ran a zonal or `active` problem's backward leg on
-# another problem. A problem line added later must be carried here too:
-# reversal.py refuses a turn problem whose lines are not the original's,
-# and tools/check_reversal.py holds both tools to it.
+# The problem is one system of the record's: name, G, N and the bodies,
+# and the `active` and `zonal` lines (ROUND4.md, P0) from the record's
+# `# active` and `# zonal` lines, which the program writes only for a
+# problem that has them, so a record without them gives the file it always
+# gave. Each value is the record's own exact hex, never a float. Until
+# VALIDATION entry 52 this tool dropped those two lines, and
+# tools/reversal.py ran a zonal or `active` problem's backward leg on
+# another problem. A problem line added later must be carried here too;
+# until it is, reversal.py refuses the turn problem by name.
+# tools/check_reversal.py holds both tools to the two lines there are.
 #
 #   python tools/state_to_problem.py RECORD --out PROBLEM.txt [--sample K | --last] [--system S] [--name NAME]
 

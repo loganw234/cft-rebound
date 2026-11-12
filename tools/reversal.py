@@ -17,11 +17,14 @@
 # what IS exact here is that the run repeats bit for bit.
 #
 # The backward leg must run the problem the forward leg ran. The turn
-# problem (tools/state_to_problem.py) carries every line of the original
-# but its name and bodies; this tool refuses a turn or return problem
-# whose other lines are not the original's, value for value (VALIDATION
-# entry 52: until then the `active` and `zonal` lines were dropped, and a
-# zonal problem was reversed without its J2 and J4).
+# problem (tools/state_to_problem.py) is one system: the original's G, its
+# `active` and `zonal` lines, and its bodies' state under their names.
+# This tool refuses a turn or return problem whose other lines are not the
+# original's as the run reads them, value for value (VALIDATION entry 52:
+# until then the `active` and `zonal` lines were dropped, and a zonal
+# problem was reversed without its J2 and J4). So an ensemble's `E` and
+# `system` lines, which a turn problem cannot carry, are refused, and so
+# is a problem line added later, until state_to_problem.py carries it.
 #
 #   python tools/reversal.py --problem FILE --format F --dt DT --steps N [--build build] [--keep DIR]
 
@@ -55,24 +58,63 @@ def read_problem(path):
     return G, bodies
 
 
-def problem_lines(path):
+# A run reads a problem's hex correctly rounded, ties to even (from_text()
+# in src/ias15_cft.c, through cft_from_hex_char with CFT_RNE), so a value
+# wider than the run's format is, in the run, its rounding, and the turn
+# problem carries that. Each format's significand bits and least normal
+# exponent: IEEE 754-2019's binary64, binary128 and binary256.
+FORMATS = {"fp64": (53, -1022), "fp128": (113, -16382), "fp256": (237, -262142)}
+
+# How read_problem() reads a line: G, E and a system's name take one field
+# and ignore the rest; `active` and `zonal` refuse a field past their last,
+# so all of theirs count; and so does all of a line not named here.
+FIELDS = {"G": 1, "E": 1, "system": 1}
+
+
+def rounded(v, fmt):
+    """v, a Fraction, to the nearest value of fmt, ties to even."""
+    p, emin = FORMATS[fmt]
+    if v == 0:
+        return v
+    a = abs(v)
+    e = a.numerator.bit_length() - a.denominator.bit_length()
+    if Fraction(2) ** e > a:
+        e -= 1                                       # e = floor(log2 a)
+    q = Fraction(2) ** (max(e, emin) - p + 1)        # the format's last place at a
+    n, r = divmod(a / q, 1)
+    if r > Fraction(1, 2) or (r == Fraction(1, 2) and n % 2):
+        n += 1
+    return n * q if v > 0 else -(n * q)
+
+
+def problem_lines(path, fmt):
     """Every line of a problem file but its comments, its name, its N and
-    its bodies, by first word: what makes it this problem and not another
-    (src/ias15_cft.c, read_problem()'s grammar). Hex values compare by their
-    exact value and sign, so 0x1.d754p+15 is 0x1.d754000000000p+15."""
+    its bodies, by first word, as a run at fmt reads it: what makes it this
+    problem and not another (src/ias15_cft.c, read_problem()). A hex value
+    is its rounding to fmt, with its sign, so 0x1.d754p+15 is
+    0x1.d754000000000p+15, and a G wider than binary64 is its binary64 in
+    an fp64 run; an integer is its value, so `active 01` is `active 1`."""
     out = {}
     for line in open(path):
         toks = line.split()
         if not toks or toks[0].startswith("#") or toks[0] in ("name", "N", "body"):
             continue
-        vals = tuple(hex_to_fraction(t) if t.lstrip("+-")[:2].lower() == "0x" else t for t in toks[1:])
-        out.setdefault(toks[0], []).append(vals)
+        vals = []
+        for t in (toks[1:1 + FIELDS[toks[0]]] if toks[0] in FIELDS else toks[1:]):
+            if t.lstrip("+-")[:2].lower() == "0x":
+                v, neg = hex_to_fraction(t)
+                vals.append((v if isinstance(v, str) else rounded(v, fmt), neg))
+            elif t.lstrip("+-").isdigit():
+                vals.append(int(t))
+            else:
+                vals.append(t)
+        out.setdefault(toks[0], []).append(tuple(vals))
     return out
 
 
-def same_problem(original, other, what):
+def same_problem(original, other, what, fmt):
     """Refuse a turn or return problem that is not the original problem."""
-    a, b = problem_lines(original), problem_lines(other)
+    a, b = problem_lines(original, fmt), problem_lines(other, fmt)
     if a != b:
         lost = sorted(set(a) - set(b))
         added = sorted(set(b) - set(a))
@@ -135,13 +177,13 @@ def main():
     open(fwd_rec, "w", newline="\n").write(fwd)
     turn = os.path.join(keep, tag + "_turn.txt")
     run([sys.executable, os.path.join(here, "state_to_problem.py"), fwd_rec, "--out", turn, "--last"])
-    same_problem(args.problem, turn, "turn")
+    same_problem(args.problem, turn, "turn", args.format)
     back = run(leg_command(cft, args.format, args.steps, extra, turn, "-" + args.dt.lstrip("+")))
     back_rec = os.path.join(keep, tag + "_back.rec")
     open(back_rec, "w", newline="\n").write(back)
     ret = os.path.join(keep, tag + "_return.txt")
     run([sys.executable, os.path.join(here, "state_to_problem.py"), back_rec, "--out", ret, "--last"])
-    same_problem(args.problem, ret, "return")
+    same_problem(args.problem, ret, "return", args.format)
 
     G, b0 = read_problem(args.problem)
     _, b1 = read_problem(ret)
