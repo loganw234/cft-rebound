@@ -687,7 +687,10 @@ def main():
     print("check_scalar: the route %s (%s, %s)" % (ROUTE, env_name, routes[ROUTE]["bit"]))
 
     # 1. The recount.
-    print("check_scalar: the recount, from %s" % os.path.relpath(args.source, root))
+    with open(args.source, encoding="utf-8") as f:
+        incs = [s[1] for s in with_includes(args.source, f.read())[1][1:]]
+    print("check_scalar: the recount, from %s%s" % (os.path.relpath(args.source, root),
+                                                   " and the %s it includes" % ", ".join(incs) if incs else ""))
     sites, left, bad, consts, per_system, aliased = recount(args.source)
     have = collections.Counter((s[0], s[1], s[2]) for s in sites)
     model = {(r[0], r[1], r[2]): r[7] for r in SITES}
