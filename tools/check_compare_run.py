@@ -226,12 +226,16 @@ def columns(text):
     return nlead, per
 
 
-def column_plan(text, N, last_name):
+def column_plan(text, N, names):
     """Every column this gate plants a change in, read from the record's own
     `# columns:` line: each field before the bodies after the sample's index
     and step, each field of the LAST body's block (so a comparison that
-    stops short of the end fails too), and the exact-time pair. Each comes
-    as (the name the driver must give it, its token in an ensemble line)."""
+    stops short of the end fails too), the exact-time pair, and one field of
+    every other body, the fields in turn (V4's third look, 2026-11-12: a
+    driver that skipped body 0 passed, and body 0 is the primary, whose last
+    bits the zonal reaction moves). Each comes as (the name the driver must
+    give it, its token in an ensemble line). `names` are the bodies' names,
+    from the record's `# body` lines."""
     line = next(l for l in text.splitlines() if l.startswith("# columns:"))
     head, _, rest = line.split(":", 1)[1].partition(" then per body ")
     per, _, pair = rest.partition(" ; then exact-time pair ")
@@ -242,8 +246,10 @@ def column_plan(text, N, last_name):
     first_body = pre + 1 + len(head)
     bar = first_body + N * len(per)
     plan = [(f, pre + 1 + head.index(f)) for f in head[2:]]
-    plan += [("%s of body %d (%s)" % (f, N - 1, last_name), first_body + (N - 1) * len(per) + per.index(f)) for f in per]
+    plan += [("%s of body %d (%s)" % (f, N - 1, names[N - 1]), first_body + (N - 1) * len(per) + per.index(f)) for f in per]
     plan += [("the exact-time pair's %s" % f, bar + 1 + pair.index(f)) for f in pair]
+    plan += [("%s of body %d (%s)" % (per[b % len(per)], b, names[b]), first_body + b * len(per) + b % len(per))
+             for b in range(N - 1)]
     return plan
 
 
@@ -703,8 +709,8 @@ def main():
     # each member's first differing line, so a record carries one column a
     # sampled member, and a few records carry them all.
     Nb = int(re.search(r" N=(\d+)", next(l for l in rows if l.startswith("# program="))).group(1))
-    last_name = [l.split()[3] for l in rows if l.startswith("# body ")][Nb - 1]
-    plan = column_plan(text, Nb, last_name)
+    body_names = [l.split()[3] for l in rows if l.startswith("# body ")][:Nb]
+    plan = column_plan(text, Nb, body_names)
     members = smp64["members"]
     held, missed, nrec = [], [], 0
     for start in range(0, len(plan), len(members)):
