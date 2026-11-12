@@ -616,6 +616,10 @@ IN_SUBPROC  := --input $(B)/gate_subprocess$(EXE) --input $(B)/ias15_cft$(EXE)
 # engine too, generates an ensemble, and reads the pinned MANIFEST
 IN_CORRECTOR := --input tools/check_corrector.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) \
                 --input tools/make_ensemble.py --input $(CFTPROGS)/MANIFEST
+# tools/check_replay.py: the program, the program images its program-engine
+# cases run, and the tool it imports to cut a test particle out of its
+# wave; it writes its own waves (ROUND4.md, P3)
+IN_REPLAY   := --input tools/check_replay.py --input tools/extract_particle.py $(IN_PROGRAM) $(IN_PROGS)
 # tools/check_gravity.py: the program, the problems, the program images it
 # holds the binary to, the two generators it runs and the header it reads
 # the body cap from; --library adds the drop-in gate it runs.
@@ -677,6 +681,7 @@ check: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_program_engine --mode full --input tools/check_program_engine.py --input tools/check_equivalence.py --input tools/make_ensemble.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) -- $(PYTHON) tools/check_program_engine.py --build $(B)
 	$(GATE_CACHE) --leg check_door --mode full --input tools/check_door.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_door.py --build $(B)
 	$(GATE_CACHE) --leg check_corrector --mode full $(IN_CORRECTOR) $(IN_DROPIN) -- $(PYTHON) tools/check_corrector.py --build $(B) --library
+	$(GATE_CACHE) --leg check_replay --mode full $(IN_REPLAY) -- $(PYTHON) tools/check_replay.py --build $(B)
 	$(GATE_CACHE) --leg check_gravity --mode full $(IN_GRAVITY) $(IN_DROPIN) -- $(PYTHON) tools/check_gravity.py --build $(B) --library
 	$(GATE_CACHE) --leg check_zonal --mode full $(IN_ZONAL) -- $(PYTHON) tools/check_zonal.py --build $(B)
 	$(GATE_CACHE) --leg check_scalar --mode full $(IN_SCALAR) -- $(PYTHON) tools/check_scalar.py --build $(B) --library
@@ -710,6 +715,7 @@ check-quick: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_program_engine --mode quick --input tools/check_program_engine.py --input tools/check_equivalence.py --input tools/make_ensemble.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) -- $(PYTHON) tools/check_program_engine.py --build $(B) --formats fp64
 	$(GATE_CACHE) --leg check_door --mode quick --input tools/check_door.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_door.py --build $(B) --formats fp64
 	$(GATE_CACHE) --leg check_corrector --mode quick $(IN_CORRECTOR) $(IN_DROPIN) -- $(PYTHON) tools/check_corrector.py --build $(B) --quick --library
+	$(GATE_CACHE) --leg check_replay --mode quick $(IN_REPLAY) -- $(PYTHON) tools/check_replay.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_gravity --mode quick $(IN_GRAVITY) $(IN_DROPIN) -- $(PYTHON) tools/check_gravity.py --build $(B) --quick --library
 	$(GATE_CACHE) --leg check_zonal --mode quick $(IN_ZONAL) -- $(PYTHON) tools/check_zonal.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_scalar --mode quick $(IN_SCALAR) -- $(PYTHON) tools/check_scalar.py --build $(B) --quick --library
@@ -746,6 +752,7 @@ check-light: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_program_engine --mode quick --input tools/check_program_engine.py --input tools/check_equivalence.py --input tools/make_ensemble.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) -- $(PYTHON) tools/check_program_engine.py --build $(B) --formats fp64
 	$(GATE_CACHE) --leg check_door --mode quick --input tools/check_door.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_door.py --build $(B) --formats fp64
 	$(GATE_CACHE) --leg check_corrector --mode quick $(IN_CORRECTOR) $(IN_DROPIN) -- $(PYTHON) tools/check_corrector.py --build $(B) --quick --library
+	$(GATE_CACHE) --leg check_replay --mode quick $(IN_REPLAY) -- $(PYTHON) tools/check_replay.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_gravity --mode quick $(IN_GRAVITY) $(IN_DROPIN) -- $(PYTHON) tools/check_gravity.py --build $(B) --quick --library
 	$(GATE_CACHE) --leg check_zonal --mode quick $(IN_ZONAL) -- $(PYTHON) tools/check_zonal.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_scalar --mode quick $(IN_SCALAR) -- $(PYTHON) tools/check_scalar.py --build $(B) --quick --library
