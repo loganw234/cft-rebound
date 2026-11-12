@@ -648,10 +648,12 @@ IN_RING     := --input tools/check_ring.py --input tools/make_ring.py --input to
                $(IN_PROGRAM) $(IN_REF) $(IN_PROGS)
 # tools/check_ring_seams.py (round 4's seams, the lead's): the program on the
 # rings the generator writes, with and without their zonal lines, on both
-# engines and so the program images, and the parsers it imports; it reads no
-# file of data/problems/
+# engines and so the program images; a particle replayed out of a wave
+# through P3's tool; and the modules it imports; it reads no file of
+# data/problems/
 IN_RSEAMS   := --input tools/check_ring_seams.py --input tools/make_ring.py --input tools/check_ensemble.py \
-               --input tools/check_equivalence.py $(IN_PROGRAM) $(IN_PROGS)
+               --input tools/check_equivalence.py --input tools/extract_particle.py --input tools/check_replay.py \
+               $(IN_PROGRAM) $(IN_PROGS)
 # tools/check_compare_run.py: the driver it holds and every script the
 # driver imports or runs, the program the driver reruns, REBOUND's own
 # program (whose record the driver must refuse) on the problem it reads, and

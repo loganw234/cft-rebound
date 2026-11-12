@@ -55,6 +55,28 @@
 #    gives them, and its counts must be the file's: N - 1 bodies feel the
 #    term, and active - 1 give body 0 their reaction.
 #
+# 2. A RING PARTICLE REPLAYED OUT OF ITS WAVE, ITS ZONAL LINE RIDING ALONG
+#    (P2 x P3, P1 x P3). P3's gate replays particles out of waves it makes
+#    by hand, with no zonal line, since P1 had not landed. Here the waves
+#    are P2's generator's, 64 bodies with the moons at their own masses,
+#    and they carry P1's zonal line. The sub-system keeps that line
+#    (extract_particle copies it verbatim, and the run key names it), so
+#    P1's term is evaluated over 8 bodies in the replay and 64 in the wave.
+#    The term's reaction sums only the active bodies, ascending, and a
+#    massless body's acceleration reads only the active ones, so the
+#    replay must give the wave's bits: the particle, all seven massive
+#    bodies, every sample's head and exact-time pair, and the counters.
+#    Three particles a wave (its innermost, middle and outermost), from a
+#    sane first step and from one far too large, whose first attempt must
+#    be rejected: the one kind of rejection that leaves state behind (P3,
+#    measured). P3's extract() and its gate's compare() are imported, not
+#    copied.
+#    THE CONTROL, permanent: one sub-system with its zonal line deleted,
+#    its schedule re-keyed by hand through the program's own --run-key (the
+#    tool would refuse it), must replay to other bits in the massive
+#    bodies. So the line is load-bearing in the replay, and a tool that
+#    dropped it would fail this part.
+#
 #   python tools/check_ring_seams.py [--build build] [--quick] [--keep]
 
 import argparse
@@ -354,10 +376,99 @@ def main():
                 "fp64, the two-wave ensemble with its zonal line: wave %d's %d sample lines and counters are its run "
                 "alone (--member %d)" % (k, len(es), k))
 
+    part2(exe, wd, waves, args.quick)
+
     if not args.keep:
         shutil.rmtree(wd, ignore_errors=True)
     print("RESULT: %s" % ("FAIL" if FAILS else "PASS"))
     return 1 if FAILS else 0
+
+
+def part2(exe, wd, waves, quick):
+    from extract_particle import extract, Refused, program_key
+    from check_replay import compare, record, outcomes, body_mismatches
+    control_done = False
+    print("check_ring_seams 2: a ring particle replayed out of its wave, its zonal line riding along (P2 x P3, P1 x P3)")
+    head = problem_lines(waves)
+    zline = [l for l in head if l.split()[:1] == ["zonal"]]
+    n_active = int(field(head, "active")[0])
+    N = int(field(head, "N")[0])
+    picks = [n_active, (n_active + N - 1) // 2, N - 1]
+    cases = [("fp64", "100", 8, 0), ("fp64", "1e5", 8, 1)]
+    if not quick:
+        cases += [("fp128", "100", 6, 1), ("fp128", "1e5", 6, 0), ("fp256", "1e5", 3, 0)]
+    for fmt, dt0, steps, member in cases:
+        tag = "%s-dt%s-m%d" % (fmt, dt0, member)
+        att = os.path.join(wd, tag + ".att")
+        sch = os.path.join(wd, tag + ".sched")
+        run_args = ["--format", fmt, "--dt", dt0, "--epsilon", "1e-9", "--max-iter", "60", "--steps", str(steps),
+                    "--sample", "1"]
+        rc, wout, werr = run([exe, "--problem", waves, "--member", str(member)] + run_args
+                             + ["--attempts-out", att, "--record-iters", sch])
+        if rc != 0:
+            verdict(False, "%s: wave %d did not run (rc %d): %s" % (tag, member, rc, werr.strip()[-200:]))
+            continue
+        wrec, wtail = record(wout)
+        outc = outcomes(att)
+        rejected = int(wtail.get("steps_rejected", "0"))
+        first_rejected = bool(outc) and outc[0] == "r"
+        if dt0 == "1e5":
+            verdict(first_rejected and rejected > 0,
+                    "%s: wave %d from a first step of %s s rejects its first attempt (%d rejected of %d attempts), the "
+                    "rejection that leaves state behind" % (fmt, member, dt0, rejected, len(outc)))
+        for j in picks:
+            try:
+                res = extract(exe, waves, att, sch, j, os.path.join(wd, tag), run_args, member=member)
+            except Refused as e:
+                verdict(False, "%s: body %d of wave %d: extract_particle refused: %s" % (fmt, j, member, e))
+                continue
+            with open(res["problem"]) as f:
+                sub_zonal = [l for l in f.read().splitlines() if l.split()[:1] == ["zonal"]]
+            rc, sout, serr = run([exe] + res["args"])
+            if rc != 0:
+                verdict(False, "%s: body %d of wave %d: the replay did not run (rc %d): %s"
+                        % (fmt, j, member, rc, serr.strip()[-200:]))
+                continue
+            srec, stail = record(sout)
+            nsamp, nvals, bad = compare(wrec, srec, res["bodies"])
+            keys = ("steps_done", "steps_rejected", "iterations_max_exceeded", "mean_pc_iterations", "max_pc_iterations")
+            tails = [k for k in keys if wtail.get(k) != stail.get(k)]
+            zrec = re.search(r"it acts on (\d+) bodies a system, and body \d+ takes the reaction of (\d+)$", sout, re.M)
+            ok = (not bad and not tails and sub_zonal == zline and zrec is not None
+                  and int(zrec.group(1)) == n_active and int(zrec.group(2)) == n_active - 1)
+            verdict(ok, "%s, first step %s s: body %d of wave %d replayed alone with the wave's %d massive bodies and "
+                    "its zonal line (felt by %s bodies, %s reacting): %d samples, %d values, heads and exact-time pairs "
+                    "the wave's, and its counters (steps_rejected=%s, mean_pc_iterations=%s)%s"
+                    % (fmt, dt0, j, member, n_active, zrec.group(1) if zrec else "?", zrec.group(2) if zrec else "?",
+                       nsamp, nvals, stail.get("steps_rejected"), stail.get("mean_pc_iterations"),
+                       "" if ok else ": " + "; ".join((bad + ["trailer " + k for k in tails]
+                                                        + ([] if sub_zonal == zline else ["the zonal line differs"]))[:3])))
+            if ok and not control_done:
+                control_done = True
+                # the control: the same sub-system without its zonal line,
+                # re-keyed by hand, must replay to other bits
+                sub_nz = res["problem"][:-4] + "-nozonal.txt"
+                with open(res["problem"]) as f:
+                    kept = [l for l in f.read().splitlines() if l.split()[:1] != ["zonal"]]
+                with open(sub_nz, "w", newline="\n") as f:
+                    f.write("\n".join(kept) + "\n")
+                a = list(res["args"])
+                ri = a.index("--replay-iters")
+                sched_nz = res["schedule"][:-6] + "-nozonal.sched"
+                a = [sub_nz if x == res["problem"] else x for x in a[:ri]]
+                key = program_key(exe, a)
+                with open(res["schedule"]) as f:
+                    sl = f.read().splitlines()
+                with open(sched_nz, "w", newline="\n") as f:
+                    f.write("\n".join([sl[0], "# run " + key] + sl[2:]) + "\n")
+                rc, cout, cerr = run([exe] + a + ["--replay-iters", sched_nz])
+                crec, _ = record(cout)
+                nb = body_mismatches(wrec, crec, res["bodies"]) if rc == 0 else -1
+                verdict(rc == 0 and nb > 0 and key != res["sub_key"],
+                        "the control, %s: body %d's sub-system with its zonal line deleted, re-keyed by hand (its key "
+                        "differs from the tool's, which names the line), replays (rc %d) to other bits in %d of its %d "
+                        "sample-and-body pairs: the line is load-bearing"
+                        % (fmt, j, rc, nb, len(wrec) * len(res["bodies"])))
 
 
 if __name__ == "__main__":
