@@ -9,10 +9,27 @@
 # file continues from precisely the recorded state - which is what a
 # reversal test (integrate forward, then back with -dt) needs.
 #
+# The problem is the record's, every line of it: name, G, N and the
+# bodies, and the `active` and `zonal` lines (ROUND4.md, P0) from the
+# record's `# active` and `# zonal` lines, which the program writes only
+# for a problem that has them, so a record without them gives the file it
+# always gave. Until VALIDATION entry 52 this tool dropped those two lines,
+# and tools/reversal.py ran a zonal or `active` problem's backward leg on
+# another problem. A problem line added later must be carried here too:
+# reversal.py refuses a turn problem whose lines are not the original's,
+# and tools/check_reversal.py holds both tools to it.
+#
 #   python tools/state_to_problem.py RECORD --out PROBLEM.txt [--sample K | --last] [--system S] [--name NAME]
 
 import argparse
+import re
 import sys
+
+# The record's two problem lines, as src/ias15_cft.c writes them (the
+# header, and zonal_record() in src/ias15_zonal.inc): each value is the
+# run's own exact hex, after a "KEY= ".
+ACTIVE = re.compile(r"# active (\d+) of (\d+) bodies a system:")
+ZONAL = re.compile(r"# zonal body (\d+) of every system, about z: R= (\S+) J2= (\S+) J4= ([^\s;]+);")
 
 
 def main():
@@ -25,6 +42,7 @@ def main():
     ap.add_argument("--name", default=None)
     args = ap.parse_args()
     name, G, bodies, masses, lines = None, None, [], [], []
+    active, zonal = None, None
     want = None if args.system is None else "system %d sample " % args.system
     cur_sys = None
     for line in open(args.record):
@@ -38,6 +56,18 @@ def main():
             for i, t in enumerate(toks):
                 if t == "G=":
                     G = toks[i + 1]
+        elif line.startswith("# active "):
+            m = ACTIVE.match(line)
+            if not m or active is not None:
+                raise SystemExit("state_to_problem: %s: %s `# active` line: %s"
+                                 % (args.record, "a second" if m else "an unreadable", line.strip()))
+            active = m.groups()
+        elif line.startswith("# zonal "):
+            m = ZONAL.match(line)
+            if not m or zonal is not None:
+                raise SystemExit("state_to_problem: %s: %s `# zonal` line: %s"
+                                 % (args.record, "a second" if m else "an unreadable", line.strip()))
+            zonal = m.groups()
         elif line.startswith("# system ") and "steps_done" not in line:
             cur_sys = int(line.split()[2])
         elif line.startswith("# body"):
@@ -63,15 +93,26 @@ def main():
     N = len(bodies)
     if len(state) != 6 * N:
         raise SystemExit("%d state values for %d bodies" % (len(state), N))
+    # the two lines name bodies of each system: hold them to this one's N
+    if active is not None and (int(active[1]) != N or not 1 <= int(active[0]) <= N):
+        raise SystemExit("state_to_problem: %s: `# active %s of %s` for %d bodies a system" % (args.record, active[0], active[1], N))
+    if zonal is not None and not int(zonal[0]) < N:
+        raise SystemExit("state_to_problem: %s: `# zonal body %s` for %d bodies a system" % (args.record, zonal[0], N))
     with open(args.out, "w", newline="\n") as f:
         f.write("# cft-rebound problem file, exact hex floats\n")
         f.write("# the state of %s at step %s of %s, t = %s\n" % (name, step, args.record, toks[3]))
         f.write("name %s\n" % (args.name or (name + "_at" + step)))
         f.write("G %s\n" % G)
         f.write("N %d\n" % N)
+        if active is not None:
+            f.write("active %s\n" % active[0])
+        if zonal is not None:
+            f.write("zonal %s %s %s %s\n" % zonal)
         for i in range(N):
             f.write("body %s %s %s\n" % (bodies[i], masses[i], " ".join(state[6 * i:6 * i + 6])))
-    print("wrote %s: %d bodies at step %s" % (args.out, N, step))
+    carried = "".join(("" if active is None else ", active %s" % active[0],
+                       "" if zonal is None else ", zonal body %s" % zonal[0]))
+    print("wrote %s: %d bodies at step %s%s" % (args.out, N, step, carried))
     return 0
 
 

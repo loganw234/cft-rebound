@@ -16,6 +16,13 @@
 # return would need a symmetric (or a lattice, JANUS-style) scheme;
 # what IS exact here is that the run repeats bit for bit.
 #
+# The backward leg must run the problem the forward leg ran. The turn
+# problem (tools/state_to_problem.py) carries every line of the original
+# but its name and bodies; this tool refuses a turn or return problem
+# whose other lines are not the original's, value for value (VALIDATION
+# entry 52: until then the `active` and `zonal` lines were dropped, and a
+# zonal problem was reversed without its J2 and J4).
+#
 #   python tools/reversal.py --problem FILE --format F --dt DT --steps N [--build build] [--keep DIR]
 
 import argparse
@@ -48,6 +55,57 @@ def read_problem(path):
     return G, bodies
 
 
+def problem_lines(path):
+    """Every line of a problem file but its comments, its name, its N and
+    its bodies, by first word: what makes it this problem and not another
+    (src/ias15_cft.c, read_problem()'s grammar). Hex values compare by their
+    exact value and sign, so 0x1.d754p+15 is 0x1.d754000000000p+15."""
+    out = {}
+    for line in open(path):
+        toks = line.split()
+        if not toks or toks[0].startswith("#") or toks[0] in ("name", "N", "body"):
+            continue
+        vals = tuple(hex_to_fraction(t) if t.lstrip("+-")[:2].lower() == "0x" else t for t in toks[1:])
+        out.setdefault(toks[0], []).append(vals)
+    return out
+
+
+def same_problem(original, other, what):
+    """Refuse a turn or return problem that is not the original problem."""
+    a, b = problem_lines(original), problem_lines(other)
+    if a != b:
+        lost = sorted(set(a) - set(b))
+        added = sorted(set(b) - set(a))
+        differ = sorted(k for k in set(a) & set(b) if a[k] != b[k])
+        print("  the %s problem %s is not the problem %s:%s%s%s" % (
+            what, other, original,
+            " it lacks its %s line(s)" % ", ".join(lost) if lost else "",
+            " it adds %s line(s)" % ", ".join(added) if added else "",
+            " its %s line(s) differ" % ", ".join(differ) if differ else ""))
+        sys.exit(1)
+
+
+def leg_command(cft, fmt, steps, extra, problem, dt):
+    """One leg as the test runs it: N fixed steps (epsilon 0), the state
+    sampled at the last, the corrector allowed 60 iterations."""
+    return ([cft, "--format", fmt, "--epsilon", "0", "--steps", str(steps), "--sample", str(steps),
+             "--max-iter", "60", "--quiet"] + extra + ["--problem", problem, "--dt", dt])
+
+
+def deviation(b0, b1):
+    """The return against the start: bits identical, max |dx| / L and
+    max |dv| / V, L and V the start's largest coordinate and velocity."""
+    if [n for n, _ in b0] != [n for n, _ in b1]:
+        print("  the return has bodies %s, the start %s" % ([n for n, _ in b1], [n for n, _ in b0]))
+        sys.exit(1)
+    identical = all(x == y for (_, u), (_, v) in zip(b0, b1) for x, y in zip(u, v))
+    L = max(abs(q) for _, u in b0 for q in u[1:4])
+    V = max(abs(q) for _, u in b0 for q in u[4:7]) or Fraction(1)
+    dx = max(abs(u[c] - v[c]) for (_, u), (_, v) in zip(b0, b1) for c in (1, 2, 3))
+    dv = max(abs(u[c] - v[c]) for (_, u), (_, v) in zip(b0, b1) for c in (4, 5, 6))
+    return identical, dx / L, dv / V
+
+
 def run(cmd):
     p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if p.returncode != 0:
@@ -72,27 +130,27 @@ def main():
     os.makedirs(keep, exist_ok=True)
     tag = "%s_%s_dt%s_n%d" % (os.path.splitext(os.path.basename(args.problem))[0], args.format, args.dt.replace("/", "_"), args.steps)
     extra = args.extra.split()
-    common = [cft, "--format", args.format, "--epsilon", "0", "--steps", str(args.steps), "--sample", str(args.steps), "--max-iter", "60", "--quiet"] + extra
-    fwd = run(common + ["--problem", args.problem, "--dt", args.dt])
+    fwd = run(leg_command(cft, args.format, args.steps, extra, args.problem, args.dt))
     fwd_rec = os.path.join(keep, tag + "_fwd.rec")
     open(fwd_rec, "w", newline="\n").write(fwd)
     turn = os.path.join(keep, tag + "_turn.txt")
     run([sys.executable, os.path.join(here, "state_to_problem.py"), fwd_rec, "--out", turn, "--last"])
-    back = run(common + ["--problem", turn, "--dt", "-" + args.dt.lstrip("+")])
+    same_problem(args.problem, turn, "turn")
+    back = run(leg_command(cft, args.format, args.steps, extra, turn, "-" + args.dt.lstrip("+")))
     back_rec = os.path.join(keep, tag + "_back.rec")
     open(back_rec, "w", newline="\n").write(back)
     ret = os.path.join(keep, tag + "_return.txt")
     run([sys.executable, os.path.join(here, "state_to_problem.py"), back_rec, "--out", ret, "--last"])
+    same_problem(args.problem, ret, "return")
 
     G, b0 = read_problem(args.problem)
     _, b1 = read_problem(ret)
-    identical = all(x == y for (_, u), (_, v) in zip(b0, b1) for x, y in zip(u, v))
-    L = max(abs(q) for _, u in b0 for q in u[1:4])
-    V = max(abs(q) for _, u in b0 for q in u[4:7]) or Fraction(1)
-    dx = max(abs(u[c] - v[c]) for (_, u), (_, v) in zip(b0, b1) for c in (1, 2, 3))
-    dv = max(abs(u[c] - v[c]) for (_, u), (_, v) in zip(b0, b1) for c in (4, 5, 6))
+    identical, dxl, dvv = deviation(b0, b1)
     # the forward run's own error against the closed form is not needed
-    # here; the energy at the return point against the initial energy is
+    # here; the energy at the return point against the initial energy is.
+    # It is the point-mass energy of every body, a function of the state
+    # alone: under an `active` or `zonal` line it is not the energy the run
+    # conserves, but a state that returns returns it too.
     def energy(bodies):
         ek = mpf(0); ep = mpf(0)
         for i, (_, u) in enumerate(bodies):
@@ -106,8 +164,8 @@ def main():
     E0 = energy(b0); E1 = energy(b1)
     print("REVERSAL problem=%s format=%s dt=%s steps=%d bits_identical=%s max|dx|/L=%s max|dv|/V=%s |dE/E|=%s" %
           (os.path.basename(args.problem), args.format, args.dt, args.steps, "yes" if identical else "no",
-           mpmath.nstr(mpf(dx.numerator) / dx.denominator / (mpf(L.numerator) / L.denominator), 4),
-           mpmath.nstr(mpf(dv.numerator) / dv.denominator / (mpf(V.numerator) / V.denominator), 4),
+           mpmath.nstr(mpf(dxl.numerator) / dxl.denominator, 4),
+           mpmath.nstr(mpf(dvv.numerator) / dvv.denominator, 4),
            mpmath.nstr(abs((E1 - E0) / E0), 4)))
     return 0
 

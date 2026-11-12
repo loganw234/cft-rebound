@@ -665,6 +665,13 @@ IN_COMPARE  := --input tools/check_compare_run.py --input tools/compare_run.py -
                --input tools/check_records.py --input tools/check_equivalence.py --input tools/compare_formats.py \
                --input tools/oracle.py $(IN_PROGRAM) $(IN_REF) --input data/problems/kepler.txt $(IN_PROGS) \
                $(patsubst %,--input %,$(wildcard tools/extract_particle.py tools/check_replay.py))
+# tools/check_reversal.py (VALIDATION entry 52): tools/reversal.py and the
+# two files it runs or imports, which the gate also copies and mutates; the
+# program on zonal_saturn, whose `active 2` the gate makes `active 1`; and
+# the committed reversal records and problems the gate rebuilds
+IN_REVERSAL := --input tools/check_reversal.py --input tools/reversal.py --input tools/state_to_problem.py \
+               --input tools/check_equivalence.py $(IN_PROGRAM) --input data/problems/zonal_saturn.txt \
+               $(patsubst %,--input %,$(wildcard results/horizon/reversal/*))
 
 # The pins, checked at build time and not only at fetch time: a clone
 # under third_party/ that is not at its MANIFEST commit fails every tier
@@ -700,6 +707,7 @@ check: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_checkpoint --mode full --input tools/check_checkpoint.py $(IN_REAL) -- $(PYTHON) tools/check_checkpoint.py --build $(B)
 	$(GATE_CACHE) --leg check_seams --mode full $(IN_SEAMS) -- $(PYTHON) tools/check_seams.py --build $(B)
 	$(GATE_CACHE) --leg check_ring_seams --mode full $(IN_RSEAMS) -- $(PYTHON) tools/check_ring_seams.py --build $(B)
+	$(GATE_CACHE) --leg check_reversal --mode full $(IN_REVERSAL) -- $(PYTHON) tools/check_reversal.py --build $(B)
 
 # the same gates at binary64 only, in a few minutes
 .PHONY: check-quick
@@ -734,6 +742,7 @@ check-quick: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_checkpoint --mode quick --input tools/check_checkpoint.py $(IN_REAL) -- $(PYTHON) tools/check_checkpoint.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_seams --mode quick $(IN_SEAMS) -- $(PYTHON) tools/check_seams.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_ring_seams --mode quick $(IN_RSEAMS) -- $(PYTHON) tools/check_ring_seams.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_reversal --mode quick $(IN_REVERSAL) -- $(PYTHON) tools/check_reversal.py --build $(B) --quick
 	@$(PYTHON) tools/gate_cache.py --report --cache-dir $(B)/.gate-cache
 
 # Every case touched, none of them thoroughly - the step counts are
@@ -771,6 +780,7 @@ check-light: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_checkpoint --mode quick --input tools/check_checkpoint.py $(IN_REAL) -- $(PYTHON) tools/check_checkpoint.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_seams --mode quick $(IN_SEAMS) -- $(PYTHON) tools/check_seams.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_ring_seams --mode quick $(IN_RSEAMS) -- $(PYTHON) tools/check_ring_seams.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_reversal --mode quick $(IN_REVERSAL) -- $(PYTHON) tools/check_reversal.py --build $(B) --quick
 	@$(PYTHON) tools/gate_cache.py --report --cache-dir $(B)/.gate-cache
 
 # The worked round trip, built in the tree and run against the
