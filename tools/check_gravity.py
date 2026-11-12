@@ -40,7 +40,20 @@
 #      Beside each, the physics it had to have: steps taken, and the fold
 #      runs a force evaluation, which must be the rows' length over the
 #      widest fold, rounded up - so the chained case is chained - and, for
-#      the rejected step's case, steps_rejected above zero.
+#      the rejected step's case, steps_rejected above zero. One problem
+#      has test particles (an `active` line): its rows are N_active long,
+#      read from the record's own `# active` line.
+#   2b. Test particles (round 4's P0, ROUND4.md): outer with two more
+#      massless bodies, run with `active 5` and with every body active,
+#      gives the same record at every format, on the loop engine in both
+#      forms and on the program engine. The record says `active 5 of 8`
+#      with 25 pairs a force evaluation (REBOUND's two loops: 10 active
+#      pairs, then 3 x 5), the test particles move, and the comparison can
+#      fail: with one of them given a mass of 2^-40 the two runs differ.
+#   2c. The problem lines' refusals: an active count past N, a zonal line
+#      (until round 4's P1 builds the term), and a corrector schedule
+#      recorded with `active 5` replayed without it - the run key names
+#      the line, so a schedule replays only its own N_active.
 #   3. The body cap's refusal still holds one past it. The cap is read
 #      from src/ias15_limits.h, never typed here. (Its one force
 #      evaluation, at the cap, on the routes against the elementwise
@@ -177,6 +190,35 @@ def main():
         subprocess.run([py, os.path.join(here, "make_ensemble.py"), os.path.join(probs, "outer.txt"),
                         "--members", "4", "--out", ens, "--geometric", "2", "x", "0.25"], check=True, cwd=root,
                        stdout=subprocess.DEVNULL)
+    # Round 4's P0 problems: outer with two more massless bodies, Pluto
+    # turned a quarter and a half turn about z - a swap and negations, so
+    # every value is exactly outer's own - with and without `active 5`,
+    # with one of them given a mass of 2^-40 (the control), and two that
+    # must be refused.
+    with open(os.path.join(probs, "outer.txt")) as f:
+        outer_lines = f.read().splitlines()
+    pl = [l for l in outer_lines if l.startswith("body pluto ")][0].split()
+    px, py_, pz, pvx, pvy, pvz = pl[3:9]
+    neg = lambda h: h[1:] if h.startswith("-") else "-" + h
+
+    def outer8(name, active=None, tp2_mass="0x0.0p+0", extra=()):
+        lines = ["N 8" if l.startswith("N ") else l for l in outer_lines]
+        lines.append("body tp1 0x0.0p+0 %s %s %s %s %s %s" % (neg(py_), px, pz, neg(pvy), pvx, pvz))
+        lines.append("body tp2 %s %s %s %s %s %s %s" % (tp2_mass, neg(px), neg(py_), pz, neg(pvx), neg(pvy), pvz))
+        if active is not None:
+            lines.append("active %d" % active)
+        lines.extend(extra)
+        path = os.path.join(scratch, name)
+        with open(path, "w") as f:
+            f.write("\n".join(lines) + "\n")
+        return path
+    p_a5 = outer8("outer8_active5.txt", 5)
+    p_all = outer8("outer8_all.txt")
+    p_a5m = outer8("outer8_active5_mass.txt", 5, "0x1.0000000000000p-40")
+    p_allm = outer8("outer8_all_mass.txt", None, "0x1.0000000000000p-40")
+    p_a9 = outer8("outer8_active9.txt", 9)
+    p_zonal = outer8("outer8_zonal.txt", 5, extra=("zonal 0 0x1.0000000000000p+0 0x1.0000000000000p-10 0x0.0p+0",))
+
     s = 1 if args.quick else 2
     rejecting = "kepler e=0.99, a rejected step"     # here for its rejection, which is asserted below
     problems = [
@@ -184,6 +226,7 @@ def main():
         (rejecting, os.path.join(probs, "kepler_e099.txt"), ["--dt", "0.01", "--epsilon", "1e-9", "--steps", str(30 * s), "--sample", "10"], None),
         ("pythagorean, three bodies", os.path.join(probs, "pythagorean.txt"), ["--dt", "0.01", "--epsilon", "1e-9", "--steps", str(40 * s), "--sample", "20"], None),
         ("outer, six bodies, pluto massless", os.path.join(probs, "outer.txt"), ["--dt", "40", "--epsilon", "0", "--steps", str(20 * s), "--sample", "10"], None),
+        ("outer and two more, three test particles (active 5)", p_a5, ["--dt", "40", "--epsilon", "0", "--steps", str(20 * s), "--sample", "10"], None),
         ("outer x4, an ensemble", ens, ["--dt", "40", "--epsilon", "1e-9", "--steps", str(10 * s), "--sample", "10"], None),
         ("33 bodies, rows of 32", nb33, ["--dt", "0.01", "--epsilon", "1e-9", "--steps", str(2 * s), "--sample", "2"], None),
         ("258 bodies, rows one past the widest fold", nb258, ["--dt", "0.01", "--epsilon", "0", "--steps", "1", "--sample", "1", "--max-iter", "2"], ("fp64",)),
@@ -241,14 +284,19 @@ def main():
                                    % (label, g, on, by, calls, falls, "on" if want_on else "off", "/".join(want_by)))
             # the physics: steps, and fold runs a force evaluation, which
             # must be the rows' length over the widest fold, rounded up.
-            # The standalone program has every body active, so a row is
-            # N - 1 long, N read from the record's own header.
+            # Every body active, a row is N - 1 long, N read from the
+            # record's own header. With an `active` line the longest row is
+            # a test particle's, N_active long (testparticle_type 0), read
+            # from the record's `# active` line.
             r0 = ref[5]
             evals = sum(r0.get("pair_gather", (0, 0, 0, 0))[2:])
             folds = sum(r0.get("indexed", (0, 0, 0, 0))[2:])
             runs = folds / evals if evals else 0
             m = re.search(r"^# program=.* N=(\d+) ", ref[6], re.M)
             rows = int(m.group(1)) - 1 if m else -1
+            ma = re.search(r"^# active (\d+) of (\d+) bodies a system", ref[6], re.M)
+            if ma and int(ma.group(1)) < int(ma.group(2)):
+                rows = int(ma.group(1))
             want = (rows + wmax - 1) // wmax if rows > 0 and wmax else -1
             if evals == 0 or runs != want:
                 bad.append("the physics: %d force evaluations and %.3f fold runs each, for rows of %d and a widest "
@@ -265,6 +313,58 @@ def main():
             else:
                 verdict(False, "%s: %d of the checks failed (%s):%s" % (name, len(bad), physics,
                                                                        "".join("\n         " + b for b in bad[:8])))
+
+    # 2b. Test particles: the active line against the same bodies all
+    # active (round 4's P0). Massless bodies add exactly +0 to every sum
+    # (tools/cases_pairs.c, case_massless_is_inert, for the drop-in), so
+    # the two runs must agree bit for bit - and the control must not.
+    print("check_gravity: test particles (`active 5`) against the same bodies all active, the same record")
+    want_pairs = 5 * 4 // 2 + (8 - 5) * 5     # REBOUND's two loops: the active pairs, then test-active
+    active_line = "# active 5 of 8 bodies a system: %d pairs a force evaluation, a system" % want_pairs
+    for fmt in formats:
+        for engine, arith in (("loop", "rebound"), ("loop", "fma"), ("program", "fma")):
+            base = [cft, "--format", fmt, "--quiet", "--engine", engine, "--arith", arith,
+                    "--dt", "40", "--epsilon", "0", "--steps", str(20 * s), "--sample", "10"]
+            res = {}
+            for key, path in (("a5", p_a5), ("all", p_all), ("a5m", p_a5m), ("allm", p_allm)):
+                rc, out, err = run(base + ["--problem", path])
+                res[key] = (rc, [l for l in out.splitlines() if l and not l.startswith("#")], out, err)
+            bad = ["%s: rc %d: %s" % (k, r[0], r[3].strip()[-200:]) for k, r in res.items() if r[0] != 0]
+            if not bad:
+                if not res["a5"][1] or res["a5"][1] != res["all"][1]:
+                    bad.append("the records differ, or are empty (%d and %d sample lines)" % (len(res["a5"][1]), len(res["all"][1])))
+                if active_line not in res["a5"][2].splitlines():
+                    bad.append("no '%s' line" % active_line)
+                if any(l.startswith("# active") for l in res["all"][2].splitlines()):
+                    bad.append("an `# active` line in the run with no active line")
+                if res["a5m"][1] == res["allm"][1]:
+                    bad.append("the control did not bite: with tp2 given a mass of 2^-40 the two runs still agree")
+                first, last = res["a5"][1][0].split(), res["a5"][1][-1].split()
+                tp1x = 6 + 6 * 6          # sample step t dt_next dt_last E, then six a body; tp1 is body 6
+                if len(first) <= tp1x or first[tp1x] == last[tp1x]:
+                    bad.append("the physics: tp1's x did not move between the first and last sample")
+            label = "%s, %s engine, %s form" % (fmt, engine, arith)
+            verdict(not bad, "%s: %s" % (label, "%d sample lines identical, %d pairs a force evaluation against %d all "
+                                         "active, the test particles move, and a 2^-40 mass makes the runs differ"
+                                         % (len(res["a5"][1]), want_pairs, 8 * 7 // 2) if not bad else "; ".join(bad[:4])))
+
+    # 2c. The problem lines' refusals (round 4's P0).
+    print("check_gravity: the problem lines' refusals")
+    rc, out, err = run([cft, "--format", "fp64", "--problem", p_a9, "--steps", "1", "--quiet"])
+    verdict(rc != 0 and "'active 9'" in err and "0 to N = 8" in err,
+            "active 9 in a system of 8 is refused by name (rc %d): %s" % (rc, err.strip()[-160:]))
+    rc, out, err = run([cft, "--format", "fp64", "--problem", p_zonal, "--steps", "1", "--quiet"])
+    verdict(rc != 0 and "round 4's P1" in err,
+            "a zonal line is refused by name until round 4's P1 builds the term (rc %d): %s" % (rc, err.strip()[-160:]))
+    sched = os.path.join(scratch, "outer8_active5.sched")
+    common = ["--format", "fp64", "--dt", "40", "--epsilon", "1e-9", "--steps", "4", "--sample", "2", "--quiet"]
+    rc1, _, err1 = run([cft, "--problem", p_a5, "--record-iters", sched] + common)
+    rc2, _, err2 = run([cft, "--problem", p_all, "--replay-iters", sched] + common)
+    rc3, _, err3 = run([cft, "--problem", p_a5, "--replay-iters", sched] + common)
+    verdict(rc1 == 0 and rc3 == 0 and rc2 != 0 and "different run" in err2 and " active=5" in err2,
+            "a schedule recorded with active 5 replays with it (rc %d, %d) and is refused without it (rc %d)%s"
+            % (rc1, rc3, rc2, "" if rc2 != 0 and " active=5" in err2 else
+               ": %s" % (err2 or err1 or err3).strip()[-200:]))
 
     # 3. The body cap, and one past it.
     print("check_gravity: the body cap's refusal")

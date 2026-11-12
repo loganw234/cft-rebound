@@ -972,8 +972,33 @@ static char problem_name[64];
 #endif
 static char (*body_names)[32];   /* NB */
 static char (*sys_names)[32];    /* E */
+/* A problem's `zonal` line (ROUND4.md, P0): body zonal_k of every system
+ * is oblate about the z axis, with reference radius ZR and coefficients
+ * ZJ2 and ZJ4, each exact in the run's format. read_problem() parses it
+ * and refuses it by name until round 4's P1 builds the term in
+ * src/ias15_zonal.inc; zonal_on is what gravity_body() asks. */
+static int    zonal_on;
+static size_t zonal_k;
+static V      ZR, ZJ2, ZJ4;
 
 #ifndef IAS15_CFT_LIBRARY
+/* A problem's `active` line's n, or -1 when it has none (ROUND4.md, P0). */
+static long prob_active = -1;
+
+/* A problem file, one line each, every number a hex float (exact in every
+ * format), `#` lines and blank lines skipped:
+ *   name NAME           the record's label
+ *   G HEX               the gravitational constant
+ *   N n                 bodies a system (required for an ensemble)
+ *   E e                 systems, which must equal the system lines
+ *   system NAME         starts a system of an ensemble
+ *   body NAME m x y z vx vy vz
+ *   active n            the first n bodies of every system are massive and
+ *                       the rest test particles: REBOUND's N_active, with
+ *                       testparticle_type 0
+ *   zonal k R J2 J4     body k of every system is oblate about the z axis
+ *                       (refused until round 4's P1)
+ * Anything else is refused by name. */
 static void read_problem(const char *path){
     FILE *f = fopen(path, "r");
     if (!f){ perror(path); exit(2); }
@@ -1040,6 +1065,25 @@ static void read_problem(const char *path){
             for (int k = 0; k < 3; k++){ s = from_text(fields[1 + k], 1); memcpy(E(X0, 3 * i + k), s, ESZ); free(s); }
             for (int k = 0; k < 3; k++){ s = from_text(fields[4 + k], 1); memcpy(E(V0, 3 * i + k), s, ESZ); free(s); }
             i++;
+        }
+        else if (!strcmp(tok, "active")){
+            const char *t = strtok(NULL, " \t\r\n");
+            char *end = NULL;
+            long n = t ? strtol(t, &end, 10) : -1;
+            if (!t || *end || n < 0 || (size_t)n > N)
+                die("'active %s' in %s: it takes the count of massive bodies a system, 0 to N = %zu", t ? t : "", path, N);
+            prob_active = n;
+        }
+        else if (!strcmp(tok, "zonal")){
+            const char *fields[4];
+            for (int k = 0; k < 4; k++){ fields[k] = strtok(NULL, " \t\r\n"); if (!fields[k]) die("a short zonal line in %s: it is 'zonal k R J2 J4'", path); }
+            char *end = NULL;
+            long k = strtol(fields[0], &end, 10);
+            if (*end || k < 0 || (size_t)k >= N) die("'zonal %s' in %s: k is a body of each system, 0 to %zu", fields[0], path, N - 1);
+            zonal_k = (size_t)k;
+            ZR = from_text(fields[1], 1); ZJ2 = from_text(fields[2], 1); ZJ4 = from_text(fields[3], 1);
+            zonal_on = 1;
+            die("a zonal line in %s: J2 and J4 in libcft's format are round 4's P1, not built yet (ROUND4.md)", path);
         }else die("unknown line '%s' in %s", tok, path);
     }
     fclose(f);
@@ -1152,6 +1196,9 @@ static size_t *scat_n;                  /* how many of each row are used */
 static size_t  scat_w;                  /* row stride: the capacity's N - 1 */
 static size_t  scat_max;                /* the longest row, so the shortest
                                          * scatter loop that covers them all */
+static size_t  scat_pairs;              /* the pairs the rows fold, a system:
+                                         * counted by the loops that build
+                                         * them, for the record's `# active` */
 
 static void build_gravity_tables(void);
 
@@ -1160,6 +1207,7 @@ static void build_scatter(void){
     const size_t starti = (eng_ignore == IGN_NONE) ? 1 : 2;
     const size_t startj = (eng_ignore == IGN_INVOLVING_0) ? 1 : 0;
     memset(scat_n, 0, NB * sizeof *scat_n);
+    size_t np = 0;
     for (size_t s = 0; s < E; s++){
         const size_t base = s * N, pbase = s * PS;
         /* all active particle pairs; i > j throughout, so the pair's
@@ -1169,6 +1217,7 @@ static void build_scatter(void){
                 const size_t l = pbase + i * (i - 1) / 2 + j;
                 scat[(base + i) * scat_w + scat_n[base + i]++] = 2 * l;
                 scat[(base + j) * scat_w + scat_n[base + j]++] = 2 * l + 1;
+                np += (s == 0);
             }
         /* interactions of test particles with active particles. i is at
          * or above N_active and j is below it, so i > j here too. */
@@ -1179,8 +1228,10 @@ static void build_scatter(void){
                 scat[(base + i) * scat_w + scat_n[base + i]++] = 2 * l;
                 if (eng_tptype)
                     scat[(base + j) * scat_w + scat_n[base + j]++] = 2 * l + 1;
+                np += (s == 0);
             }
     }
+    scat_pairs = np;
     scat_max = 0;
     for (size_t p = 0; p < NB; p++) if (scat_n[p] > scat_max) scat_max = scat_n[p];
     /* Gravity's index tables are this table and the pair list read
@@ -1460,6 +1511,10 @@ static cft_program *fold_program(size_t q){
  * forced on, the host gathers, because on the rev8a tile each device
  * gather made a step slower. The divide and the square root stay library
  * calls, as they were. */
+/* J2 and J4 (ROUND4.md, P1): zonal_accel(), zonal_potential() and
+ * zonal_record(), called below when a problem's zonal line was read. */
+#include "ias15_zonal.inc"
+
 static void gravity_body(void);
 static void gravity(void){ double _t0 = now_s(); in_gravity = 1; gravity_body(); in_gravity = 0; t_gravity += now_s() - _t0; }
 static void gravity_body(void){
@@ -1490,6 +1545,9 @@ static void gravity_body(void){
         vprog_ix(ROUTE_INDEXED, &fold, "gravity fold program");
     }
     t_g_accum += now_s() - _a0;
+    /* a problem's zonal term, after the fold and so in every engine, at
+     * every call site: predict and correct read only a0 and at */
+    if (zonal_on) zonal_accel();
 }
 
 #ifndef IAS15_CFT_LIBRARY
@@ -3028,6 +3086,7 @@ static void energy_all(V out){
         for (size_t s = 0; s < E; s++) memcpy(E(gat, s), E(uu, s * PS + j * (j - 1) / 2 + i), ESZ);   /* pair (j > i) of the list */
         vsub(epot, epot, gat, E);
     }
+    if (zonal_on) zonal_potential(epot);
     vadd(out, ekin, epot, E);
     vaddk(out, out, K0, E);  /* + energy_offset, which is 0 */
 }
@@ -4224,11 +4283,25 @@ static void sched_key(char *out, size_t cap, long steps, long sample, int tol_sh
     for (size_t k = 0; k < N3 * ESZ; k++){ hs ^= X0[k]; hs *= 1099511628211ULL; hs ^= V0[k]; hs *= 1099511628211ULL; }
     for (long i = 0; i < ndtlist; i++)
         for (size_t k = 0; k < ESZ; k++){ hs ^= dtlist[i][k]; hs *= 1099511628211ULL; }
-    snprintf(out, cap, "format=%s problem=%s E=%zu N=%zu member=%d steps=%ld sample=%ld adaptive_mode=%d max_iter=%d "
+    int w = snprintf(out, cap, "format=%s problem=%s E=%zu N=%zu member=%d steps=%ld sample=%ld adaptive_mode=%d max_iter=%d "
              "pc_tol_shift=%d cs=%s arith=%s engine=%s dt0=%s epsilon=%s softening2=%s min_dt=%s G=%s dt_file=%s state=%016llx",
              cft_format_name(F), problem_name, E, N, member, steps, sample, ADAPTIVE_MODE, max_iter, tol_shift,
              cs_augmented ? "augmented" : "kahan", arith_fma ? "fma" : "rebound", engine_program ? "program" : "loop",
              h[0], h[1], h[2], h[3], h[4], dtlist ? "yes" : "no", (unsigned long long)hs);
+    /* A problem's active and zonal lines change the run, so they key it -
+     * appended only when present, so that no older key moves (ROUND4.md,
+     * P0). A schedule recorded with one N_active or one J2 is then refused
+     * by name under another. */
+    if (w > 0 && (size_t)w < cap && prob_active >= 0)
+        w += snprintf(out + w, cap - (size_t)w, " active=%ld", prob_active);
+    if (w > 0 && (size_t)w < cap && zonal_on){
+        char z[3][160];
+        const V zv[3] = { ZR, ZJ2, ZJ4 };
+        for (int i = 0; i < 3; i++)
+            if (cft_to_hex_char(dev, F, zv[i], z[i], sizeof z[i], &len) != CFT_OK) die("to_hex: %s", cft_last_error());
+        w += snprintf(out + w, cap - (size_t)w, " zonal=%zu,%s,%s,%s", zonal_k, z[0], z[1], z[2]);
+    }
+    if (w < 0 || (size_t)w >= cap) die("the corrector schedule's run key does not fit its %zu bytes", cap);
 }
 
 static void sched_open(const char *rec, const char *play, const char *key, int quiet){
@@ -4384,6 +4457,10 @@ int main(int argc, char **argv){
         cert_flags &= ~(uint32_t)(CFT_FLAG_INVALID | CFT_FLAG_DIVBYZERO);
 
     read_problem(problem);
+    /* the problem's active line, through the engine's own N_active - the
+     * drop-in's, which reb_integrator_cft.c sets every step - before
+     * alloc_state() builds the rows from it */
+    if (prob_active >= 0){ eng_active = (size_t)prob_active; eng_tptype = 0; }
     make_constants(tol_shift, quiet);
     alloc_state();
     /* After alloc_state: the broadcast is NMAX wide and NMAX is not
@@ -4458,6 +4535,10 @@ int main(int argc, char **argv){
     }else printf(" image=none");
     printf("\n");
     printf("# dt0="); puthex(E(SDT, 0)); printf(" epsilon="); puthex(EPS); printf(" G="); puthex(G); printf(" pc_tol="); puthex(TOL); printf("\n");
+    /* only for a problem that has the line, so no older record moves */
+    if (prob_active >= 0)
+        printf("# active %ld of %zu bodies a system: %zu pairs a force evaluation, a system\n", prob_active, N, scat_pairs);
+    if (zonal_on) zonal_record();
     if (E == 1){
         for (size_t i = 0; i < N; i++){ printf("# body %zu %s m=", i, body_names[i]); puthex(E(mass, i)); printf("\n"); }
         printf("# columns: sample step t dt_next dt_last E then per body x y z vx vy vz ; then exact-time pair t_hi t_lo\n");

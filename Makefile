@@ -252,7 +252,7 @@ $(B)/libcft_rebound.a: $(B)/cft_rebound_run.o $(B)/cft_supported.o
 GRAVITY_CFTA := $(wildcard programs/gravity-*.cfta)
 GRAVITY_H    := $(B)/gravity_images.h src/cft_embedded_image.h
 
-$(B)/ias15_cft$(EXE): src/ias15_cft.c src/ias15_constants.h src/hexfloat.h src/ias15_limits.h $(B)/normalabs_images.h $(GRAVITY_H) $(CFTLIB)
+$(B)/ias15_cft$(EXE): src/ias15_cft.c src/ias15_zonal.inc src/ias15_constants.h src/hexfloat.h src/ias15_limits.h $(B)/normalabs_images.h $(GRAVITY_H) $(CFTLIB)
 	$(CC) $(CSTD) $(CFLAGS) $(WARN) -Isrc -I$(B) -I$(CFT)/include -o $@ src/ias15_cft.c $(CFTLIB) $(LIBS)
 
 # ---------------------------------------------------------------------
@@ -268,7 +268,7 @@ $(B)/ias15_cft$(EXE): src/ias15_cft.c src/ias15_constants.h src/hexfloat.h src/i
 DROPIN_OBJ := $(B)/ias15_cft_lib.o $(B)/reb_integrator_cft.o $(B)/cft_ias15_fields.o \
               $(B)/cft_supported.o
 
-$(B)/ias15_cft_lib.o: src/ias15_cft.c src/ias15_constants.h src/ias15_engine.h src/ias15_limits.h $(B)/normalabs_images.h $(GRAVITY_H)
+$(B)/ias15_cft_lib.o: src/ias15_cft.c src/ias15_zonal.inc src/ias15_constants.h src/ias15_engine.h src/ias15_limits.h $(B)/normalabs_images.h $(GRAVITY_H)
 	@mkdir -p $(B)
 	$(CC) -c $(CSTD) $(CFLAGS) $(WARN) -DIAS15_CFT_LIBRARY -Isrc -I$(B) -I$(CFT)/include -o $@ src/ias15_cft.c
 
@@ -323,7 +323,7 @@ PIC_OBJ := $(B)/pic/ias15_cft_lib.o $(B)/pic/reb_integrator_cft.o \
            $(B)/pic/cft_ias15_shared.o $(B)/pic/cft_supported.o
 PICFLAGS := $(CSTD) $(CFLAGS) $(WARN) $(SHPIC) -Isrc -I$(CFT)/include -I$(REB)
 
-$(B)/pic/ias15_cft_lib.o: src/ias15_cft.c src/ias15_constants.h src/ias15_engine.h src/ias15_limits.h $(B)/normalabs_images.h $(GRAVITY_H)
+$(B)/pic/ias15_cft_lib.o: src/ias15_cft.c src/ias15_zonal.inc src/ias15_constants.h src/ias15_engine.h src/ias15_limits.h $(B)/normalabs_images.h $(GRAVITY_H)
 	@mkdir -p $(B)/pic
 	$(CC) -c $(PICFLAGS) -DIAS15_CFT_LIBRARY -I$(B) -o $@ src/ias15_cft.c
 
