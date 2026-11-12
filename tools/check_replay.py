@@ -51,21 +51,30 @@
 #      none in A, one or more before the first accepted step in B, one or
 #      more after an accepted step in C; the attempts record agrees with the
 #      wave's trailer and its schedule, attempt for attempt. The particle
-#      moved: its angle swept about Saturn. And the records are load
-#      bearing, or the comparison would pass against itself: in each wave,
-#      some sampled particle run alone takes other bits on its own steps,
-#      and some sampled particle run alone on the recorded steps takes other
-#      passes on its own exit test.
+#      moved: the angle it swept about Saturn, summed sample to sample. And
+#      the records are load bearing, or the comparison would pass against
+#      itself: in each wave, some sampled particle run alone takes other
+#      bits on its own steps, and some sampled particle run alone on the
+#      recorded steps takes other passes on its own exit test. The whole
+#      wave, replayed through its attempts record alone on its own exit
+#      test, gives its record lines and counters (every wave and form): the
+#      run needs no schedule, and only a sub-system does.
 #   4. The comparison sees what it must, on copies of the records:
 #      - one accepted attempt's dt moved by one ulp: the replay keyed on the
 #        true record is refused by name, and re-keyed it runs and the
 #        particle's bits differ;
 #      - B's rejected first attempt deleted from both records, re-keyed: the
-#        bits differ;
-#      - C's first rejection deleted from both records, re-keyed: the bits
+#        bodies' values differ, the state and not only the dt_next of the
+#        sample printed before the attempt;
+#      - C's first rejection after an accepted step that has no sample line
+#        just before it, deleted from both records and re-keyed: the bits
 #        are the same (the step after a rejection is predicted from er and
 #        br exactly as the accepted step before it would have predicted it)
-#        and steps_rejected falls by one, so item 2 is what catches it.
+#        and steps_rejected falls by one, so item 2 is what catches it. A
+#        sample printed just before a rejected attempt carries that
+#        attempt's own dt as its dt_next, so the attempt chosen has none, and
+#        that precondition is asserted by name: another --sample cannot fail
+#        the case with nothing wrong.
 #   5. Refusals by name, at the first format: the records replayed for
 #      another wave (a particle moved, the sampled one or another); the
 #      sub-system with a massive body moved, two swapped, or its active line
@@ -79,6 +88,13 @@
 #      first format: member 1 of two, recorded with --member 1, gives its
 #      particles alone (one of them the body that tells the two waves apart),
 #      and its records extracted for member 0 are refused by name.
+#   7. A dt file through a pipe, which cannot be rewound, at the first format
+#      (V3, 2026-11-12: a rewind there once dropped the C runtime's buffer).
+#      Wave A's accepted-steps file (--dt-out), padded to fixed-width lines
+#      past 4,096 bytes so that a lost buffer would cut it on a line
+#      boundary and run silently, and its attempts record each replay
+#      through a pipe to the lines and counters the same file gives as a
+#      file. A Windows named pipe here; /dev/stdin on a POSIX host.
 #
 # The --light rules (CLAUDE.md): this gate has no scaling of its own. Every
 # replay runs its wave's own --steps, never a count scaled apart from the
@@ -89,12 +105,14 @@
 # failing one keeps it.
 
 import argparse
+import itertools
 import math
 import os
 import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -171,6 +189,52 @@ def run(cmd):
     return p.returncode, p.stdout, p.stderr
 
 
+_pipes = itertools.count()
+
+
+def run_piped(cmd, data):
+    """cmd, then the path of a pipe that carries data and cannot be rewound:
+    a Windows named pipe, or /dev/stdin on a POSIX host."""
+    if os.name != "nt":
+        p = subprocess.run(cmd + ["/dev/stdin"], input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return p.returncode, p.stdout.decode(), p.stderr.decode()
+    import _winapi
+    name = r"\\.\pipe\cft-check-replay-%d-%d" % (os.getpid(), next(_pipes))
+    # outbound (PIPE_ACCESS_OUTBOUND = 2), a byte stream that blocks, one instance
+    h = _winapi.CreateNamedPipe(name, 0x00000002, 0, 1, 65536, 65536, 0, _winapi.NULL)
+
+    def serve():
+        try:
+            try:
+                _winapi.ConnectNamedPipe(h, _winapi.NULL)
+            except OSError as e:
+                if getattr(e, "winerror", None) != 535:        # ERROR_PIPE_CONNECTED: the program opened it first
+                    raise
+            _winapi.WriteFile(h, data)
+        except OSError:
+            pass
+        finally:
+            _winapi.CloseHandle(h)
+    t = threading.Thread(target=serve, daemon=True)
+    t.start()
+    r = run(cmd + [name])
+    if t.is_alive():            # the program never opened the pipe: release its server
+        try:
+            open(name, "rb").close()
+        except OSError:
+            pass
+    t.join(timeout=30)
+    return r
+
+
+def sample_before(outc, k, sample):
+    """Whether a record prints a sample line just before attempt k, which
+    then carries attempt k's own dt as its dt_next: the first sample is
+    printed before attempt 0, and each later one after the accepted attempt
+    that brings the accepted count to a multiple of --sample."""
+    return k == 0 or (outc[k - 1] == "a" and outc[:k].count("a") % sample == 0)
+
+
 def kv(text):
     return dict(x.partition("=")[::2] for x in text.split())
 
@@ -239,16 +303,27 @@ def particle_differs(wave, sub, j, i):
     return sum(1 for w, s in zip(wave, sub) if w[7 + 6 * j:13 + 6 * j] != s[7 + 6 * i:13 + 6 * i]) + abs(len(wave) - len(sub))
 
 
+def body_mismatches(wave, sub, bodies):
+    """The (sample, body) pairs whose six values differ: the state, without
+    the head fields."""
+    return sum(1 for w, s in zip(wave, sub) for i, b in enumerate(bodies)
+               if w[7 + 6 * b:13 + 6 * b] != s[7 + 6 * i:13 + 6 * i])
+
+
 def travel(wave, j):
-    """The angle body j swept about body 0 from the first sample to the
-    last, read back from the record's hex, and the distance between."""
-    def pos(line, b):
-        return [float.fromhex(t) for t in line[7 + 6 * b:10 + 6 * b]]
-    (a, b0), (c, b1) = (pos(wave[0], j), pos(wave[0], 0)), (pos(wave[-1], j), pos(wave[-1], 0))
-    r0 = [p - q for p, q in zip(a, b0)]
-    r1 = [p - q for p, q in zip(c, b1)]
-    cosang = sum(p * q for p, q in zip(r0, r1)) / (math.sqrt(sum(p * p for p in r0)) * math.sqrt(sum(q * q for q in r1)))
-    return math.acos(max(-1.0, min(1.0, cosang))), math.sqrt(sum((p - q) ** 2 for p, q in zip(c, a)))
+    """The angle body j swept about body 0, summed from each sample to the
+    next, and the length of those chords, read back from the record's hex.
+    Summed rather than first to last, so that a whole orbit does not read as
+    none: a gate wave's samples are under half an orbit apart."""
+    def rel(line):
+        return [float.fromhex(a) - float.fromhex(b) for a, b in zip(line[7 + 6 * j:10 + 6 * j], line[7:10])]
+    swept = chords = 0.0
+    for l0, l1 in zip(wave, wave[1:]):
+        r0, r1 = rel(l0), rel(l1)
+        cosang = sum(p * q for p, q in zip(r0, r1)) / (math.sqrt(sum(p * p for p in r0)) * math.sqrt(sum(q * q for q in r1)))
+        swept += math.acos(max(-1.0, min(1.0, cosang)))
+        chords += math.sqrt(sum((p - q) ** 2 for p, q in zip(r1, r0)))
+    return swept, chords
 
 
 def main():
@@ -308,13 +383,18 @@ def main():
         d = os.path.join(work, "%s-%s-%s" % (fmt, case, form))
         os.makedirs(d, exist_ok=True)
         ra = run_args(fmt, case, form)
-        att, sch = os.path.join(d, "wave.att"), os.path.join(d, "wave.sched")
-        rc, out, err = run([cft, "--problem", waves[case]] + ra + ["--attempts-out", att, "--record-iters", sch])
+        att, sch, dtf = os.path.join(d, "wave.att"), os.path.join(d, "wave.sched"), os.path.join(d, "wave.dt")
+        rc, out, err = run([cft, "--problem", waves[case]] + ra + ["--attempts-out", att, "--record-iters", sch]
+                           + (["--dt-out", dtf] if case == "A" and form == "loop" else []))
         res["wave_rc"], res["wave_err"] = rc, err
         if rc:
             return res
         wrec, wtail = record(out)
-        res.update(wrec=wrec, wtail=wtail, att=att, sch=sch, args=ra, outc=outcomes(att), passes=passes(sch), parts={})
+        res.update(wrec=wrec, wtail=wtail, att=att, sch=sch, dtf=dtf, args=ra, outc=outcomes(att), passes=passes(sch),
+                   parts={})
+        # the whole wave through its attempts record alone, on its own exit test
+        rc, out, err = run([cft] + xp.replay_args(ra, waves[case], att))
+        res["whole"] = (rc, err) + record(out)
         for j in sampled(case):
             p = {}
             try:
@@ -366,18 +446,36 @@ def main():
                 ctl["moved_rekeyed"] = (3, "", "extract_particle: refused: %s" % e)
         if case in ("B", "C") and j0 in res["parts"] and "x" in res["parts"][j0]:
             # one rejected attempt deleted from copies of both records: in B
-            # the first attempt, in C the first rejection after an accepted step
+            # the first attempt; in C the first rejection after an accepted
+            # step with no sample line just before it, since such a line
+            # carries the attempt's own dt as its dt_next
             o = res["outc"]
-            k = next((i for i, w in enumerate(o) if w == "r" and (case == "B" or "a" in o[:i])), None)
-            if k is not None:
-                datt, dsch = os.path.join(d, "deleted.att"), os.path.join(d, "deleted.sched")
-                edit_lines(att, datt, lambda L: [l for i, l in enumerate(L) if i != body_lines(L)[k]])
-                edit_lines(sch, dsch, lambda L: [l for i, l in enumerate(L) if i != body_lines(L)[k]])
+            sample = int(ra[ra.index("--sample") + 1])
+            late = [i for i, w in enumerate(o) if w == "r" and "a" in o[:i]]
+            blocked = [i for i in late if sample_before(o, i, sample)]
+            if case == "B":
+                k = next((i for i, w in enumerate(o) if w == "r"), None)
+            else:
+                k = next((i for i in late if not sample_before(o, i, sample)), None)
+                ctl["deleted_pre"] = (late, k, sample, blocked)
+
+            def delete(kk, tag):
+                datt, dsch = os.path.join(d, tag + ".att"), os.path.join(d, tag + ".sched")
+                edit_lines(att, datt, lambda L: [l for i, l in enumerate(L) if i != body_lines(L)[kk]])
+                edit_lines(sch, dsch, lambda L: [l for i, l in enumerate(L) if i != body_lines(L)[kk]])
                 try:
-                    rk = xp.extract(cft, waves[case], datt, dsch, j0, os.path.join(d, "deleted"), ra)
-                    ctl["deleted"] = (k, run([cft] + rk["args"]))
+                    rk = xp.extract(cft, waves[case], datt, dsch, j0, os.path.join(d, tag), ra)
+                    return kk, run([cft] + rk["args"])
                 except xp.Refused as e:
-                    ctl["deleted"] = (k, (3, "", "extract_particle: refused: %s" % e))
+                    return kk, (3, "", "extract_particle: refused: %s" % e)
+            if k is not None:
+                ctl["deleted"] = delete(k, "deleted")
+            # and in C, where one exists, a late rejection WITH a sample line
+            # just before it: only that line's dt_next may move
+            if case == "C" and blocked:
+                with open(att, encoding="utf-8") as f:
+                    adts = [l.split()[0] for l in f.read().splitlines() if l.strip() and not l.startswith("#")]
+                ctl["deleted_b"] = delete(blocked[0], "deleted-b") + (adts,)
         res["ctl"] = ctl
         return res
 
@@ -409,6 +507,13 @@ def main():
             verdict(want, {"A": "it rejects nothing (%d rejected)" % rej,
                            "B": "a rejection before any step is accepted: %d" % early,
                            "C": "a rejection after an accepted step, the case predicted from er and br: %d" % late}[case])
+            wrc, werr, whole, wholet = res["whole"]
+            nwd = sum(a != b for a, b in zip(wrec, whole)) + abs(len(wrec) - len(whole))
+            wsame = all(wholet.get(k) == wt.get(k) for k in COUNTERS)
+            verdict(wrc == 0 and nwd == 0 and len(whole) > 0 and wsame,
+                    "the whole wave through its attempts record alone, on its own exit test and with no schedule: %d of "
+                    "%d record lines differ, and its counters are%s the wave's%s"
+                    % (nwd, len(wrec), "" if wsame else " NOT", "" if wrc == 0 else " (rc %d: %s)" % (wrc, werr.strip()[-200:])))
             own_bits = own_passes = 0
             for j, p in sorted(res["parts"].items()):
                 if "refused" in p:
@@ -431,7 +536,7 @@ def main():
                     "%s=%s%s" % (k, p["tail"].get(k), "" if p["tail"].get(k) == wt.get(k) else "(wave %s)" % wt.get(k))
                     for k in COUNTERS))
                 verdict(swept > 0.05 and dist > 1000.0,
-                        "  it moved: %.3f rad about Saturn, %.0f km, over the run's %.0f s"
+                        "  it moved: %.3f rad about Saturn, summed sample to sample, %.0f km of chords, over the run's %.0f s"
                         % (swept, dist, float.fromhex(wrec[-1][3])))
                 if form != "loop":
                     continue
@@ -465,6 +570,24 @@ def main():
                     verdict(rc == 0 and nd > 0, "  and re-keyed for it, the replay runs and body %d's bits differ at %d "
                             "of %d samples%s" % (j0, nd, len(wrec), "" if rc == 0 else " (rc %d: %s)" % (rc, err.strip()[-200:])))
             else:
+                if case == "C":
+                    # the precondition, by name: a sample line printed just
+                    # before the deleted attempt carries that attempt's dt as
+                    # its dt_next, and the deletion moves it with nothing wrong
+                    lates, kpre, sample, blocked = ctl.get("deleted_pre", ([], None, 0, []))
+                    if kpre is None:
+                        verdict(False, "the deletion case's precondition fails, by name: each rejection after an accepted "
+                                "step (attempts %s) has a sample line just before it at --sample %d, which carries the "
+                                "deleted attempt's own dt as its dt_next; the case needs another --sample" % (lates, sample))
+                        continue
+                    why = ("it follows rejected attempt %d, and no sample is printed after a rejection" % (kpre - 1)
+                           if o[kpre - 1] == "r" else
+                           "it follows accepted attempt %d, which brings the accepted count to %d, not a multiple of "
+                           "--sample %d" % (kpre - 1, o[:kpre].count("a"), sample))
+                    verdict(not sample_before(o, kpre, sample),
+                            "the deletion case's precondition, by name: attempt %d has no sample line just before it (%s), "
+                            "so no sample carries its dt as dt_next%s"
+                            % (kpre, why, "; attempts %s would have, and are not chosen" % blocked if blocked else ""))
                 if "deleted" not in ctl:
                     verdict(False, "the deletion control did not run")
                 else:
@@ -475,22 +598,52 @@ def main():
                         verdict(False, "attempt %d deleted from both records and re-keyed: the replay did not run (rc %d): %s"
                                 % (k, rc, err.strip()[-200:]))
                     elif case == "B":
-                        n, values, bad = compare(wrec, rec, res["parts"][j0]["x"]["bodies"])
-                        verdict(len(bad) > 0, "the rejected first attempt deleted from both records and re-keyed: the replay "
-                                "runs and %d of its %d sample-and-body comparisons differ (steps_rejected %s, the wave's %s)"
-                                % (len(bad), n * (1 + n_active), tail.get("steps_rejected"), wt.get("steps_rejected")))
+                        bodies = res["parts"][j0]["x"]["bodies"]
+                        n, values, bad = compare(wrec, rec, bodies)
+                        nb = body_mismatches(wrec, rec, bodies)
+                        verdict(nb > 0, "the rejected first attempt deleted from both records and re-keyed: the replay runs, "
+                                "and its bodies differ in %d of its %d sample-and-body pairs: the state, not only the "
+                                "dt_next of the sample printed before the attempt (%d comparisons in all; steps_rejected "
+                                "%s, the wave's %s)" % (nb, n * len(bodies), len(bad), tail.get("steps_rejected"),
+                                                        wt.get("steps_rejected")))
                     else:
                         n, values, bad = compare(wrec, rec, res["parts"][j0]["x"]["bodies"])
                         verdict(not bad and tail.get("steps_rejected") == str(int(wt["steps_rejected"]) - 1),
                                 "attempt %d, a rejection after an accepted step, deleted from both records and re-keyed: "
                                 "every bit is the wave's (%d mismatches) and only the counters see it, steps_rejected %s "
                                 "against %s" % (k, len(bad), tail.get("steps_rejected"), wt.get("steps_rejected")))
+                if case == "C" and "deleted_b" in ctl:
+                    # the precondition's other side, held to the program: with a
+                    # sample line just before it, a deleted late rejection moves
+                    # that line's dt_next, from its own dt to the next attempt's,
+                    # and nothing else
+                    kb, (rc, out, err), adts = ctl["deleted_b"]
+                    rec, tail = record(out)
+                    bodies = res["parts"][sampled(case)[0]]["x"]["bodies"]
+                    m = o[:kb].count("a")
+                    heads = [(w[2], t) for w, s in zip(wrec, rec) for t in list(range(7)) + [-3, -2, -1] if w[t] != s[t]]
+                    at = next((i for i, w in enumerate(wrec) if w[2] == str(m)), None)
+                    verdict(rc == 0 and len(rec) == len(wrec) and body_mismatches(wrec, rec, bodies) == 0
+                            and heads == [(str(m), 4)] and at is not None
+                            and wrec[at][4] == adts[kb] and rec[at][4] == adts[kb + 1],
+                            "attempt %d, a rejection after an accepted step WITH a sample line just before it (the step-%d "
+                            "line), deleted the same way: only that line's dt_next moves, from the deleted attempt's dt "
+                            "%s to the next attempt's %s; every body and every other field is the wave's (%d fields "
+                            "differ: %s)" % (kb, m, adts[kb], adts[kb + 1] if kb + 1 < len(adts) else "?", len(heads),
+                                             heads[:4] if rc == 0 else "rc %d: %s" % (rc, err.strip()[-150:])))
+                elif case == "C":
+                    print("       (no rejection after an accepted step has a sample line just before it at --sample %d here, "
+                          "so the deletion of one is not exercised at this format)" % ctl.get("deleted_pre", (0, 0, 0))[2])
 
     # A wave that is a system of an ensemble, as P2's are: recorded with
     # --member, extracted with --member, and refused for the other member.
     fmt0 = formats[0]
     print("check_replay at %s: a wave that is system 1 of a two-wave ensemble (--member 1)" % fmt0)
     member_case(cft, work, run_args(fmt0, "B"), n_active)
+
+    # 7. A dt file through a pipe, which cannot be rewound, in both forms.
+    print("check_replay at %s: a dt file through a pipe, which cannot be rewound" % fmt0)
+    pipe_case(cft, work, results[(fmt0, "A", "loop")], waves["A"])
 
     # 5. Refusals by name, at the first format, on wave A's records.
     res = results[(fmt0, "A", "loop")]
@@ -549,6 +702,47 @@ def member_case(cft, work, ra, n_active):
         why = str(e)
     verdict(why is not None and "was recorded from a different run than this wave" in why,
             "member 1's records extracted for member 0: refused by name")
+
+
+def pipe_case(cft, work, res, wave):
+    """Wave A's accepted-steps dt file and its attempts record, each read as a
+    file and through a pipe. The accepted-steps file is padded to lines of
+    32 or 128 bytes, both of which divide the C runtime's 4,096-byte buffer,
+    and to more than three buffers: a reader that lost a buffer would then
+    lose whole lines and run on silently, which is the case that hides."""
+    if res["wave_rc"] or not os.path.exists(res.get("dtf", "")):
+        verdict(False, "wave A or its --dt-out did not run, so no dt file can go through a pipe")
+        return
+    d = os.path.join(work, "pipe")
+    os.makedirs(d, exist_ok=True)
+    with open(res["dtf"], encoding="utf-8") as f:
+        lines = [l.strip() for l in f.read().splitlines() if l.strip()]
+    width = 32 if max(len(l) for l in lines) < 31 else 128
+    body = lines + lines[-1:] * max(0, 3 * 4096 // width + 1 - len(lines))
+    data = "".join(l.ljust(width - 1) + "\n" for l in body).encode()
+    padded = os.path.join(d, "wave-padded.dt")
+    with open(padded, "wb") as f:
+        f.write(data)
+    head = [cft] + xp.replay_args(res["args"], wave, "")[:-1]      # ... --dt-file, and the file or the pipe next
+    wrec, wt = res["wrec"], res["wtail"]
+    for label, path, payload, against in (
+            ("the accepted-steps file (--dt-out), padded to %d lines of %d bytes, %d bytes in all"
+             % (len(body), width, len(data)), padded, data, "the wave's"),
+            ("the attempts record, %d bytes" % os.path.getsize(res["att"]), res["att"], None, "the wave's")):
+        if payload is None:
+            with open(path, "rb") as f:
+                payload = f.read()
+        rc1, out1, err1 = run(head + [path])
+        rc2, out2, err2 = run_piped(head, payload)
+        (f1, t1), (p2, t2) = record(out1), record(out2)
+        nd_file = sum(a != b for a, b in zip(wrec, f1)) + abs(len(wrec) - len(f1))
+        nd_pipe = sum(a != b for a, b in zip(f1, p2)) + abs(len(f1) - len(p2))
+        same = all(t1.get(k) == t2.get(k) for k in COUNTERS)
+        verdict(rc1 == 0 and rc2 == 0 and nd_file == 0 and nd_pipe == 0 and len(f1) > 0 and same,
+                "%s: as a file its replay gives %s %d record lines (%d differ), and through a pipe rc %d, %d of them "
+                "differ and its counters are%s the file's%s"
+                % (label, against, len(wrec), nd_file, rc2, nd_pipe, "" if same else " NOT",
+                   "" if rc2 == 0 else ": " + err2.strip()[-160:]))
 
 
 def shift(line):

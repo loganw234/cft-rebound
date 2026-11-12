@@ -80,11 +80,13 @@
  * included: the dt it tried and whether it was accepted, and last the dt
  * the run takes next. --dt-file reads that form back by its first line and
  * replays it, a recorded rejection taken as the run took it (it needs
- * --epsilon 0, as the accepted-steps form does); with --replay-iters of the
- * same run's schedule it is that run, bit for bit. --run-key prints the
- * run's key and exits. tools/extract_particle.py replays one test particle
- * out of its wave with them, and tools/check_replay.py is their gate
- * (ROUND4.md, P3).
+ * --epsilon 0, as the accepted-steps form does). The run itself replays bit
+ * for bit through that record alone, on its own exit test; its schedule is
+ * refused there, the replay's key differing in epsilon and dt_file. A test
+ * particle alone with the run's massive bodies takes the run's passes too,
+ * from the run's schedule re-keyed for it: tools/extract_particle.py writes
+ * the two, and tools/check_replay.py is their gate (ROUND4.md, P3).
+ * --run-key prints a run's key and exits.
  *
  * --artifact opens a tile instead of the software backend; with no flag
  * the program falls back to $CFT_REBOUND_ARTIFACT, which is how the
@@ -3224,20 +3226,28 @@ static void read_attempts(FILE *f, const char *path, long steps, long lineno){
     if (ok < steps) die("--dt-file %s has %ld accepted attempts, the run needs %ld", path, ok, steps);
 }
 
+/* Whether a line as fgets() returned it is the attempts form's first line:
+ * ATT_MAGIC and its line end, or ATT_MAGIC at the end of the file. */
+static int is_attempts_line(const char *l){
+    size_t m = strlen(ATT_MAGIC);
+    return !strncmp(l, ATT_MAGIC, m) && (!l[m] || !strcmp(l + m, "\n") || !strcmp(l + m, "\r\n"));
+}
+
 static void read_dt_file(const char *path, long steps){
     FILE *f = fopen(path, "r");
     if (!f){ perror(path); exit(2); }
-    /* The attempts form, by its first line. Any other file is the
-     * accepted-steps form, read from its start below exactly as before. */
-    {
-        long lineno = 0;
-        char *first = att_line(f, &lineno);
-        if (first && !strcmp(first, ATT_MAGIC)){ read_attempts(f, path, steps, lineno); fclose(f); return; }
-        rewind(f);
-    }
+    /* The first line is read by the same fgets() the accepted-steps loop
+     * below reads every line with. If it is the attempts form's, that form
+     * is read from the next line; otherwise the loop starts from it. Nothing
+     * is read twice and nothing is rewound, so a dt file through a pipe
+     * reads exactly as it did before the attempts form existed (V3,
+     * 2026-11-12: rewind() fails on a pipe, and the C runtime then drops
+     * what it had buffered). */
     char line[256]; long cap = 1024, n = 0;
+    int have = fgets(line, sizeof line, f) != NULL;
+    if (have && is_attempts_line(line)){ read_attempts(f, path, steps, 1); fclose(f); return; }
     dtlist = malloc(cap * sizeof *dtlist);
-    while (fgets(line, sizeof line, f)){
+    for (; have; have = fgets(line, sizeof line, f) != NULL){
         if (line[0] == '#' || line[0] == '\n') continue;
         char *tok = strtok(line, " \t\r\n"); if (!tok) continue;
         if (n == cap){ cap *= 2; dtlist = realloc(dtlist, cap * sizeof *dtlist); if (!dtlist) die("out of memory"); }
@@ -4628,8 +4638,10 @@ int main(int argc, char **argv){
     bcast_sys(DTB, SDT);
     /* --run-key: this run's key, as its corrector schedule's `# run` line and
      * its attempts record's would hold it, from the same sched_key() as
-     * below; nothing is integrated and no file is opened. It is how a tool
-     * re-keys a schedule without a copy of the key's hash (ROUND4.md, P3). */
+     * below. Nothing is integrated and no output file is opened; the problem
+     * and any dt file have been read, as the key needs them. It is how a
+     * tool re-keys a schedule without a copy of the key's hash (ROUND4.md,
+     * P3). */
     if (do_key){
         char key[1536];
         sched_key(key, sizeof key, steps, sample, tol_shift);
