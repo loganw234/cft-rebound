@@ -597,8 +597,8 @@ re-deriving it.
 
 **2026-10-30: the pin moved, and the device-side halves below are no
 longer asks.** third_party/MANIFEST pinned cft-fp256 `922c2ad` (libcft
-ABI 0.18) from docs/VALIDATION.md entry 38 to entry 53, and every mechanism this
-section calls missing on the device is in that library, built by
+ABI 0.18) from docs/VALIDATION.md entry 38 to entry 53, and every
+mechanism this section calls missing on the device is in that library, built by
 cft-fp256 against this repository's own code (its docs/ROUND2.md, and
 its docs/ROADMAP.md, "What a real workload asked for"):
 

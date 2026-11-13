@@ -6859,14 +6859,20 @@ their logs:
 ## 53. The pin moves to cft-fp256 `eae74e3`, its main with G1B's HIP backend and G1C's gates: the same bits from the same calls, through a library whose executor moved
 
 **2026-11-13.** This desktop, on the software backend only, booked
-shared in the TimeSheet (B0033); MSYS2 mingw64 gcc, Miniconda Python
-3.12.15 with mpmath 1.3.0; REBOUND at bdfda4bd. The lead's commits on
-`pin-g1c`, from main at `2d52e32`, are `47b2398`, the pin; `e520bc8`, the
-records; and this one, after the verifier VP sent them back. It is Logan's decision 7, relayed by cft-fp256's lead on
-2026-11-13: "Yes, to G1C", the SHA to follow once G1C's merge was
-pushed. As entry 38 did, this entry moves the pin and establishes one
-thing: the calls this port makes return the same bits through the new
-library. It adopts nothing, and builds no HIP.
+shared in the TimeSheet (B0033 and B0041); MSYS2 mingw64 gcc, Miniconda
+Python 3.12.15 with mpmath 1.3.0; REBOUND at bdfda4bd. The lead's
+commits on `pin-g1c`, from main at `2d52e32`, are:
+- `47b2398`, the pin;
+- `e520bc8`, the records;
+- `58b085c`, after the verifier VP sent them back, with check-pins
+  mended;
+- this one, two sentences from VP's second look.
+
+It is Logan's decision 7, relayed by cft-fp256's lead on 2026-11-13:
+"Yes, to G1C", the SHA to follow once G1C's merge was pushed. As entry
+38 did, this entry moves the pin and establishes one thing: the calls
+this port makes return the same bits through the new library. It adopts
+nothing, and builds no HIP.
 
 ### Which commit
 
@@ -6891,8 +6897,10 @@ host/Makefile. MEASURED with `git diff --stat 922c2ade eae74e3e` and
 `git rev-list`: 13 of those files changed, +3,752 and -907 lines, in 12
 of the range's 239 commits (10 of them not merges; 28 touched host/).
 - The program executor moved out of program.c (+20, -793) into a new
-  seq_exec.h (925 lines), which the device shares. VP measured it a pure
-  move, by a comparison of the lines with comments stripped.
+  seq_exec.h (925 lines), which the device shares. VP measured it the
+  same code but for the helpers' parameters and the ALU call behind
+  `CFT_SEQ_ALU`, whose default is `cft_sf_compute`. seq_exec.h's own
+  header says the moves are not pure.
 - softfloat and bigint gained only `CFT_HD` annotations, and their
   objects are identical (VP). transcend.c changed only `do_exp2m1`, and
   this port calls no transcendental function. device.c gained HIP-only
@@ -6950,6 +6958,12 @@ bit at every format across the two libraries: fp64 `e08541bc0af9b3ec`
 and `56bacf3bf63f19a7`, fp128 `5d7cf4588fad050e` and `cd16e6dc29aa0589`,
 fp256 `a1052750e206bebe` and `ba4d447c8e58bd20`.
 
+**The branch tip.** `58b085c`, which carries check_pins.sh's fix, ran its
+own full make check: rc 0, 25 legs, 1463 lines of `  ok `, 0 FAIL, from
+12:28:31 to 15:18:45. Every leg has `47b2398`'s counts, and the six
+digests are present. The commit after it changes two sentences of these
+records, so that suite holds it docs aside.
+
 ### The same integrations through both libraries
 
 **The lead's,** a script in the session's scratchpad. The program,
@@ -6994,9 +7008,10 @@ had no control. The identity lines, read afterwards, name
   port's own objects. Of libcft's 16 objects, only device.o, transcend.o,
   program.o and build_id.o differ.
 
-**`make example`,** as entry 38 ran it, at both pins: rc 0 at each, the
-same 38 lines of output but for the column of seconds, with the drop-in
-example's reload restored exactly.
+**`make example`,** as entry 38 ran it, at both pins: rc 0 at each, and
+the same 38 lines of output with the tree's path normalised, but for the
+column of seconds. The drop-in example's reload is restored exactly at
+both.
 
 ### Also in these records
 
@@ -7036,6 +7051,7 @@ example's reload restored exactly.
 - **cft-fp256's CI on `eae74e3e`,** which had started when the SHA was
   sent (READ).
 - **A full suite on Linux** at this pin.
-- **This branch tip's own suite.** It carries check_pins.sh's fix, so it
-  runs its own full make check; that and the verifier's last look are in
-  the report to Logan.
+- **check-pins against every bad README.** It still passes a correct row
+  beside a second, stale row written with two spaces after its pipe,
+  which it does not count. It refuses a correct row that writes the pin
+  in 8 characters or in full (VP).
