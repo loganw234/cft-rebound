@@ -5574,7 +5574,9 @@ assertion of the type itself.
   it writes the name, G, N and body lines only. So `tools/reversal.py`,
   run on such a problem, would integrate back on a different problem
   (BELIEVED; not run). No gate runs either tool. P0 changed the grammar
-  and no one owned this tool: not fixed in round 4.
+  and no one owned this tool: not fixed in round 4. **Fixed by entry
+  52,** which measured the consequence: a zonal problem's return missed
+  by 3.95e-3 of its size.
 - **`tools/make_ensemble.py` refuses `active` lines** (V0). An ensemble
   with test particles is written whole, as P2's generator does.
 - **A problem file through a pipe is refused, not misread.**
@@ -6637,3 +6639,216 @@ unchanged since `56006987`.
 
 - **Anything on a GPU, a card or WSL.** None was used in round 4.
 - **A full suite on Linux** at any of these merges.
+
+## 52. After round 4: `tools/state_to_problem.py` carries the `active` and `zonal` lines, and a reversal is gated; forward with J2 and J4, it had come back without them
+
+**2026-11-12.** This desktop, on the software backend, shared with round
+4's last suite; pins as in entry 46. The lead's commits on
+`state-to-problem-lines`, from `de376d8`: `68551e2`, the tools, the gate
+and its leg; `ac2a152` and `06c4384`, after VS's first and second looks;
+and this one, the records. Logan was asked, after study DEBRIS-A found
+the gap, whether to fix it with a test once round 4 had landed: "Yes,
+after the round". VS, the fix's verifier, said READY on `68551e2`, with a
+defect and a gap in the gate that `ac2a152` answers, and READY on
+`ac2a152`, with three items that `06c4384` answers. Its look at `06c4384`
+and these records, and this commit's own suite, are in the report to
+Logan.
+
+### What was wrong
+
+`tools/reversal.py` runs N fixed steps forward, writes the last sample as
+a problem through `tools/state_to_problem.py`, runs N steps back from it
+and compares the return with the start (the reversal test of
+2026-09-10). state_to_problem.py wrote the name, G, N and the bodies.
+Round 4's P0 gave the grammar its `active` and `zonal` lines, and no one
+owned this tool, so it dropped them (entry 46's limits, READ by
+DEBRIS-A). No gate ran either tool.
+
+Measured here, with `de376d8`'s tools, on `zonal_saturn` with `active 1`
+for 100 steps of 100 s each way: the return misses the start by 3.952e-3
+in max |dx| / L at binary64, binary128 and binary256 alike. That is the
+J2 and J4 the backward leg never felt. With `68551e2`'s tools it misses
+by 9.265e-17, 8.036e-35 and 1.549e-43.
+
+### The fix, `68551e2` to `06c4384`
+
+- **state_to_problem.py** reads the record's `# active` and `# zonal`
+  lines, which the program writes only for a problem that has them, and
+  writes them back as the problem's `active` and `zonal` lines. Each value
+  is the record's own exact hex, never a float. It refuses an unreadable
+  line, a second one, and a count that does not fit the system's N. A
+  record without them gives the file the tool always gave.
+- **reversal.py** refuses a turn or return problem whose lines, other
+  than comments, name, N and bodies, are not the original's as the run
+  reads them, value for value. That is how `read_problem()` reads them:
+  - hex is rounded to the run's format, ties to even, with its sign, as
+    the program rounds it. VS measured `rounded()` against the program at
+    49 values across the three formats, all agreeing: subnormals, ties
+    each way, carries into the next binade, negatives and zeros among
+    them. In the one divergence, a value that overflows binary64, the
+    program reads infinity and stops on its flags before any comparison;
+  - integers compare by value;
+  - G, E and a system's name compare by their first field only.
+
+  `68551e2` compared every token exactly and as text. VS found that
+  refused a value wider than the run's format, which the program rounds
+  and the turn problem carries rounded: a regression for G, which
+  `de376d8`'s tool had passed. It refused `active 01`, `zonal 00` and a G
+  line with a trailing comment too. `ac2a152` compares as above.
+
+  A line the tool does not carry is now an error by name, not a reversal
+  of another problem: an ensemble's `E` and `system` lines are refused,
+  as they failed before. reversal.py also refuses a return whose bodies
+  are not the start's: it had zipped them, and a short return would have
+  compared short.
+
+  Its legs' command became `leg_command()` and its comparison
+  `deviation()`; the command is the same list in the same order. Its
+  energy, the point-mass energy of every body, is now labelled a
+  function of the state, not the energy an `active` or `zonal` run
+  conserves.
+- **`tools/check_reversal.py`,** a leg in every tier, the 25th: 39
+  checks in 71 s in `make check`, and 21 in 31 s in `--quick`, on a host
+  shared with a full suite.
+
+### The gate
+
+The problem is `zonal_saturn` with three changes, each there so that a
+wrong tool fails:
+- **`active 01` for its `active 2`.** Mimas, GM 2.5, becomes a test
+  particle with a mass. As committed, the file's one test particle is the
+  massless ring particle, and a massless body's reaction is an exact zero
+  when every body is active. Measured: the return's three body lines are
+  identical with and without the `active` line, so the file as committed
+  cannot hold that line. check_ring_seams 1(b) found the same of the
+  ring's particles. The leading zero, which the program reads as 1,
+  holds a comparison of integers as text.
+- **G = 1 + 3 * 2^-53, with a comment after it.** At binary64 it is a
+  tie, which the program rounds to even, up, to 1 + 2^-51; the comment
+  holds a comparison that reads more of G's line than its first field.
+- **R = 60,330 km + 2^-38.** At binary64 it is a tie, which rounds to
+  even, down, to 60,330 km.
+
+G and R have 54 significant bits, exact at binary128 and binary256. A
+value that binary64 holds cannot show a carry that narrows it, and a tie
+each way shows a comparison that truncates or rounds ties away. The
+gate came to this in two of VS's looks:
+- **On `68551e2`** its values were all binary64. It passed a refusal
+  that compared first words only (VS's M2) and a carry through a float
+  (M3).
+- **On `ac2a152`** G and R were 1 + 2^-60 and 60,330 km + 2^-80, wide
+  but not ties. It passed a comparison that truncated (M6), rounded
+  ties away (M12), read all of G's line (M8) or compared integers as
+  text (M9). Its check that the refusal named the line could not fail,
+  because the problem's file name holds both words (M15). And it held
+  positions only.
+
+The gate's four parts:
+- **0. The carry alone.**
+  - (a) The 12 committed records of results/horizon/reversal/ (kepler
+    and outer, three formats, forward and back) rebuild their 12
+    committed problems, every line but the one naming the record's path.
+  - (b) Two steps at binary128 and at binary256: the turn problem
+    carries G, `active` and the zonal line exactly, the wide G and R
+    included. This runs in `--quick` too.
+  - (c) The hex reader all three use reads known answers right: -0 and
+    +0 apart, -0x1.8p+1 as -3, and the widened R.
+- **1. The backward leg runs the problem.** At each format (binary64
+  only in `--quick`), reversal.py runs (rc 0).
+  - Its turn and return problems carry G, `active` and the zonal line,
+    value for value as the run's format reads the problem's. The gate
+    computes this itself, not through the tools: hex at binary64 by
+    CPython's correctly rounded division and wider exactly, an integer
+    by its value, and G by its first field.
+  - The backward record's `# active` and `# zonal` lines are the forward
+    record's, word for word, and name the file's counts: N - 1 = 2
+    bodies feel the term, and body 0 takes the reaction of
+    active - 1 = 0.
+  - The return lies within the bound in positions and in velocities.
+    The gate computes both exactly, and reversal.py prints the same:
+
+| format | max abs dx / L | max abs dv / V | bound |
+|---|---|---|---|
+| binary64 | 9.265e-17 | 1.212e-16 | 1e-14 |
+| binary128 | 8.036e-35 | 1.052e-34 | 1e-32 |
+| binary256 | 1.549e-43 | 1.339e-43 | 1e-40 |
+
+  At binary64 and binary128 the return is round-off. Its largest
+  position error is one unit in the last place of a coordinate in
+  [2^16, 2^17), with L = 157,068 km: 2^-36 / L and 2^-96 / L (VS), 0.83 of
+  each format's unit roundoff (COMPUTED). At binary256 it is 3.4e28 unit
+  roundoffs: IAS15's own reversal error. The method is not
+  time-symmetric (reversal.py's head), and the narrower formats'
+  round-off hides it. The bounds are about 100 unit roundoffs at
+  binary64 and binary128, and 646 times the binary256 return.
+
+  `ac2a152`'s message calls its binary128 return, of 1 + 2^-60 and
+  60,330 km + 2^-80, bit-identical. It was not: the positions came back
+  exactly, but three velocity components missed (max |dv| / V =
+  5.258e-35, VS). The gate now holds velocities too.
+- **2. Each line carries weight.** At binary64 the turn problem, with its
+  zonal line deleted and then with its active line deleted, runs back as
+  reversal.py runs its backward leg. Without the zonal line the return
+  misses by 3.952e-3, 4.0e11 times the bound; without the active line,
+  by 1.666e-7, 1.7e7 times.
+- **3. A dropped or changed line fails.** These are controls from copies
+  of the three files, each mutation shown to apply by its diff. Three
+  copies of state_to_problem.py:
+  - one drops the zonal line;
+  - one drops the active line;
+  - one writes J4 one unit up in its last hex digit.
+
+  reversal.py refuses each copy's turn problem before the backward leg
+  (rc 1), in its own words: "it lacks its zonal line", "it lacks its
+  active line", "its zonal line(s) differ". With reversal.py's two
+  refusals deleted as well, each copy runs to its end (rc 0), and part 1
+  fails exactly the checks the copy should break:
+  - a dropped line: that line in both problems, the records' lines, and
+    the return, 3.952e-3 (zonal) or 1.666e-7 (active) in positions;
+  - the changed J4: the zonal line in both problems and the records'
+    lines. The return stays at 9.265e-17, so at binary64 only the value
+    checks see a one-unit J4. At binary128 the return would: 6.781e-21
+    (VS).
+
+  Each of VS's mutants, M2, M3, M6, M7, M8, M9, M12 and M15, now fails
+  the gate in `--quick`, measured by the lead, each in a scratch tree of
+  its own.
+
+### The suites
+
+Round 4's records ran their own suites, which entry 51 left to the
+round's closing report. They are recorded here, in the first commit
+after them; this commit's own suite is in its report to Logan. Read from
+their logs:
+
+| commit | tree | legs | result |
+|---|---|---|---|
+| `37a1ce0` | round 4's records and the ledger's archive | 24 | rc 0, 1424 `ok`, 0 FAIL, 2 h 30 min (11:51:49 to 14:21:52); every leg at `d9c8c8c`'s ok count, and the log `d9c8c8c`'s line for line but for times, temp-directory names and the commit |
+| `de376d8` | VD's second-round fixes to the records | 24 | rc 0, 1424 `ok`, 0 FAIL, 3 h 04 min (14:39:42 to 17:44:10), on a host shared with the lead's runs and VS's; every leg at `37a1ce0`'s ok count, and the log `37a1ce0`'s line for line but for times, temp-directory names and the commit; main fast-forwarded `d9c8c8c..de376d8` and pushed, closing round 4 |
+
+### Two texts of round 4's records, corrected here
+
+- **ROUND4.md's status line** put seam part 1 with P3. It landed with P2
+  and P4 at `7d50392` (VD's third look, not blocking there).
+- **The usage block's `--zonal-selftest` line** said "its own synthetic
+  constants". R = 1.5 is synthetic, and J2 and J4 are Saturn's (VD).
+
+### Stated limits, not closed
+
+- **One problem holds it,** with one oblate body, one test particle with
+  a mass and one without, at one dt. The binary256 bound is IAS15's
+  reversal error at this dt; another dt or problem needs its own.
+- **A problem line added later** is dropped by state_to_problem.py until
+  it is carried there. reversal.py refuses that by name, but
+  state_to_problem.py's other use, `--system` on an ensemble record
+  (docs/ENSEMBLE.md), has no such check.
+- **reversal.py's reading of each line is a copy of read_problem()'s:**
+  which fields G, E and `system` read, and that hex is rounded to
+  nearest, ties to even. A change to the grammar must change it too.
+- **reversal.py runs one problem.** An ensemble is not reversed.
+
+### What this does not establish
+
+- **That IAS15's reversal error is 1.5e-43 anywhere else.** It is this
+  problem's, at this dt, at binary256.
+- **Anything on a GPU, a card, WSL or Linux.**

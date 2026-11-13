@@ -28,14 +28,15 @@ inherit the PATH from an earlier successful build in the same session.
 
 | target | what it means | last measured |
 |---|---|---|
-| `make check` | every gate at every format, **never skips** | 2 h 37 min, 24 legs, `d9c8c8c`, 2026-11-12, shared host |
+| `make check` | every gate at every format, **never skips** | 3 h 04 min, 24 legs, `de376d8`, 2026-11-12, beside the lead's own runs (2 h 37 min at `d9c8c8c`, shared host) |
 | `make check-quick` | cheaper arguments + the gate cache | 42 min cold, 13 s warm, 19 legs, `9e9879f`, 2026-11-06 |
 | `make check-light` | cheaper arguments + cache + **scaled step counts** | 63 min cold, 24 legs, `e5636a9`, 2026-11-12, shared host |
 
-24 legs each at `d9c8c8c`: count the `--leg` lines under each target,
-since every round adds some. A time from a shared host is that host's
-load as much as the suite's, and the rows are not like for like:
-`9e9879f`'s ran from clean with the build, round 4's on a built tree.
+24 legs each at `d9c8c8c`, and 25 since check_reversal (entry 52):
+count the `--leg` lines under each target, since every round adds some.
+A time from a shared host is that host's load as much as the suite's,
+and the rows are not like for like: `9e9879f`'s ran from clean with the
+build, round 4's on a built tree.
 
 `make check` is the one whose meaning must not change, so it always
 executes. The cache (`tools/gate_cache.py`) keys on the **artifacts a leg

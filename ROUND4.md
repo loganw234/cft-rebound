@@ -4,9 +4,9 @@
 # Round 4: the ring's CPU half - what a GPU wave will be held to, built here first
 
 **Status, 2026-11-12: built on the CPU, and every commit READY by its
-verifier. P0 is on main at `9a42b1d`, P1 at `291c99c`, P2 and P4 at
-`7d50392`, and P3 with the seams and the wiring at `d9c8c8c`, each on the
-suite docs/VALIDATION.md entry 51 records.
+verifier. P0 is on main at `9a42b1d`, P1 at `291c99c`, P2 and P4 with
+seam part 1 at `7d50392`, and P3 with seam parts 2 and 3 and the wiring
+at `d9c8c8c`, each on the suite docs/VALIDATION.md entry 51 records.
 Entries 46 to 51 are the round's record, docs/RING.md is the ring's CPU
 half as it stands, and "What the round found against this plan" is at
 the end. The plan below is as it was written.**

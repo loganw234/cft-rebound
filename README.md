@@ -255,12 +255,15 @@ Nothing is vendored by hand.
                                    column it compares failing by name
     tools/check_ring_seams.py      the gate: round 4's parts together - the ring in
                                    its own field, a replay with the zonal line, the driver
+    tools/check_reversal.py        the gate: a reversal runs its own problem back - its
+                                   active and zonal lines carried, each load-bearing
     tools/oracle.py          scores a record from its exact bits (mpmath)
     tools/compare_formats.py the round-off floor: one run at two formats, differenced
     tools/horizon.py         percentiles of an ensemble's error against time, and crossings
     tools/divergence.py      members of an ensemble against member 0: the Lyapunov measurement
     tools/reversal.py        forward N steps, back N steps, from the exact recorded state
-    tools/state_to_problem.py      a record's sample as a problem file, bit for bit
+    tools/state_to_problem.py      a record's sample as a problem file, bit for bit,
+                                   its active and zonal lines too
     tools/extract_particle.py      one test particle alone with its wave's massive
                                    bodies, and the wave's schedule re-keyed for it
     tools/compare_run.py     a run's records against this tree: sampled members and

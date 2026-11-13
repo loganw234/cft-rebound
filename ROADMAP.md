@@ -891,7 +891,11 @@ closing report.
 - **`tools/state_to_problem.py` drops the `active` and `zonal` lines**
   (entry 46; READ, not run), so a reversal through `tools/reversal.py` on
   such a problem runs its backward leg on another problem (BELIEVED).
-  Carry both lines, and gate it.
+  Carry both lines, and gate it. **Done after the round** (entry 52): it
+  carries both, reversal.py refuses a turn problem that is not the
+  original, and `tools/check_reversal.py` is a leg in every tier. The
+  consequence, measured there: a zonal problem's return had missed by
+  3.95e-3 of its size.
 
 ### The GPU half, next
 
