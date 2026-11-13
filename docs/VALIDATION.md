@@ -6866,7 +6866,9 @@ commits on `pin-g1c`, from main at `2d52e32`, are:
 - `e520bc8`, the records;
 - `58b085c`, after the verifier VP sent them back, with check-pins
   mended;
-- this one, two sentences from VP's second look.
+- `4dd8bd9`, after VP's second look: its two sentences, `58b085c`'s
+  suite and check-pins' two edges;
+- this one, the line above.
 
 It is Logan's decision 7, relayed by cft-fp256's lead on 2026-11-13:
 "Yes, to G1C", the SHA to follow once G1C's merge was pushed. As entry
