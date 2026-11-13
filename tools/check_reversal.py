@@ -37,8 +37,9 @@
 #    (b) Two steps of the problem at binary128 and at binary256: the turn
 #        problem carries G, `active` and the zonal line exactly, the wide G
 #        and R included. In --quick too, so a narrowing carry fails there.
-#    (c) The hex reader both tools and this gate use, check_equivalence's
-#        hex_to_fraction, on known answers: -0 and +0 apart, a negative
+#    (c) The hex reader reversal.py and this gate use, check_equivalence's
+#        hex_to_fraction (state_to_problem.py parses no hex: it copies the
+#        record's text), on known answers: -0 and +0 apart, a negative
 #        value, and the widened R.
 # 1. THE BACKWARD LEG RUNS THE PROBLEM. At each format (binary64 only in
 #    --quick), tools/reversal.py runs 100 steps of 100 s each way (rc 0), and:

@@ -6682,11 +6682,12 @@ by 9.265e-17, 8.036e-35 and 1.549e-43.
   than comments, name, N and bodies, are not the original's as the run
   reads them, value for value. That is how `read_problem()` reads them:
   - hex is rounded to the run's format, ties to even, with its sign, as
-    the program rounds it. VS measured `rounded()` against the program at
-    49 values across the three formats, all agreeing: subnormals, ties
-    each way, carries into the next binade, negatives and zeros among
-    them. In the one divergence, a value that overflows binary64, the
-    program reads infinity and stops on its flags before any comparison;
+    the program rounds it. VS measured `rounded()` against the program in
+    87 comparisons, 29 values at each of the three formats, with
+    subnormals, ties each way, carries into the next binade, negatives
+    and zeros among them. All agree but the two values that overflow
+    binary64, at binary64, where the program reads infinity and stops on
+    its flags before any comparison;
   - integers compare by value;
   - G, E and a system's name compare by their first field only.
 
@@ -6751,8 +6752,10 @@ The gate's four parts:
   - (b) Two steps at binary128 and at binary256: the turn problem
     carries G, `active` and the zonal line exactly, the wide G and R
     included. This runs in `--quick` too.
-  - (c) The hex reader all three use reads known answers right: -0 and
-    +0 apart, -0x1.8p+1 as -3, and the widened R.
+  - (c) The hex reader reversal.py and the gate share, check_equivalence's
+    `hex_to_fraction`, reads known answers right: -0 and +0 apart,
+    -0x1.8p+1 as -3, and the widened R. state_to_problem.py parses no
+    hex: it copies the record's text.
 - **1. The backward leg runs the problem.** At each format (binary64
   only in `--quick`), reversal.py runs (rc 0).
   - Its turn and return problems carry G, `active` and the zonal line,
