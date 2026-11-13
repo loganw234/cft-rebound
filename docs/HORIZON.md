@@ -107,8 +107,11 @@ setting, and at 1e-16 it is at its own floor and the horizon is
 beyond any run anyone will make. That is the shape of the answer:
 binary64's horizon is fixed by the arithmetic; binary128's is set by
 the method and is for sale, at 5 to 12 times the force evaluations per
-orbit plus the format's own cost per operation (1.3x on the software
-backend, nothing on the tile, whose rate is format-blind).
+orbit plus the format's own cost per operation: 1.3x on the software
+backend, and about 1.1x a corrector pass on the card as measured
+(COMPUTED from VALIDATION entry 37's rates and pass counts), whose
+tile's beat rate is format-blind but whose measured path is bound by
+its calls.
 
 For scale: 2e6 orbits is 2 Myr of an Earth-like orbit or 25 Myr of a
 Jupiter-like one; 2e8 orbits is 200 Myr and 2.4 Gyr. The solar
@@ -214,9 +217,10 @@ Most places, and it is worth being plain about it:
   is not the weakest link.
 - Speed-limited work of every kind. On this host REBOUND's binary64
   IAS15 takes 5 to 9 us a step; the port at binary128 on the software
-  backend takes 25 ms, and the tile's binary256 rate is a few thousand
-  system-steps a second per tile however wide the ensemble
-  (docs/HARDWARE.md).
+  backend takes 25 ms; and one card tile runs binary256 Kepler ensembles
+  at 88 system-steps a second for 64 systems and 204 for 512 (COMPUTED
+  from VALIDATION entry 45's run times). docs/HARDWARE.md's 1,300 a tile
+  is a projection for a resident design not built.
 
 ## The niche
 

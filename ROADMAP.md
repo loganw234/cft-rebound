@@ -901,7 +901,9 @@ closing report.
 
 ROUND4.md's "After this round", in its order, with what the round added:
 1. **The pin moves to G1B** once it merges, at Logan's word (decision 7).
-   `make check` must show the software bits unchanged.
+   `make check` must show the software bits unchanged. **Done**
+   (entry 53): to `eae74e3`, cft-fp256's main with G1B and G1C, on
+   Logan's "Yes, to G1C".
 2. **This tree on `hip:0` as it is,** the study's route with no port, in
    a slot from cft-fp256. It finds what G1B refuses on this engine's
    default path. Believed: the clock's augmented sum calls `vaugadd` at
@@ -924,28 +926,39 @@ ROUND4.md's "After this round", in its order, with what the round added:
    CPU's.
 6. **The MI300X,** when AMD's time is approved.
 
-P5, the wave kernel at the hardware's binary64, needs Logan's yes and a
-GPU slot (decision 6).
+P5, the wave kernel at the hardware's binary64, has Logan's yes
+(decision 6). Its GPU slot is booked in the TimeSheet
+(`C:\Users\logan\source\repos\TimeSheet`): the RTX 5060 Ti or the RX
+7600, with WSL's cft-gpu or nvidia-box as the run needs, for anything of
+10 minutes or more. It shares the GPUs with cft-fp256's GPU round 2, the
+week of 2026-11-16, so it books early. The RTX 4070 stays unused.
 
 ### The decisions that are Logan's
 
-ROUND4.md's list, as the round leaves it:
+ROUND4.md's list, with Logan's answers of 2026-11-13, relayed by
+cft-fp256's lead in his words:
 1. **Merges and pushes:** delegated to the lead on 2026-11-11, on round
-   3's bar.
+   3's bar. The delegation ended with round 4; every merge since takes
+   his word.
 2. **The study's questions 1, 3 and 5,** the workload, the form and the
    formats: open. The CPU half serves every answer.
 3. **Its question 2, the device divide before cft-fp256's exp family:**
-   open. It decides when step 3 starts.
-4. **REBOUNDx as a pinned upstream:** open. The term's order is
-   REBOUNDx's as recalled, not read; one operation-for-operation
-   comparison at binary64 would confirm or correct it.
+   "Yes with GPU round 2". cft-fp256's GPU round 2 puts the sequencer's
+   divfull and sqrtfull on the device's executor (GPU-E §6 item 1). It
+   decides when step 3 starts.
+4. **REBOUNDx as a pinned upstream:** "Keep default". There is no pin;
+   P1's formula gate holds the formula, and the term's order stays
+   REBOUNDx's as recalled.
 5. **The moons' phases:** synthetic. An epoch's needs JPL's tables.
-6. **P5:** open.
-7. **The pin's move to G1B:** open, once G1B merges.
+6. **P5:** "Yes".
+7. **The pin's move:** "Yes, to G1C". Done, entry 53.
 
 GPU-E's question 4 asked for J2 and J4 verified by the golden model and
-the format-difference check. The second cannot see the defect it was
-meant for (entry 47).
+the format-difference check; the second cannot see the defect it was
+meant for (entry 47). Logan answered "Yes": J2 and J4 are held on the
+GPU as tools/check_zonal.py holds them on the CPU, with the golden model
+and mpmath for the bits and the formula, the format difference for a
+narrowing in one format, and physics beside.
 
 Round 3's list, "What the next round starts with" above, still waits, as
 ROUND4.md said it would.

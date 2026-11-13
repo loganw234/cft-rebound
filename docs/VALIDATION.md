@@ -6855,3 +6855,126 @@ their logs:
 - **That IAS15's reversal error is 1.5e-43 anywhere else.** It is this
   problem's, at this dt, at binary256.
 - **Anything on a GPU, a card, WSL or Linux.**
+
+## 53. The pin moves to cft-fp256 `eae74e3`, its main with G1B's HIP backend and G1C's gates: the same bits from the same calls, through a library whose executor moved
+
+**2026-11-13.** This desktop, on the software backend only, booked
+shared in the TimeSheet (B0033); MSYS2 mingw64 gcc, Miniconda Python
+3.12.15 with mpmath 1.3.0; REBOUND at bdfda4bd. The lead's commits on
+`pin-g1c`, from main at `2d52e32`, are `47b2398`, the pin, and this one,
+the records. It is Logan's decision 7, relayed by cft-fp256's lead on
+2026-11-13: "Yes, to G1C", the SHA to follow once G1C's merge was
+pushed. As entry 38 did, this entry moves the pin and establishes one
+thing: the calls this port makes return the same bits through the new
+library. It adopts nothing, and builds no HIP.
+
+### Which commit
+
+`eae74e3eddc67836d4b7c8922badd40e6e1bdb2f` is cft-fp256's main as pushed
+on 2026-11-13. READ, from its lead's message, it holds:
+- G1C's merge, `533bbb58`: the stage `hip` in cft-fp256's gate budget,
+  and `hip-nvcc` and `hip-source` in its full census, held to the
+  software backend's bits on the RTX 5060 Ti and the RX 7600;
+- G1B's merge, `9b358e66`: the HIP backend, host/src/backend_hip.cpp,
+  and the `hip:N` device;
+- docs, a study's merge (GPU-F) and night 20's page data.
+
+Its quick gate passed on amd-arc-box at the G1C merge's tree: 24 ok and
+7 skipped by name, the three GPU stages among them, since that box has
+no GPU. Its CI on `eae74e3e` had started when the SHA was sent.
+
+What this repository builds of it is host/src, host/include and
+host/Makefile. MEASURED with `git diff --stat 922c2ade eae74e3e`, 239
+commits changed 13 of those files, +3,752 and -907 lines:
+- the program executor moved out of program.c (-813) into a new
+  seq_exec.h (925 lines), which the device shares;
+- softfloat, bigint, device.c and transcend.c changed;
+- cft.h gained 7 lines and cft_config.h 30;
+- backend_hip.cpp (2,321 lines) is new, and not built here (HIP=0).
+
+The ABI is 0.18 at both commits (cft.h's `CFT_ABI_VERSION_MINOR`).
+
+### How it was run
+
+One worktree from main at `2d52e32`, with fresh clones of its pins:
+REBOUND from main's own clone at `bdfda4bd`, and cft-fp256 from the
+sibling checkout `../cft-fp256` at `eae74e3e`. Both are local; nothing
+was fetched from GitHub, by this repository's rule since round 4, so
+unlike entry 38 the MANIFEST line's URL was not exercised. `make
+check-pins` passes.
+- **The build.** `make all programs` took 63 s. It carries the five
+  warnings every build has carried since entry 38, all REBOUND's own
+  (simulationarchive.c), and none from libcft or this repository.
+- **No source edit,** as at entry 38.
+- **The baseline** is `2d52e32`'s own suite (entry 52): the same tree at
+  the old pin, run the evening before.
+
+### The suite at both pins
+
+| | old pin `922c2ad`, at `2d52e32` | new pin `eae74e3`, at `47b2398` |
+|---|---|---|
+| `make check` | rc 0, 3 h 02 min | rc 0, 2 h 44 min |
+| legs | 25 | 25 |
+| `ok` lines | 1463 | 1463 |
+| FAIL verdicts | 0 | 0 |
+| named skips | gate_subprocess's body_count row, deliberately untested | the same |
+
+Read from the logs, not the exit codes. Every leg has the same ok count,
+digest count and line count in both. Normalising dates, temporary
+directories, the tree's path and check_ring's elapsed seconds leaves 56
+differing lines:
+- 19 in each log carry the library's own build identity,
+  `libcft_build=commit=...`, which gate_real prints;
+- 2 in each are check-pins' pin lines;
+- 2 in each are the TimeSheet's booking lines, and 1 in each is the
+  commit line;
+- the old log alone has the build lines of six gate programs (7 lines),
+  which the new tree had built before its suite, and one TimeSheet
+  notice.
+
+No verdict, case or count differs. The archive gates' `abi` is "0.18" in
+both, where entry 38 saw it move. Entry 45's six wide-state digests are
+in both logs at the same counts, so the whole wide state is held to the
+bit at every format across the two libraries: fp64 `e08541bc0af9b3ec`
+and `56bacf3bf63f19a7`, fp128 `5d7cf4588fad050e` and `cd16e6dc29aa0589`,
+fp256 `a1052750e206bebe` and `ba4d447c8e58bd20`.
+
+### The same integrations through both libraries
+
+The program, built at each pin, ran every problem in data/problems:
+kepler, kepler_e09, kepler_e099, outer, pythagorean and zonal_saturn.
+Each ran at binary64, binary128 and binary256, on the loop engine in
+REBOUND's order and in the FMA form, and on the program engine with that
+build's own assembled programs. That is 54 runs through each library.
+All 54 records are the same, line for line, every counter included,
+with the identity line set apart and the trailer's timings removed
+(MEASURED: the session scratchpad's gpu/pin_ab.py). The two builds name
+their libraries `922c2ade...` and `eae74e3e...`, and the two libcft.a
+files differ (sha256 `1c18ac85...` and `e07daf2f...`).
+
+### Also in these records
+
+- **HORIZON.md's two tile lines are corrected.** "Nothing on the tile,
+  whose rate is format-blind" and "a few thousand system-steps a second
+  per tile" stated a belief and a projection as rates. COMPUTED from
+  entry 37's measured card rates and pass counts, binary128 costs about
+  1.1x binary64 a corrector pass: 4,529 against 4,917 system-passes a
+  second on one tile at E = 4,096. COMPUTED from entry 45's run times,
+  binary256 runs 88 system-steps a second for 64 Kepler systems on one
+  tile and 204 for 512. HARDWARE.md's 1,300 is a projection. They were
+  found while answering cft-debris's question for its study DEBRIS-B.
+- **Logan's answers to decisions 3, 4, 6 and 7, and to GPU-E's question
+  4,** as cft-fp256's lead relayed them, are in ROADMAP.md and
+  docs/RING.md.
+- HARDWARE.md:502 now gives `922c2ad`'s time as the pin an end.
+
+### What this does not establish
+
+- **Anything on a GPU.** HIP is not built here; `hip:N` is cft-fp256's,
+  gated there (its G1C).
+- **cft-fp256's CI on `eae74e3e`,** which had started when the SHA was
+  sent (READ).
+- **A full suite on Linux** at this pin.
+- **These records' own suite.** They change docs only, on `47b2398`'s
+  tree, so its suite holds them docs aside, as entry 45's second marker
+  did. The verifier's look is in the report to Logan.

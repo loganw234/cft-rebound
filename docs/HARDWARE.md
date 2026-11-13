@@ -499,7 +499,7 @@ after reading both sides of the seam.
 ### What the library already does, verified rather than assumed
 
 The libcft pinned when this was written (`ca19fe3`, ABI 0.12; and
-`922c2ad`, ABI 0.18, the pin since 2026-10-30) binds **every** operand of
+`922c2ad`, ABI 0.18, the pin from 2026-10-30 to 2026-11-13) binds **every** operand of
 `cft_program_run_ex` through the device-resident buffer registry - the
 three streams, the deposit window, **and both scratch blocks**
 (`host/src/device.c`, `bind_role` for `CFT_ROLE_SI` and `CFT_ROLE_SO`).

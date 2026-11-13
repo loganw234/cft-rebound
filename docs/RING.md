@@ -270,22 +270,25 @@ beside every number.
 
 ## The decisions that are Logan's
 
-ROUND4.md's list, as the round leaves it:
+ROUND4.md's list, as the round left it, and Logan's answers of
+2026-11-13, relayed by cft-fp256's lead in his words:
 
-| | decision | as the round leaves it |
-|---|---|---|
-| 1 | merges and pushes for this round | delegated to the lead on 2026-11-11, on round 3's bar |
-| 2 | the study's questions 1, 3 and 5: the workload, the form and the formats | open; the CPU half serves every answer |
-| 3 | its question 2, a device divide before cft-fp256's exp family | open; it decides when the GPU half's step 3 starts. The term adds 10 divides and a square root a body a force evaluation to gravity's one each a pair |
-| 4 | REBOUNDx as a pinned upstream | open; one operation-for-operation comparison at binary64 would confirm or correct the order. Study DEBRIS-A read that the recalled order is REBOUNDx's of 2020 (5406ae5), rewritten in 2024 (8402022): the comparison needs that older pin |
-| 5 | the moons' phases | synthetic; an epoch's needs JPL's tables from the web |
-| 6 | P5, the wave kernel at the hardware's binary64 | open, and then a GPU slot from cft-fp256 |
-| 7 | the pin's move to G1B | open, once G1B merges |
+| | decision | as the round left it | Logan, 2026-11-13 |
+|---|---|---|---|
+| 1 | merges and pushes for this round | delegated to the lead on 2026-11-11, on round 3's bar | (ended with round 4) |
+| 2 | the study's questions 1, 3 and 5: the workload, the form and the formats | open; the CPU half serves every answer | open |
+| 3 | its question 2, a device divide before cft-fp256's exp family | open; it decides when the GPU half's step 3 starts. The term adds 10 divides and a square root a body a force evaluation to gravity's one each a pair | "Yes with GPU round 2": cft-fp256's, the week of 2026-11-16 |
+| 4 | REBOUNDx as a pinned upstream | open; one operation-for-operation comparison at binary64 would confirm or correct the order. Study DEBRIS-A read that the recalled order is REBOUNDx's of 2020 (5406ae5), rewritten in 2024 (8402022): the comparison needs that older pin | "Keep default": no pin |
+| 5 | the moons' phases | synthetic; an epoch's needs JPL's tables from the web | open |
+| 6 | P5, the wave kernel at the hardware's binary64 | open, and then a GPU slot from cft-fp256 | "Yes"; the slot is booked in the TimeSheet |
+| 7 | the pin's move to G1B | open, once G1B merges | "Yes, to G1C": `eae74e3`, VALIDATION entry 53 |
 
 GPU-E's question 4 asked for J2 and J4 "verified by the golden model and
 the format-difference check". The round answers with the golden model,
 mpmath and the physics; the format difference cannot see the defect it
-was meant for.
+was meant for. Logan answered "Yes" on 2026-11-13 (relayed): on the GPU,
+J2 and J4 are held as tools/check_zonal.py holds them here, with the
+format difference kept for a narrowing in one format.
 
 ## The record
 
