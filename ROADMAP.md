@@ -596,8 +596,8 @@ from the design document, so the next round can pick one up without
 re-deriving it.
 
 **2026-10-30: the pin moved, and the device-side halves below are no
-longer asks.** third_party/MANIFEST pins cft-fp256 `922c2ad` (libcft
-ABI 0.18) since docs/VALIDATION.md entry 38, and every mechanism this
+longer asks.** third_party/MANIFEST pinned cft-fp256 `922c2ad` (libcft
+ABI 0.18) from docs/VALIDATION.md entry 38 to entry 53, and every mechanism this
 section calls missing on the device is in that library, built by
 cft-fp256 against this repository's own code (its docs/ROUND2.md, and
 its docs/ROADMAP.md, "What a real workload asked for"):
@@ -927,19 +927,20 @@ ROUND4.md's "After this round", in its order, with what the round added:
 6. **The MI300X,** when AMD's time is approved.
 
 P5, the wave kernel at the hardware's binary64, has Logan's yes
-(decision 6). Its GPU slot is booked in the TimeSheet
-(`C:\Users\logan\source\repos\TimeSheet`): the RTX 5060 Ti or the RX
-7600, with WSL's cft-gpu or nvidia-box as the run needs, for anything of
-10 minutes or more. It shares the GPUs with cft-fp256's GPU round 2, the
-week of 2026-11-16, so it books early. The RTX 4070 stays unused.
+(decision 6). Its GPU slot is to be booked in the TimeSheet
+(`C:\Users\logan\source\repos\TimeSheet`); none is booked yet. It books
+the RTX 5060 Ti or the RX 7600, with WSL's cft-gpu or nvidia-box as the
+run needs, for anything of 10 minutes or more, with its mode stated. It
+shares the GPUs with cft-fp256's GPU round 2, expected the week of
+2026-11-16, so it books early. The RTX 4070 stays unused unless Logan
+says otherwise.
 
 ### The decisions that are Logan's
 
 ROUND4.md's list, with Logan's answers of 2026-11-13, relayed by
 cft-fp256's lead in his words:
 1. **Merges and pushes:** delegated to the lead on 2026-11-11, on round
-   3's bar. The delegation ended with round 4; every merge since takes
-   his word.
+   3's bar, for round 4's commits. Unchanged by the relay.
 2. **The study's questions 1, 3 and 5,** the workload, the form and the
    formats: open. The CPU half serves every answer.
 3. **Its question 2, the device divide before cft-fp256's exp family:**

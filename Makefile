@@ -675,8 +675,8 @@ IN_REVERSAL := --input tools/check_reversal.py --input tools/reversal.py --input
 
 # The pins, checked at build time and not only at fetch time: a clone
 # under third_party/ that is not at its MANIFEST commit fails every tier
-# before a single gate runs, and so does a README that names a different
-# cft-fp256 commit from the one MANIFEST pins. Not through the gate cache
+# before a single gate runs, and so does a README whose one cft-fp256
+# row does not begin its commit with the one MANIFEST pins. Not through the gate cache
 # - it is instant, and a cached pass would be exactly the wrong thing.
 .PHONY: check-pins
 check-pins:

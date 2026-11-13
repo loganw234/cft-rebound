@@ -14,9 +14,12 @@
 # This runs first in every suite tier and refuses on:
 #   - a third_party clone whose HEAD is not the MANIFEST commit;
 #   - a MANIFEST line whose clone is missing entirely;
-#   - README.md not naming the MANIFEST's cft-fp256 commit, so the
-#     README's provenance row cannot go stale against the pin the way it
-#     did between ABI 0.11 and 0.12.
+#   - README.md's cft-fp256 provenance row not beginning its commit cell
+#     with the MANIFEST's cft-fp256 commit, so the row cannot go stale
+#     against the pin the way it did between ABI 0.11 and 0.12. The row
+#     also names earlier pins as its history, so a test for the commit
+#     anywhere in README passed a MANIFEST reverted to one of them
+#     (VALIDATION entry 53): the row must be one, and its commit first.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/.." && pwd)"
@@ -38,8 +41,12 @@ while read -r dir url commit; do
     fi
     if [ "$dir" = "cft-fp256" ]; then
         short="${commit:0:7}"
-        if ! grep -q "$short" "$root/README.md"; then
-            echo "check-pins: FAIL README.md does not name the pinned cft-fp256 commit $short" >&2
+        rows="$(grep -c -E '^\| cft-fp256 ' "$root/README.md" || true)"
+        if [ "$rows" != "1" ]; then
+            echo "check-pins: FAIL README.md has $rows cft-fp256 provenance rows, not one" >&2
+            status=1
+        elif ! grep -q -E "^\| cft-fp256 [^|]*\| *$short[^0-9a-f]" "$root/README.md"; then
+            echo "check-pins: FAIL README.md's cft-fp256 row does not begin its commit with the pinned $short" >&2
             status=1
         else
             echo "check-pins: ok    README.md names cft-fp256 $short"

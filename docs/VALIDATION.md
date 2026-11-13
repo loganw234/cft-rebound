@@ -6861,8 +6861,8 @@ their logs:
 **2026-11-13.** This desktop, on the software backend only, booked
 shared in the TimeSheet (B0033); MSYS2 mingw64 gcc, Miniconda Python
 3.12.15 with mpmath 1.3.0; REBOUND at bdfda4bd. The lead's commits on
-`pin-g1c`, from main at `2d52e32`, are `47b2398`, the pin, and this one,
-the records. It is Logan's decision 7, relayed by cft-fp256's lead on
+`pin-g1c`, from main at `2d52e32`, are `47b2398`, the pin; `e520bc8`, the
+records; and this one, after the verifier VP sent them back. It is Logan's decision 7, relayed by cft-fp256's lead on
 2026-11-13: "Yes, to G1C", the SHA to follow once G1C's merge was
 pushed. As entry 38 did, this entry moves the pin and establishes one
 thing: the calls this port makes return the same bits through the new
@@ -6881,16 +6881,26 @@ on 2026-11-13. READ, from its lead's message, it holds:
 
 Its quick gate passed on amd-arc-box at the G1C merge's tree: 24 ok and
 7 skipped by name, the three GPU stages among them, since that box has
-no GPU. Its CI on `eae74e3e` had started when the SHA was sent.
+no GPU. Its CI on `eae74e3e` had started when the SHA was sent. MEASURED
+(`git rev-parse`), `533bbb58`'s host/src, host/include and host/Makefile
+trees are `eae74e3e`'s, so that gate covered the pinned library's
+sources.
 
 What this repository builds of it is host/src, host/include and
-host/Makefile. MEASURED with `git diff --stat 922c2ade eae74e3e`, 239
-commits changed 13 of those files, +3,752 and -907 lines:
-- the program executor moved out of program.c (-813) into a new
-  seq_exec.h (925 lines), which the device shares;
-- softfloat, bigint, device.c and transcend.c changed;
-- cft.h gained 7 lines and cft_config.h 30;
-- backend_hip.cpp (2,321 lines) is new, and not built here (HIP=0).
+host/Makefile. MEASURED with `git diff --stat 922c2ade eae74e3e` and
+`git rev-list`: 13 of those files changed, +3,752 and -907 lines, in 12
+of the range's 239 commits (10 of them not merges; 28 touched host/).
+- The program executor moved out of program.c (+20, -793) into a new
+  seq_exec.h (925 lines), which the device shares. VP measured it a pure
+  move, by a comparison of the lines with comments stripped.
+- softfloat and bigint gained only `CFT_HD` annotations, and their
+  objects are identical (VP). transcend.c changed only `do_exp2m1`, and
+  this port calls no transcendental function. device.c gained HIP-only
+  blocks and one refusal's sentence (VP).
+- cft.h changed by +5 and -2 lines, and cft_config.h gained 30.
+- backend_hip.cpp (2,321 lines) is new, and not built here: libcft's
+  Makefile builds it only under `HIP=1`, which this repository's sub-make
+  does not pass, so libcft.a is its 16 C objects (VP).
 
 The ABI is 0.18 at both commits (cft.h's `CFT_ABI_VERSION_MINOR`).
 
@@ -6915,7 +6925,7 @@ check-pins` passes.
 |---|---|---|
 | `make check` | rc 0, 3 h 02 min | rc 0, 2 h 44 min |
 | legs | 25 | 25 |
-| `ok` lines | 1463 | 1463 |
+| lines beginning `  ok ` | 1463 | 1463 |
 | FAIL verdicts | 0 | 0 |
 | named skips | gate_subprocess's body_count row, deliberately untested | the same |
 
@@ -6924,13 +6934,14 @@ digest count and line count in both. Normalising dates, temporary
 directories, the tree's path and check_ring's elapsed seconds leaves 56
 differing lines:
 - 19 in each log carry the library's own build identity,
-  `libcft_build=commit=...`, which gate_real prints;
+  `libcft_build=commit=...`: 18 of them gate_real's and 1 check_door's;
 - 2 in each are check-pins' pin lines;
 - 2 in each are the TimeSheet's booking lines, and 1 in each is the
   commit line;
-- the old log alone has the build lines of six gate programs (7 lines),
-  which the new tree had built before its suite, and one TimeSheet
-  notice.
+- the new log alone has the build lines of six gate programs (7 lines).
+  The new tree built them in its suite, against the new library; the
+  old tree's had been built before its own. The old log alone has one
+  TimeSheet notice.
 
 No verdict, case or count differs. The archive gates' `abi` is "0.18" in
 both, where entry 38 saw it move. Entry 45's six wide-state digests are
@@ -6941,16 +6952,51 @@ fp256 `a1052750e206bebe` and `ba4d447c8e58bd20`.
 
 ### The same integrations through both libraries
 
-The program, built at each pin, ran every problem in data/problems:
-kepler, kepler_e09, kepler_e099, outer, pythagorean and zonal_saturn.
-Each ran at binary64, binary128 and binary256, on the loop engine in
-REBOUND's order and in the FMA form, and on the program engine with that
-build's own assembled programs. That is 54 runs through each library.
+**The lead's,** a script in the session's scratchpad. The program,
+built at each pin, ran every problem in data/problems, each at
+binary64, binary128 and binary256: on the loop engine in REBOUND's order
+and in the FMA form, and on the program engine with that build's own
+assembled programs. That is 54 runs through each library. The arguments
+were:
+- kepler, kepler_e09 and pythagorean: `--dt 0.01 --epsilon 1e-9
+  --steps 100 --sample 25`;
+- kepler_e099: `--dt 1e-4 --epsilon 1e-2 --steps 40 --sample 20`;
+- outer: `--dt 40 --epsilon 0 --steps 60 --sample 20`;
+- zonal_saturn: `--dt 100 --epsilon 1e-9 --steps 60 --sample 20`.
+
 All 54 records are the same, line for line, every counter included,
-with the identity line set apart and the trailer's timings removed
-(MEASURED: the session scratchpad's gpu/pin_ab.py). The two builds name
-their libraries `922c2ade...` and `eae74e3e...`, and the two libcft.a
-files differ (sha256 `1c18ac85...` and `e07daf2f...`).
+with the identity line set apart and the trailer's timings removed. It
+had no control. The identity lines, read afterwards, name
+`922c2ade...` and `eae74e3e...`, and the two libcft.a files differ
+(sha256 `1c18ac85...` and `e07daf2f...`).
+
+**VP's own,** with other arguments and with controls:
+- **95 of 95 runs identical,** every record line byte for byte, with
+  stderr and output files, and each identity line checked to name its
+  own build.
+- **What they covered:**
+  - the 54 again, at other dt, epsilon and steps;
+  - `--cs augmented`; adaptive modes 0, 1 and 3; softening with a
+    minimum dt; `--max-iter 30`; `--pc-tol-shift`;
+  - all four routes forced on;
+  - 16 bodies, and ensembles at three formats on both engines;
+  - the selftests and `--dump-constants`;
+  - the `--dt-out`, `--attempts-out` and `--record-iters` files.
+- **The controls,** through the same comparator, each differed: a
+  corrector cap of 12 against 60 at binary256, dt one ulp apart, one
+  planted digit, and two records in swapped slots.
+- **A checkpoint across the pins,** as entry 38 did. One build saved and
+  the other resumed, both ways, at three formats and in the plain,
+  regrow and adaptive sequences: 18 of 18 runs are identical to both
+  straight runs, and the NO_ADOPT control differs in all 18.
+- **The compiled outputs.** All 66 program images and both embedded
+  image headers are byte-identical across the pins, and so are the
+  port's own objects. Of libcft's 16 objects, only device.o, transcend.o,
+  program.o and build_id.o differ.
+
+**`make example`,** as entry 38 ran it, at both pins: rc 0 at each, the
+same 38 lines of output but for the column of seconds, with the drop-in
+example's reload restored exactly.
 
 ### Also in these records
 
@@ -6966,15 +7012,30 @@ files differ (sha256 `1c18ac85...` and `e07daf2f...`).
 - **Logan's answers to decisions 3, 4, 6 and 7, and to GPU-E's question
   4,** as cft-fp256's lead relayed them, are in ROADMAP.md and
   docs/RING.md.
-- HARDWARE.md:502 now gives `922c2ad`'s time as the pin an end.
+- **check-pins' README test is mended.** It was a substring test, and
+  README's row names earlier pins as its history, so it passed a
+  MANIFEST and a clone reverted to `922c2ad` beside today's README (VP).
+  tools/check_pins.sh now requires one cft-fp256 row whose commit cell
+  begins with the pin.
+
+  Measured on four scratch roots, with the old script and the new:
+  - the real tree passes both;
+  - the reverted one passes the old and fails the new;
+  - a README with two cft-fp256 rows passes the old and fails the new;
+  - a row beginning with the old pin fails both.
+
+  Its ok line reads as it did, so suite logs stay comparable.
+- HARDWARE.md:502 and ROADMAP's paragraph of 2026-10-30 now give
+  `922c2ad`'s time as the pin an end.
 
 ### What this does not establish
 
 - **Anything on a GPU.** HIP is not built here; `hip:N` is cft-fp256's,
   gated there (its G1C).
+- **The card.** No XRT build was made at this pin.
 - **cft-fp256's CI on `eae74e3e`,** which had started when the SHA was
   sent (READ).
 - **A full suite on Linux** at this pin.
-- **These records' own suite.** They change docs only, on `47b2398`'s
-  tree, so its suite holds them docs aside, as entry 45's second marker
-  did. The verifier's look is in the report to Logan.
+- **This branch tip's own suite.** It carries check_pins.sh's fix, so it
+  runs its own full make check; that and the verifier's last look are in
+  the report to Logan.
