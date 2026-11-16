@@ -971,7 +971,7 @@ def seam_form(shadow, work, art, probe_line, unpublished, env_dev, env_sw, real,
                                  else "NOT all identical", rc),
             [] if rc == 0 else [short(out + err, 400)])
     rows = rec_text.splitlines()
-    n = int(re.search(r"N=(\d+)", rec_text).group(1))
+    n = int(re.search(r"\bN=(\d+)", rec_text).group(1))
     cols = Cols(next(l for l in rows if l.startswith("# columns:")), n)
     lines0 = [k for k, l in enumerate(rows) if l.startswith("system 0 sample ")][1:]   # sample 0 is the problem's
     # each label is the column as compare_run.py names it in its verdict
