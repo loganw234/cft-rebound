@@ -35,12 +35,13 @@
 #      is a STAND-IN and FAILs its leg by name, with its arguments;
 #    - its record: the software backend's from the same arguments, every
 #      line, every counter and every output file (--dt-out, --attempts-out,
-#      --record-iters) byte for byte. Set aside, and counted: the header's
-#      backend= value, the trailer's timings (seconds, steps_per_s,
-#      wall_seconds, the t_ buckets, system_steps_per_s), and the by= of a
-#      route the device does not publish (absent on the device, opt_in in
-#      software; entry 54). stderr is compared too, device lines and the
-#      `done:` line's seconds set aside, and a difference there is printed;
+#      --record-iters) byte for byte. Set aside: the header's backend= value
+#      and the two self-tests' banners, which name what they ran on; the
+#      trailer's timings (seconds, steps_per_s, wall_seconds, the t_
+#      buckets, system_steps_per_s); and the by= of a route the device does
+#      not publish (absent on the device, opt_in in software; entry 54),
+#      counted. stderr is compared too, device lines and the `done:` line's
+#      seconds set aside, and a difference there is printed;
 #    - its physics, beside the bits: steps, rejections, passes, flags.
 #    The leg's own verdict (rc 0, RESULT: PASS or check_dropin's "every case
 #    passed", no FAIL line) is required as well. So a leg passes on the GPU
@@ -391,18 +392,25 @@ def read(path, binary=False):
     return b if binary else b.decode("utf-8", "replace")
 
 
+ART = ["hip:0"]          # the artifact under test, set in main()
+
+
 def norm_stdout(text, unpublished, side):
     """The lines compared, with what may differ set aside. Each line keeps
     its number, so a difference is named where it is."""
     keep = []
     rt = re.compile(r"\b(%s)=(on|off) by=(%s)\b" % ("|".join(map(re.escape, unpublished)) or "(?!)",
                                                     "absent" if side == "dev" else "opt_in"))
+    # the two self-tests' banners name what they ran on (src/ias15_cft.c,
+    # door_selftest() and corrector_selftest()), as the header's backend= does
+    banner = re.compile(r"^((?:door|corrector): fp\d+ on )(?:%s|the software backend)(,|$)" % re.escape(ART[0]))
     routed = 0
     for line in text.splitlines():
         if line.startswith("# program="):
             line = re.sub(r" backend=\S+", " backend=*", line)
         elif line.startswith("# steps_done="):
             line = TIMING.sub("", line)
+        line = banner.sub(r"\1*\2", line)
         line, n = rt.subn(r"\1=\2 by=~", line)
         routed += n
         keep.append(line)
@@ -1054,6 +1062,7 @@ def main():
     args = ap.parse_args()
     build = os.path.abspath(args.build)
     art = args.artifact
+    ART[0] = art
     real = os.path.join(build, "ias15_cft" + EXE)
     print("check_gpu: this tree on %s, held to the software backend gate by gate (ROUND5.md, P1)" % art)
     try:
