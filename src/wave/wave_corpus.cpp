@@ -252,6 +252,20 @@ static std::vector<Case> corpus(int op, Rng &R, int n){
             else add_case(c, k.a, k.b);
         }
     }
+    if (op == OP_FMA){
+        /* fma's underflow at its edge: a*b + c within a few units of
+         * 2^-1022 - 2^-1076, the largest tiny value, with the product's
+         * bits below 2^-1078 (a sticky remainder) or not, either sign:
+         * a = j (1 + u 2^-52) 2^-538, b = 2^-538, c = k 2^-1074 */
+        for (int64_t k = (1ll << 52) - 3; k <= (1ll << 52) + 3; k++)
+            for (int j = 1; j <= 8; j++)
+                for (int u = 0; u < 2; u++)
+                    for (int sg = 0; sg < 4; sg++){
+                        const double a = (sg & 1 ? -1.0 : 1.0) * ldexp((double)j * (1.0 + u * 0x1p-52), -538);
+                        const double cc = (sg & 2 ? -1.0 : 1.0) * ldexp((double)k, -1074);
+                        add_case(c, a, 0x1p-538, cc);
+                    }
+    }
     if (op == OP_MUL || op == OP_FMA){
         std::vector<Case> t;
         ties_mul(R, t, n / 8 + 64);
