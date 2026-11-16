@@ -84,7 +84,9 @@
 #    pair among them, which the host's augmented sum makes): each must FAIL
 #    wave 0 naming that line and column, while wave 1 stays IDENTICAL. The
 #    record's columns are read here from its own `# columns:` line, apart
-#    from compare_run.py's reader.
+#    from compare_run.py's reader. That is REBOUND's order; the same is
+#    done once more in the FMA form (--arith fma), the form P2's kernel is
+#    held in, with one plant.
 #
 # 4. THE LEGS, each in its quick form as the Makefile's check-quick runs it
 #    (check_dropin as check-light runs it, --light), the commands read from
@@ -895,31 +897,39 @@ def seam(shadow, work, art, probe_line, unpublished, env_dev, env_sw, real):
     if rc:
         verdict(False, "make_ring.py failed (rc %d): %s" % (rc, short(err or out)))
         return
+    # REBOUND's own order, with a plant in each of five columns; then the FMA
+    # form, P2's kernel's (ROUND5.md, P2), with one plant
+    for arith in ("rebound", "fma"):
+        seam_form(shadow, work, art, probe_line, unpublished, env_dev, env_sw, real, waves, arith)
+
+
+def seam_form(shadow, work, art, probe_line, unpublished, env_dev, env_sw, real, waves, arith):
     zl = [l for l in open(waves) if l.split()[:1] == ["zonal"]]
     run_args = ["--format", "fp64", "--problem", waves, "--dt", "1e5", "--epsilon", "1e-9", "--max-iter", "60",
-                "--steps", "8", "--sample", "4", "--quiet"]
-    recpath = os.path.join(work, "ring2w_z.%s.rec" % art.replace(":", ""))
-    rc, secs, d = run_witnessed(shadow, "seam", [os.path.join(shadow.dir, "ias15_cft" + EXE)] + run_args, env_dev,
-                                recpath, recpath + ".err")
-    rec_text = read(recpath)
+                "--steps", "8", "--sample", "4", "--arith", arith, "--quiet"]
+    recpath = os.path.join(work, "ring2w_z.%s.%s.rec" % (arith, art.replace(":", "")))
+    rc, secs, d = run_witnessed(shadow, "seam-" + arith, [os.path.join(shadow.dir, "ias15_cft" + EXE)] + run_args,
+                                env_dev, recpath, recpath + ".err")
+    rec_text = read(recpath) or ""
     res = analyse(d, probe_line, unpublished)
     ok, text, detail = witness_verdict("the ring's record", res)
     E = len(re.findall(r"^# system \d+ steps_done=", rec_text, re.M))
     rejected = [int(x) for x in re.findall(r"^# system \d+ steps_done=\S+ \S+ steps_rejected=(\d+)", rec_text, re.M)]
-    verdict(ok and rc == 0 and len(zl) == 1 and "# zonal " in rec_text and E == 2 and all(rejected),
-            "the record: make_ring.py's %d waves of 64 bodies with the zonal line, 8 steps from a first step of 1e5 s "
-            "on %s (rejections %s, so both waves are sampled); %s" % (E, art, rejected, text), detail)
+    verdict(ok and rc == 0 and len(zl) == 1 and "# zonal " in rec_text and E == 2 and all(rejected)
+            and " arith=%s " % arith in rec_text,
+            "the record, arith=%s: make_ring.py's %d waves of 64 bodies with the zonal line, 8 steps from a first step "
+            "of 1e5 s on %s (rejections %s, so both waves are sampled); %s" % (arith, E, art, rejected, text), detail)
     if not (rc == 0 and E == 2):
         return
     print("       device: %s" % (sorted(res["lines"])[0] if res["lines"] else "NONE"))
     drv = [sys.executable, "-B", os.path.join(here, "compare_run.py"), None, "--problem", waves, "--format", "fp64",
-           "--arith", "rebound", "--exe", real, "--strata", "2", "--seed", "1"]
+           "--arith", arith, "--exe", real, "--strata", "2", "--seed", "1"]
 
     def drive(path, tag):
         cmd = list(drv)
         cmd[3] = path
         rc, out, err = run_env(cmd, env_sw)
-        with open(os.path.join(work, "compare_run.%s.log" % tag), "w") as f:
+        with open(os.path.join(work, "compare_run.%s.%s.log" % (arith, tag)), "w") as f:
             f.write(out + err)
         mem = {int(m.group(1)): m.group(2) for m in re.finditer(r"^member (\d+) \(\S+\): (IDENTICAL|FAIL): ", out, re.M)}
         parts = re.findall(r"^  member (\d+): particle .*?held to the record: (IDENTICAL|FAIL)", out, re.M)
@@ -928,19 +938,21 @@ def seam(shadow, work, art, probe_line, unpublished, env_dev, env_sw, real):
     rc, out, err, mem, parts = drive(recpath, "clean")
     verdict(rc == 0 and mem == {0: "IDENTICAL", 1: "IDENTICAL"} and parts and all(p[1] == "IDENTICAL" for p in parts)
             and "\nRESULT: PASS: " in out and "backend=%s" % art in out,
-            "compare_run.py, no artifact, on the %s record: %s; %d particle(s) replayed alone with the zonal line, %s "
-            "(rc %d)" % (art, ", ".join("member %d %s" % kv for kv in sorted(mem.items())) or "no member", len(parts),
-                         "all IDENTICAL" if parts and all(p[1] == "IDENTICAL" for p in parts) else "NOT all identical",
-                         rc),
+            "compare_run.py --arith %s, no artifact, on the %s record: %s; %d particle(s) replayed alone with the zonal "
+            "line, %s (rc %d)" % (arith, art, ", ".join("member %d %s" % kv for kv in sorted(mem.items())) or "no member",
+                                 len(parts), "all IDENTICAL" if parts and all(p[1] == "IDENTICAL" for p in parts)
+                                 else "NOT all identical", rc),
             [] if rc == 0 else [short(out + err, 400)])
     rows = rec_text.splitlines()
-    n = int(re.search(r"\bN=(\d+)", rec_text).group(1))
+    n = int(re.search(r"N=(\d+)", rec_text).group(1))
     cols = Cols(next(l for l in rows if l.startswith("# columns:")), n)
     lines0 = [k for k, l in enumerate(rows) if l.startswith("system 0 sample ")][1:]   # sample 0 is the problem's
     # each label is the column as compare_run.py names it in its verdict
     plants = [("x", 1, lines0[-1], "x of body 1"), ("dt_next", None, lines0[0], "dt_next"),
               ("t_lo", None, lines0[0], "the exact-time pair's t_lo"), ("vz", n - 1, lines0[-1], "vz of body %d" % (n - 1)),
               ("t", None, lines0[-1], "t")]
+    if arith != "rebound":
+        plants = plants[:1]
     for col, body, i, label in plants:
         toks = rows[i].split()
         t = cols.token(col, body)
@@ -948,16 +960,16 @@ def seam(shadow, work, art, probe_line, unpublished, env_dev, env_sw, real):
         mant = old.split("p")[0]
         toks[t] = mant[:-1] + "%x" % (int(mant[-1], 16) ^ 1) + old[len(mant):]
         slug = re.sub(r"\W+", "_", label)
-        bad = os.path.join(work, "ring2w_z.planted-%s.rec" % slug)
+        bad = os.path.join(work, "ring2w_z.%s.planted-%s.rec" % (arith, slug))
         with open(bad, "w", newline="\n") as f:
             f.write("\n".join(rows[:i] + [" ".join(toks)] + rows[i + 1:]) + "\n")
         rc, out, err, mem, parts = drive(bad, "planted-" + slug)
         named = re.search(r"^member 0 \(\S+\): FAIL: first differing line: record line %d \([^)]*\): %s(?: \([^)]*\))?: "
                           r"record " % (i + 1, re.escape(label)), out, re.M)
         verdict(rc == 1 and mem.get(0) == "FAIL" and mem.get(1) == "IDENTICAL" and named is not None,
-                "the plant: one hex digit of %s on wave 0's record line %d (%s to %s): wave 0 FAILs naming that line "
-                "and column, and wave 1 stays IDENTICAL (rc %d; particles %s)"
-                % (label, i + 1, old, toks[t], rc, ", ".join("%s %s" % p for p in parts) or "none"),
+                "the plant, arith=%s: one hex digit of %s on wave 0's record line %d (%s to %s): wave 0 FAILs naming "
+                "that line and column, and wave 1 stays IDENTICAL (rc %d; particles %s)"
+                % (arith, label, i + 1, old, toks[t], rc, ", ".join("%s %s" % p for p in parts) or "none"),
                 [] if named else [short(next((l for l in out.splitlines() if l.startswith("member 0 ")), out), 400)])
 
 
