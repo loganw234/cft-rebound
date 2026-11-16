@@ -648,13 +648,20 @@ $(B)/wave_corpus$(EXE): src/wave/wave_corpus.cpp $(WAVE_DEPS) $(CFTLIB)
 	$(CXX) $(WAVE_CXXFLAGS) -Isrc -I$(CFT)/include -o $@ src/wave/wave_corpus.cpp $(CFTLIB) $(LIBS) $(WAVE_LDFLAGS)
 
 ifeq ($(HIP),1)
-  HIPCC ?= $(HIP_ROOT)/bin/hipcc
+  # hipcc as libcft's Makefile calls it (third_party/cft-fp256/host/Makefile):
+  # under HIP 7.2.4's NVIDIA layer hipcc hands --offload-arch to nvcc, which
+  # refuses it, nvcc compiles a .cpp as plain C++ unless told -x cu, and
+  # under -x cu hipcc drops its own -isystem; so the nvidia line says all
+  # three itself. Each program is compiled, then linked.
   ifeq ($(HIP_PLATFORM),nvidia)
-    WAVE_GPUFLAGS := -std=c++17 -O2 $(foreach a,$(or $(HIP_ARCH),120),-arch=sm_$(a)) -ftz=false -prec-div=true \
-                     -prec-sqrt=true -Xcompiler -mfma,-fno-math-errno
+    WAVE_HIPCC    := HIP_PLATFORM=$(HIP_PLATFORM) HIP_PATH=$(HIP_ROOT) CUDA_PATH=$(HIP_CUDA) $(HIP_ROOT)/bin/hipcc
+    WAVE_GPUFLAGS := -x cu -isystem $(HIP_ROOT)/include -std=c++17 -O2 \
+                     $(foreach a,$(or $(HIP_ARCH),120),-gencode arch=compute_$(a),code=sm_$(a)) \
+                     -ftz=false -prec-div=true -prec-sqrt=true -Xcompiler -mfma,-fno-math-errno
     WAVE_NOCONTRACT := --fmad=false -Xcompiler -ffp-contract=off
     WAVE_CONTRACT   := --fmad=true -Xcompiler -ffp-contract=fast
   else
+    WAVE_HIPCC    := HIP_PLATFORM=$(HIP_PLATFORM) HIP_PATH=$(HIP_ROOT) $(HIP_ROOT)/bin/hipcc
     WAVE_GPUFLAGS := -std=c++17 -O2 $(foreach a,$(or $(HIP_ARCH),gfx1102),--offload-arch=$(a)) \
                      -fno-gpu-flush-denormals-to-zero -fno-math-errno -Xarch_host -mfma
     WAVE_NOCONTRACT := -ffp-contract=off
@@ -662,21 +669,33 @@ ifeq ($(HIP),1)
   endif
 wave: $(B)/wave $(B)/wave_corpus_gpu $(B)/wave_unchecked $(B)/wave_contract
 
-$(B)/wave: src/wave/wave_main.cpp $(WAVE_DEPS)
+$(B)/wave_gpu.o: src/wave/wave_main.cpp $(WAVE_DEPS)
 	@mkdir -p $(B)
-	$(HIPCC) $(WAVE_GPUFLAGS) $(WAVE_NOCONTRACT) -DWAVE_HIP -Isrc -o $@ src/wave/wave_main.cpp
+	$(WAVE_HIPCC) $(WAVE_GPUFLAGS) $(WAVE_NOCONTRACT) -DWAVE_HIP -Isrc -c src/wave/wave_main.cpp -o $@
 
-$(B)/wave_unchecked: src/wave/wave_main.cpp $(WAVE_DEPS)
+$(B)/wave_unchecked_gpu.o: src/wave/wave_main.cpp $(WAVE_DEPS)
 	@mkdir -p $(B)
-	$(HIPCC) $(WAVE_GPUFLAGS) $(WAVE_NOCONTRACT) -DWAVE_UNCHECKED -DWAVE_HIP -Isrc -o $@ src/wave/wave_main.cpp
+	$(WAVE_HIPCC) $(WAVE_GPUFLAGS) $(WAVE_NOCONTRACT) -DWAVE_UNCHECKED -DWAVE_HIP -Isrc -c src/wave/wave_main.cpp -o $@
 
-$(B)/wave_contract: src/wave/wave_main.cpp $(WAVE_DEPS)
+$(B)/wave_contract_gpu.o: src/wave/wave_main.cpp $(WAVE_DEPS)
 	@mkdir -p $(B)
-	$(HIPCC) $(WAVE_GPUFLAGS) $(WAVE_CONTRACT) -DWAVE_UNCHECKED -DWAVE_HIP -Isrc -o $@ src/wave/wave_main.cpp
+	$(WAVE_HIPCC) $(WAVE_GPUFLAGS) $(WAVE_CONTRACT) -DWAVE_UNCHECKED -DWAVE_HIP -Isrc -c src/wave/wave_main.cpp -o $@
 
-$(B)/wave_corpus_gpu: src/wave/wave_corpus.cpp $(WAVE_DEPS) $(CFTLIB)
+$(B)/wave_corpus_gpu.o: src/wave/wave_corpus.cpp $(WAVE_DEPS)
 	@mkdir -p $(B)
-	$(HIPCC) $(WAVE_GPUFLAGS) $(WAVE_NOCONTRACT) -DWAVE_HIP -Isrc -I$(CFT)/include -o $@ src/wave/wave_corpus.cpp $(CFTLIB) $(LIBS)
+	$(WAVE_HIPCC) $(WAVE_GPUFLAGS) $(WAVE_NOCONTRACT) -DWAVE_HIP -Isrc -I$(CFT)/include -c src/wave/wave_corpus.cpp -o $@
+
+$(B)/wave: $(B)/wave_gpu.o
+	$(WAVE_HIPCC) -o $@ $< $(LIBS)
+
+$(B)/wave_unchecked: $(B)/wave_unchecked_gpu.o
+	$(WAVE_HIPCC) -o $@ $< $(LIBS)
+
+$(B)/wave_contract: $(B)/wave_contract_gpu.o
+	$(WAVE_HIPCC) -o $@ $< $(LIBS)
+
+$(B)/wave_corpus_gpu: $(B)/wave_corpus_gpu.o $(CFTLIB)
+	$(WAVE_HIPCC) -o $@ $< $(CFTLIB) $(LIBS)
 else
 wave:
 	@echo "make wave builds the GPU kernel and needs HIP=1 (make HIP=1 wave); the host twin is make wave-host" >&2; exit 2

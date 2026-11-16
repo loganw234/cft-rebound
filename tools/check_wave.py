@@ -40,7 +40,13 @@
 #      D. this tree's problems: kepler_e099 (rejections and a cap hit),
 #         zonal_saturn, outer and pythagorean (full only), and kepler at
 #         fixed steps;
-#      E. one member of A run alone (--member 1), a one-system record.
+#      E. one member of A run alone (--member 1), a one-system record;
+#      F. A's ring with every test particle given a mass of 2^-20: under
+#         `active 7` it moves nothing, so every sample line must be A's. A
+#         massless particle hides a reaction or a kinetic energy taken from
+#         it (MEASURED: two such mutants of the step pass A and fail F);
+#         the reactions' ORDER, below half an ulp of Saturn's acceleration
+#         in a ring, is part 3's (its selftest catches it).
 #      Each run also writes every member's attempts record and corrector
 #      schedule (--attempts-dir), which must be the port's own for that
 #      member, line for line, under the port's --run-key.
@@ -130,6 +136,25 @@ def make_ring(path, particles, seed):
                         "--seed", str(seed)])
     if rc != 0:
         raise SystemExit("check_wave: make_ring failed: %s" % (err or out))
+
+
+def massive_test_particles(src, dst, n_active, mass):
+    """src with every test particle of every system given `mass`: under the
+    `active` line it still moves nothing (testparticle_type 0), so the record's
+    sample lines must not move, while a step that took its reaction or its
+    energy would. A massless particle hides both."""
+    out, k = [], 0
+    for l in open(src).read().splitlines():
+        t = l.split()
+        if t[:1] == ["system"]:
+            k = 0
+        elif t[:1] == ["body"]:
+            if k >= n_active:
+                t[2] = float(mass).hex()
+                l = " ".join(t)
+            k += 1
+        out.append(l)
+    write(dst, "\n".join(out) + "\n")
 
 
 def flyby_ring(src, dst, wave):
@@ -297,6 +322,8 @@ def main():
     make_ring(ring, 57 * nwaves, 1)
     fly = os.path.join(work, "ring_flyby.txt")
     flyname = flyby_ring(ring, fly, 1)
+    heavy = os.path.join(work, "ring_massive_tp.txt")
+    massive_test_particles(ring, heavy, 7, 2.0 ** -20)
     probs = os.path.join(root, "data", "problems")
     cases = [
         ("A", "the ring, %d waves with the zonal line, from dt0 600 s" % nwaves, ring,
@@ -313,6 +340,8 @@ def main():
          ["--dt", "0.01", "--epsilon", "0", "--steps", "30", "--sample", "10"], 1, None),
         ("E", "member 1 of the ring alone (--member 1)", ring,
          ["--member", "1", "--dt", "600", "--steps", str(steps), "--sample", str(sample)], 1, 7),
+        ("F", "the ring with every test particle given a mass of 2^-20, from dt0 600 s", heavy,
+         ["--dt", "600", "--steps", str(steps), "--sample", str(sample)], nwaves, 7),
     ]
     if not args.quick:
         cases += [("D4", "outer from dt0 10", os.path.join(probs, "outer.txt"), ["--dt", "10", "--steps", "40", "--sample", "10"], 1, None),
@@ -390,6 +419,11 @@ def main():
                     % (first_rej, E))
         if name == "C":
             verdict(late_rej >= 1, "C: %d wave(s) rejected an attempt AFTER an accepted step" % late_rej)
+        if name == "F":
+            verdict(sample_lines(out) == sample_lines(records["A"][4]),
+                    "F: the test particles' masses move no bit: every sample line is A's (%d lines), as the port's "
+                    "testparticle_type 0 makes it; a step that took their reaction on Saturn or their kinetic energy "
+                    "would move them" % len(sample_lines(out)))
         if name == "D1":
             c = per.get(0, {})
             verdict(int(c.get("steps_rejected", 0)) >= 1 and int(c.get("iterations_max_exceeded", 0)) >= 1,
