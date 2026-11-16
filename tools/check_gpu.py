@@ -1042,8 +1042,9 @@ def main():
     ap.add_argument("--legs", default="", help="only these legs, by name, comma separated")
     ap.add_argument("--skip", default="", help="every leg but these")
     ap.add_argument("--no-legs", action="store_true", help="the device, the controls, the routes and the seam only")
-    ap.add_argument("--parts", default="controls,routes,seam",
-                    help="which of the controls, the routes and the seam run before the legs (all three by default)")
+    ap.add_argument("--parts", default=None,
+                    help="which of the controls, the routes and the seam run before the legs: all three by default, "
+                    "none when --legs names a subset, unless this names them")
     ap.add_argument("--formats", default="fp64,fp128,fp256", help="the routes' formats")
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--list", action="store_true", help="print each leg's command and exit")
@@ -1139,23 +1140,24 @@ def main():
     t_start = time.time()
     if args.reach:
         return reach(args, legs, shadow, work, art, probe_line, unpublished, env_dev)
-    parts = [p for p in args.parts.split(",") if p]
+    if args.parts is None:
+        parts = [] if want and not args.no_legs else ["controls", "routes", "seam"]
+    else:
+        parts = [p for p in args.parts.split(",") if p]
     if [p for p in parts if p not in ("controls", "routes", "seam")]:
         print("REFUSED: --parts takes controls, routes and seam")
         return 2
-    if not want or args.no_legs:
-        if "controls" in parts:
-            controls(shadow, work, art, probe_line, unpublished, env_dev, legs)
-        if "routes" in parts:
-            routes(real, art, probe_line, unpublished, published, (env_dev, env_sw),
-                   [f for f in args.formats.split(",") if f])
-        if "seam" in parts:
-            seam(shadow, work, art, probe_line, unpublished, env_dev, env_sw, real)
-        skipped = [p for p in ("controls", "routes", "seam") if p not in parts]
-        if skipped:
-            print("  note: NOT RUN, by --parts: %s" % ", ".join(skipped))
-    else:
-        print("  note: the controls, the routes and the seam NOT RUN: --legs names a subset")
+    if "controls" in parts:
+        controls(shadow, work, art, probe_line, unpublished, env_dev, legs)
+    if "routes" in parts:
+        routes(real, art, probe_line, unpublished, published, (env_dev, env_sw),
+               [f for f in args.formats.split(",") if f])
+    if "seam" in parts:
+        seam(shadow, work, art, probe_line, unpublished, env_dev, env_sw, real)
+    skipped = [p for p in ("controls", "routes", "seam") if p not in parts]
+    if skipped:
+        print("  note: NOT RUN: %s (%s)" % (", ".join(skipped), "--parts" if args.parts is not None
+                                             else "--legs names a subset"))
 
     if chosen:
         print("4. the legs, each in its quick form, as the Makefile runs it, on %s through the witness" % art)
