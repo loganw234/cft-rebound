@@ -46,12 +46,21 @@
 #    passed", no FAIL line) is required as well. So a leg passes on the GPU
 #    only if it passes, every process it started ran on the device, and every
 #    record it made is the software backend's.
+#    Where strace is installed (nvidia-box; not WSL cft-gpu), each leg runs
+#    under it, execve alone traced (seccomp-bpf), and every run of a
+#    witnessed program must be one its witness accounts for: a process that
+#    ran the real program past the witness, which the witness cannot see,
+#    FAILs its leg.
 #
 #    THE CONTROLS, permanent, each a real run through the witness: a record
-#    with one hex digit planted after the run must DIFFER by line and column;
-#    a run whose environment names no artifact must FAIL as a stand-in; a run
-#    without CFT_HIP_INFO must FAIL for its missing device line; and a device
-#    line changed by one character must FAIL as not the probe's.
+#    with one hex digit planted after the run must DIFFER by line and column,
+#    and so must an attempts record with one outcome turned; a device line
+#    changed by one character must FAIL as not the probe's; a run whose
+#    environment names no artifact must FAIL as a stand-in; a run without
+#    CFT_HIP_INFO must FAIL for its missing device line; check_records'
+#    whole quick leg run with no artifact, which passes by itself, must FAIL
+#    here, every process of it a stand-in; and, under strace, a process that
+#    runs ias15_cft past its witness must be caught.
 #
 # 2. THE ROUTES (V0, entry 54), at every format. Forced on, `scalar` and
 #    `reduce_seg` run on the device in the software backend's bits: every
@@ -83,6 +92,11 @@
 #    check_replay and check_compare_run; check_zonal and check_reversal;
 #    check_corrector (with --library, check_dropin --light with the exit
 #    test forced on) and check_dropin, the registered integrator's.
+#
+# --reach LEGS is not the gate: legs this gate does not hold (gate_real_fp64,
+# gate_subprocess, check_archive, ...) run on the device through the
+# witness, each program reported by whether its processes opened the device.
+# It answers which legs can be pointed at a GPU, and gates nothing.
 #
 # Every verdict carries the device line captured from the run. Exit 0 PASS,
 # 1 FAIL, 2 REFUSED. The leg logs and the witness's files are kept under
@@ -584,18 +598,66 @@ def witness_verdict(label, res, need_device=True):
     return ok, text, detail
 
 
+STRACE = shutil.which("strace") if os.name != "nt" else None
+
+
 def run_witnessed(shadow, leg, cmd, env, log, errlog=None):
     """A leg's command, its stdout to log and its stderr with it unless
-    errlog names a file of its own."""
+    errlog names a file of its own. Where strace is installed the command
+    runs under it, every execve of every process recorded (seccomp-bpf, so
+    nothing else stops), so that a process that ran a witnessed program
+    without its witness cannot pass unseen (bypassed(), below)."""
     d = shadow.start(leg)
     t0 = time.time()
+    if STRACE:
+        cmd = [STRACE, "-f", "-qq", "--seccomp-bpf", "-e", "trace=execve", "-e", "signal=none",
+               "-o", os.path.join(d, "execve.strace")] + cmd
     with open(log, "w") as f, open(errlog or os.devnull, "w") as g:
         p = subprocess.run(cmd, stdout=f, stderr=g if errlog else subprocess.STDOUT, stdin=subprocess.DEVNULL,
                            env=env, cwd=root)
     return p.returncode, time.time() - t0, d
 
 
-def controls(shadow, work, art, probe_line, unpublished, env_dev):
+def bypassed(d, shadow):
+    """From the strace of a leg: for each witnessed program, how often its
+    witness ran and how often the real program ran, against what the
+    witness's own records account for (one run, and one more where it
+    replayed). None where nothing was traced."""
+    path = os.path.join(d, "execve.strace")
+    if not os.path.isfile(path):
+        return None
+    wrapper, real = {}, {}
+    with open(path, errors="replace") as f:
+        for line in f:
+            m = re.match(r'^\d+\s+execve\("([^"]+)", .* = 0$', line.rstrip("\n"))
+            if not m:
+                continue
+            exe = m.group(1)
+            prog = os.path.basename(exe)
+            if prog.endswith(EXE) and EXE:
+                prog = prog[:-len(EXE)]
+            if prog not in WITNESSED:
+                continue
+            if os.path.dirname(exe) == shadow.dir:
+                wrapper[prog] = wrapper.get(prog, 0) + 1
+            else:
+                real[prog] = real.get(prog, 0) + 1
+    want_w, want_r = {}, {}
+    for name in os.listdir(d):
+        if name.endswith(".json"):
+            with open(os.path.join(d, name)) as f:
+                r = json.load(f)
+            prog = os.path.basename(r["real"])
+            want_w[prog] = want_w.get(prog, 0) + 1
+            want_r[prog] = want_r.get(prog, 0) + 1 + ("sw_rc" in r)
+    bad = ["%s: %d run(s) of its witness and %d of the program, where the witness accounts for %d and %d"
+           % (p, wrapper.get(p, 0), real.get(p, 0), want_w.get(p, 0), want_r.get(p, 0))
+           for p in sorted(set(wrapper) | set(real) | set(want_w))
+           if wrapper.get(p, 0) != want_w.get(p, 0) or real.get(p, 0) != want_r.get(p, 0)]
+    return {"wrapper": sum(wrapper.values()), "real": sum(real.values()), "bad": bad}
+
+
+def controls(shadow, work, art, probe_line, unpublished, env_dev, legs=None):
     """The witness's own controls: each must FAIL what it plants."""
     print("1. the witness's controls: each plant must be caught by name")
     kepler = os.path.join(root, "data", "problems", "kepler.txt")
@@ -665,6 +727,35 @@ def controls(shadow, work, art, probe_line, unpublished, env_dev):
     verdict(rc == 0 and len(nres["no_line"]) == 1 and not witness_verdict("", nres)[0],
             "control e: the run without CFT_HIP_INFO, on the device with no evidence of it: rc %d, %s"
             % (rc, "caught for its missing device line" if nres["no_line"] else "NOT CAUGHT"))
+    # (f) a whole leg as a stand-in: check_records in its quick form with no
+    # artifact passes by itself, and the leg verdict below must FAIL it
+    if legs and ("check-quick", "check_records") in legs:
+        cmd = expand(legs[("check-quick", "check_records")], shadow.dir)
+        log = os.path.join(work, "control-standin-leg.log")
+        rc, secs, d4 = run_witnessed(shadow, "control-standin-leg", cmd, env_sw, log)
+        passed, oks, fails, result = leg_result(read(log) or "")
+        fres = analyse(d4, probe_line, unpublished)
+        wok = witness_verdict("", fres)[0]
+        verdict(rc == 0 and passed and not wok and fres["n"] > 0 and len(fres["software"]) == fres["n"],
+                "control f: check_records' quick form with no artifact, a whole leg run on the software backend: by "
+                "itself rc %d, %s; held here, %d of its %d process(es) caught as stand-ins, so the leg FAILs"
+                % (rc, result, len(fres["software"]), fres["n"]))
+    # (g) a process that runs the real program past its witness, which only
+    # the strace of execve can see
+    if STRACE:
+        real = os.path.join(shadow.build, "ias15_cft" + EXE)
+        script = ("import subprocess, sys; a = sys.argv[1:]; "
+                  "subprocess.run([%r] + a, capture_output=True); subprocess.run([%r] + a, capture_output=True)"
+                  % (os.path.join(shadow.dir, "ias15_cft" + EXE), real))
+        rc, secs, d5 = run_witnessed(shadow, "control-bypass", [sys.executable, "-c", script, "--probe"], env_dev,
+                                     os.path.join(work, "control-bypass.log"))
+        bp = bypassed(d5, shadow)
+        verdict(rc == 0 and bp is not None and len(bp["bad"]) == 1,
+                "control g: a process that runs %s itself, past its witness, beside one that goes through it: %s"
+                % (os.path.basename(real), ("caught by the strace of execve: " + bp["bad"][0]) if bp and bp["bad"]
+                   else "NOT CAUGHT"))
+    else:
+        print("  note: control g NOT RUN: no strace on this host, so a run past the witness is not traced here")
 
 
 # ---------------------------------------------------------------- 2. the routes
@@ -1054,7 +1145,7 @@ def main():
         return 2
     if not want or args.no_legs:
         if "controls" in parts:
-            controls(shadow, work, art, probe_line, unpublished, env_dev)
+            controls(shadow, work, art, probe_line, unpublished, env_dev, legs)
         if "routes" in parts:
             routes(real, art, probe_line, unpublished, published, (env_dev, env_sw),
                    [f for f in args.formats.split(",") if f])
@@ -1080,6 +1171,15 @@ def main():
         passed, oks, fails, result = leg_result(text)
         res = analyse(d, probe_line, unpublished)
         wok, wtext, wdetail = witness_verdict("witness", res)
+        bp = bypassed(d, shadow)
+        if bp is None:
+            wtext += "; execs not traced (no strace on this host)"
+        elif bp["bad"]:
+            wok = False
+            wdetail = ["strace: a witnessed program ran past its witness: %s" % "; ".join(bp["bad"])] + wdetail
+        else:
+            wtext += "; strace: %d run(s) of the witnesses and %d of the real programs, as the witness accounts" \
+                     % (bp["wrapper"], bp["real"])
         ok = rc == 0 and passed and not fails and wok
         verdict(ok, "%s (%s form): rc %d, %s, %d ok, %d FAIL, %dm%02ds; %s"
                 % (leg, "--light" if tier == "check-light" else "quick", rc, result, oks, len(fails),
