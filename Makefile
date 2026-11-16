@@ -817,14 +817,15 @@ check-light: check-pins all programs $(ARCHIVE_GATES)
 # This tree on a GPU as it is (ROUND5.md, P1; ROADMAP's GPU half, step 2).
 # A GPU host's target, made with HIP=1, and in none of the three tiers
 # above: on a host with no hip:0, the desktop among them, it refuses by
-# name. tools/check_gpu.py runs the record-making legs in their quick forms,
-# their commands read from check-quick's recipe above (check_dropin from
-# check-light's), with CFT_REBOUND_ARTIFACT=$(GPU_ARTIFACT); every process
-# a leg starts goes through its witness, which holds the device line and
-# the software backend's record from the same arguments. Then the routes on
-# the device, the GPU seam test and the witness's own controls. Not through
-# the gate cache: a GPU run is its own evidence, and a cached pass would
-# carry no device line. GPU_LEGS names a subset, GPU_SKIP leaves legs out,
+# name. tools/check_gpu.py runs the witness's own controls, the routes on
+# the device and the GPU seam test, then the record-making legs in their
+# quick forms, their commands read from check-quick's recipe above
+# (check_dropin from check-light's), with CFT_REBOUND_ARTIFACT=$(GPU_ARTIFACT);
+# every process a leg starts goes through its witness, which holds the
+# device line and the software backend's record from the same arguments.
+# Not through the gate cache: a GPU run is its own evidence, and a cached
+# pass would carry no device line. GPU_LEGS names a subset (and then the
+# controls, routes and seam do not run), GPU_SKIP leaves legs out,
 # and GPU_EXPECT is text the device line must contain or nothing runs (in
 # WSL cft-gpu, "RTX 5060 Ti": hip:0 must never be the 4070 there).
 GPU_ARTIFACT ?= hip:0
