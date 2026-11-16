@@ -192,8 +192,9 @@ def main():
                 print("  %s %s: rc %d; %s steps, %s rejected, %s calls, %s divsqrt_calls, wall_seconds %s, t_divsqrt %s"
                       % (fmt, label, rc, t.get("steps_done"), t.get("steps_rejected"), t.get("calls"),
                          t.get("divsqrt_calls"), t.get("wall_seconds"), t.get("t_divsqrt")))
-                print("    under gdb (rc %d): entered %s" % (g_rc, ", ".join("%s %d" % kv for kv in sorted(count.items()))
-                                                             or "NOTHING: %s" % g_err.strip()[-300:]))
+                if have_gdb:
+                    print("    under gdb (rc %d): entered %s" % (g_rc, ", ".join("%s %d" % kv for kv in sorted(count.items()))
+                                                                 or "NOTHING: %s" % g_err.strip()[-300:]))
                 for (tg, b), n in sorted(inside.items()):
                     print("    inside %s: %s %d" % (tg, b, n))
                 if have_gdb and not records_same(rec, out):
@@ -235,16 +236,23 @@ def main():
                     pd_, p1_, p0_ = per("default"), per("CFT_DIVSQRT_SEQ=1"), per("CFT_DIVSQRT_SEQ=0")
                     ok = same and p1_ > 0 and abs(pd_ - p1_) <= 0.25 * p1_ and p0_ >= 2 * max(pd_, p1_)
                 held.append(("B %s" % fmt, ok))
-                print("  B %s: cft_div and cft_sqrt entered %d times (the trailer's divsqrt_calls %s). Inside them, "
-                      "by default: %d program runs and %d elementwise runs on the device, %d host round_packs; "
-                      "CFT_DIVSQRT_SEQ=1: %d, %d, %d; CFT_DIVSQRT_SEQ=0: %d, %d, %d. The three records %s. "
-                      "A divide or root: %.0f us by default, %.0f us forced to the program route, %.0f us forced to "
-                      "the chunk route (t_divsqrt over divsqrt_calls, one run each): %s"
-                      % (fmt, n_ds, t.get("divsqrt_calls"), d["cfth_program_run"], d["cfth_run"], d["cft_sf_round_pack"],
-                         s1["cfth_program_run"], s1["cfth_run"], s1["cft_sf_round_pack"], s0["cfth_program_run"],
-                         s0["cfth_run"], s0["cft_sf_round_pack"], "IDENTICAL" if same else "DIFFER",
-                         per("default"), per("CFT_DIVSQRT_SEQ=1"), per("CFT_DIVSQRT_SEQ=0"),
-                         "HELD, the program route" if ok else "NOT HELD"))
+                if not have_gdb:
+                    print("  B %s: the three records %s; a divide or root %.0f us by default, %.0f us forced to the "
+                          "program route, %.0f us forced to the chunk route (t_divsqrt over divsqrt_calls, one run "
+                          "each; no gdb here, so by the forcing variable and the time alone): %s"
+                          % (fmt, "IDENTICAL" if same else "DIFFER", per("default"), per("CFT_DIVSQRT_SEQ=1"),
+                             per("CFT_DIVSQRT_SEQ=0"), "HELD, the program route" if ok else "NOT HELD"))
+                else:
+                    print("  B %s: cft_div and cft_sqrt entered %d times (the trailer's divsqrt_calls %s). Inside them, "
+                          "by default: %d program runs and %d elementwise runs on the device, %d host round_packs; "
+                          "CFT_DIVSQRT_SEQ=1: %d, %d, %d; CFT_DIVSQRT_SEQ=0: %d, %d, %d. The three records %s. "
+                          "A divide or root: %.0f us by default, %.0f us forced to the program route, %.0f us forced to "
+                          "the chunk route (t_divsqrt over divsqrt_calls, one run each): %s"
+                          % (fmt, n_ds, t.get("divsqrt_calls"), d["cfth_program_run"], d["cfth_run"], d["cft_sf_round_pack"],
+                             s1["cfth_program_run"], s1["cfth_run"], s1["cft_sf_round_pack"], s0["cfth_program_run"],
+                             s0["cfth_run"], s0["cft_sf_round_pack"], "IDENTICAL" if same else "DIFFER",
+                             per("default"), per("CFT_DIVSQRT_SEQ=1"), per("CFT_DIVSQRT_SEQ=0"),
+                             "HELD, the program route" if ok else "NOT HELD"))
             if "C" in parts:
                 r = routes_of(out)
                 absent = sorted(k for k, v in r.items() if " by=absent " in v + " ")
