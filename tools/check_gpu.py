@@ -55,7 +55,8 @@
 #
 #    THE CONTROLS, permanent, each a real run through the witness: a record
 #    with one hex digit planted after the run must DIFFER by line and column,
-#    and so must an attempts record with one outcome turned; a device line
+#    and so must the trailer's calls= one more (on the line whose timings
+#    are set aside) and an attempts record with one outcome turned; a device line
 #    changed by one character must FAIL as not the probe's; a run whose
 #    environment names no artifact must FAIL as a stand-in; a run without
 #    CFT_HIP_INFO must FAIL for its missing device line; check_records'
@@ -710,6 +711,17 @@ def controls(shadow, work, art, probe_line, unpublished, env_dev, legs=None):
     verdict(hit and not witness_verdict("", pres)[0],
             "control a: one hex digit of body 1's x on the record's line %d, planted in the device's output: %s"
             % (i + 1, "caught: " + pres["differ"][0].split(": ", 1)[1] if pres["differ"] else "NOT CAUGHT"))
+    # (a2) a counter of the trailer, which shares its line with the timings
+    # the comparison sets aside: calls= one more
+    out = read(os.path.join(d, tag + ".dev.out")).splitlines()
+    k = next(n for n, l in enumerate(out) if l.startswith("# steps_done="))
+    out[k] = re.sub(r" calls=(\d+)", lambda m: " calls=%d" % (int(m.group(1)) + 1), out[k], count=1)
+    with open(os.path.join(pd, tag + ".dev.out"), "w", newline="\n") as f:
+        f.write("\n".join(out) + "\n")
+    pres = analyse(pd, probe_line, unpublished)
+    hit = pres["differ"] and ("stdout line %d" % (k + 1)) in pres["differ"][0]
+    verdict(hit, "control a2: the trailer's calls= one more on line %d, the line whose timings are set aside: %s"
+            % (k + 1, "caught" if hit else "NOT CAUGHT"))
     # (b) one byte of the device's attempts record
     with open(os.path.join(pd, tag + ".dev.out"), "w", newline="\n") as f:
         f.write(read(os.path.join(d, tag + ".dev.out")))
