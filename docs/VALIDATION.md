@@ -7131,7 +7131,8 @@ software backend and once with `CFT_REBOUND_ARTIFACT=hip:0`
 | binary256 | program | 3.78 | 35.1 |
 
   The default path is bound by its calls on a GPU, as on the card (entry
-  37). cft-fp256's G1B measured 234 µs a call on this GPU, staged, in its
+  37), from 2 to 64 bodies as V0 measured it; nothing above 64 bodies is
+  measured. cft-fp256's G1B measured 234 µs a call on this GPU, staged, in its
   first part (READ). V0 measured this port's own, `wall_seconds` over the
   trailer's calls: 286 µs on kepler's loop engine at binary64, and 218
   to 769 µs over its 24 runs (binary64 218 to 364, binary128 336 to 472,

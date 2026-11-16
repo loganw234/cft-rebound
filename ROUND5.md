@@ -83,7 +83,9 @@ lead on 2026-11-16 and its docs/HOSTAPI.md, "The GPU backend":
   | binary256 | program | 3.78 | 35.1 |
 
   So this port's default path is bound by its calls on a GPU, as on the
-  card (entry 37). How that compares with software depends on the
+  card (entry 37). V0 measured 218 to 364 µs a call at binary64 from 2
+  to 64 bodies, whatever the size; P2's waves are larger, and nothing
+  above 64 bodies is measured. How that compares with software depends on the
   problem. V0 found a 64-body ring wave faster on `hip:0` than in
   software: 6.31 against 7.19 s on the loop engine, and 4.85 against
   7.26 s on the program engine, one run each. Its GPU time is still its
@@ -196,8 +198,9 @@ default path costs on a GPU, so that P2 knows what it replaces.
   scratch slots and 512 bank slots.
 - **Costs:** per call and per step, at each format, on each GPU,
   MEASURED and labelled, on the trailer's `wall_seconds`. Its `seconds`
-  and `steps_per_s` are CPU time, which HIP's own threads make 1.5 to
-  2.0 times the wall time on `hip:0` (V0, over 24 runs). One run a row ranks nothing
+  and `steps_per_s` are CPU time, 1.5 to 2.0 times the wall time on
+  `hip:0` (V0, over 24 runs; BELIEVED, not measured: HIP's own threads
+  are the cause). One run a row ranks nothing
   within the noise (CLAUDE.md).
 - **Physics counters beside the bits,** as every gate prints them.
 - **Not P1's:** any change to the port's source. A refusal that would
