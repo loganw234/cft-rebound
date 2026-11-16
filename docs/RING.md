@@ -258,8 +258,12 @@ beside every number.
   with J2 written in Python in the 2020 order (low Earth orbit, J4 zero).
 - **The same ring file on every host.** Measured on one host, with
   mpmath's two backends.
-- **The exact-time pair from `vaugadd`,** and G1B refusing AUGADD on
-  hip:N, so a run on `hip:0` as it is would very likely meet it.
+- ~~**The exact-time pair from `vaugadd`,** and G1B refusing AUGADD on
+  hip:N, so a run on `hip:0` as it is would very likely meet it.~~
+  MEASURED false in round 5 (VALIDATION entry 54). `vaugadd` is the API
+  call `cft_augmented_add`, which runs on the host on every device, and
+  every `hip:0` run carries its exact-time pair. AUGADD is refused only
+  inside a program, and none of this port's programs uses it.
 - **About 3% more steps from Pan's cap,** computed from a uniform radius.
 - **Why the two forms' steps differ** at 1.7e-11: PRS23 builds the step
   from the high b coefficients, which amplify round-off (P2).

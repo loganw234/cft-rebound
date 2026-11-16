@@ -7087,10 +7087,16 @@ It has 15 warnings:
 - 14 are REBOUND's own: `fread` and `vasprintf` results unchecked, in
   binarydata.c and simulationarchive.c, under Ubuntu's fortified glibc.
 - 1 is this port's. GCC 13 warns at src/ias15_cft.c:2155 that
-  `vcopy`'s source may be null. That source is the program engine's
-  deposit, allocated before any program runs. BELIEVED a false
-  positive: the program engine ran and matched below. MinGW's build
-  does not raise it.
+  `vcopy`'s source is null. V0 found that it comes only from the
+  library object, build/ias15_cft_lib.o (`-DIAS15_CFT_LIBRARY`). There,
+  `load_programs()`, which holds `prog_dep`'s only allocation (:1969), is
+  compiled out, so `prog_dep` is null outright. It is harmless only
+  because the library sets `engine_program = 0` (:4955) and nothing sets
+  it to 1, so the call at :2953 is never reached. A library path that
+  turned the program engine on would copy from null. The program's own
+  object does not warn, and MinGW's GCC 16.1 raises it in neither. The
+  lead's first account, that the deposit is allocated before any program
+  runs, holds for the program, not for the object that warns.
 
 ### The smoke: one binary, the software backend against `hip:0`
 
@@ -7103,10 +7109,11 @@ software backend and once with `CFT_REBOUND_ARTIFACT=hip:0`
   6 cases. The physics counters, the same both ways: 50 steps; 3.44
   passes a step at binary64, 8.52 and 8.58 at binary128 (loop and
   program), and 12.00, the corrector's cap, at binary256.
-- **The two lines that differ are routes.** `indexed` and
-  `pair_gather` read `by=absent` on `hip:0` and `by=opt_in` on the
-  software backend. The device publishes no INDEXED, and both routes are
-  off either way.
+- **The two data lines that differ are routes.** The comparison sets
+  aside the header's `backend=` field and the trailer's timings. Of the
+  rest, `indexed` and `pair_gather` read `by=absent` on `hip:0` and
+  `by=opt_in` on the software backend. The device publishes no INDEXED,
+  and both routes are off either way.
 - **The device line:** "hip:0 = AMD Radeon RX 7600 (gfx1102, 16
   multiprocessors, bus 0000:03:00.0, 8176 MiB), HIP platform amd,
   runtime 71626385, driver 71626385; of 1 visible; this libcft: HIP_ARCH
@@ -7123,11 +7130,66 @@ software backend and once with `CFT_REBOUND_ARTIFACT=hip:0`
 | binary256 | loop | 7.13 | 154.0 |
 | binary256 | program | 3.78 | 35.1 |
 
-  The default path is bound by its calls on a GPU, as on the card (entry
-  37). cft-fp256's G1C measured 234 µs a call on this GPU (READ).
+  On kepler the default path is bound by its calls on a GPU, as on the
+  card (entry 37). cft-fp256's G1B measured 234 µs a call on this GPU,
+  staged, in its first part (READ), and V0 measured this port's own at
+  286 µs.
 
 The comparison first called all 6 cases different. It had not expected
 the route lines; the data never differed.
+
+### V0's look
+
+V0 verified P0 independently: its own bundles, its own build in
+~/cft-rebound-r5-v0 (29.4 s), and its own comparator, booked in the
+TimeSheet (B0050). MEASURED:
+- **`HIP=0` changes nothing.** `make -n all programs` is the same at
+  `1354a05` and `d7b5047`, on the desktop and on nvidia-box. `HIP=1`'s
+  link lines match libcft's HIPLIBS for `amd` and for `nvidia`, and
+  `HIP=1 XRT=1` is refused.
+- **24 of 24 cases identical** in every sample line and counter:
+  - kepler, outer, pythagorean, and zonal_saturn with its `active` and
+    `zonal` lines;
+  - a 4-member ensemble, and a 64-body ring wave on both engines;
+  - `--cs augmented`;
+  - kepler_e099 rejecting its first two attempts before any accepted
+    step, with identical `--attempts-out` and `--record-iters` files;
+  - a 3-member rejecting ensemble, and the six cases above.
+
+  Every `hip:0` run carries exactly one device line, and no software run
+  has one. Physics beside the bits: 6 to 50 steps, 0 to 6 rejections,
+  3.15 to 12.00 passes a step, |dE/E| at most 1.4e-14. Zonal on against
+  off, and augmented against Kahan, differ where they should, so neither
+  comparison is vacuous.
+- **Controls:** eight kinds of planted change, on copies of eight cases'
+  GPU files, were all caught: three hex digits, two counters, the
+  header's backend, the device line and an attempts file.
+- **The routes,** forced on: on `hip:0`, `scalar` and `reduce_seg` run in
+  the software backend's bits, and `indexed` and `pair_gather` are
+  refused by name. `--door-selftest` on `hip:0` holds 116 cases
+  identical, with 48 not compared because their routes are absent.
+- **Not every problem is slower.** A 64-body ring wave ran faster on
+  `hip:0` than in software: 6.31 against 7.19 s on the loop engine, and
+  4.85 against 7.26 s on the program engine, one run each.
+- **The record's `backend=hip:0` echoes the artifact string**
+  (src/ias15_cft.c:4697-4699). It does not prove the GPU ran; the device
+  line does. The trailer's `seconds` and `steps_per_s` are CPU time, 1.7
+  to 1.9 times the wall time on `hip:0`.
+- **Found:**
+  - `HIP_PLATFORM=cuda` falls into the amd branch and fails at link;
+  - `make HIP=1 example` fails, because examples/Makefile has no HIP
+    block;
+  - in a tree first built without HIP, `make HIP=1 all` leaves libcft.a
+    software-only, and `hip:0` is then refused by name: `make clean`
+    first.
+
+  None is this round's path. All fail loudly.
+
+V0 sent P0 back for the warning's account, the per-call figures' source
+(G1B's, not G1C's), "refused by its loader" for index tables (they are
+refused at the call), P1's proof that the GPU ran, and RING.md's stale
+belief about AUGADD. This entry and ROUND5.md now carry its
+corrections.
 
 ### What this does not establish
 

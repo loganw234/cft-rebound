@@ -37,10 +37,10 @@ lead on 2026-11-16 and its docs/HOSTAPI.md, "The GPU backend":
   - elementwise `cft_run`, one `cft_sf_compute` an element;
   - `cft_reduce`, softfloat.c's tree, one level a launch;
   - `cft_program_run_ex`, one thread a lane. Scratch depth is fixed at
-    256 slots and banks at 512. A program using an index table, or
-    augmentedAddition's codes AUGADD and AUGERR, is refused by its
-    loader, by name. `seq_features` is 0x75f1f: the software backend's
-    less INDEXED and AUGADD.
+    256 slots and banks at 512. A program using augmentedAddition's codes
+    AUGADD and AUGERR is refused by its loader, by name. An index table is
+    refused at the call (device.c:861 and :2281; V0). `seq_features` is
+    0x75f1f: the software backend's less INDEXED and AUGADD.
 - **Partly on the host:** `cft_div` and `cft_sqrt` take the program
   route. One sequencer program a chunk runs the floating core on the
   GPU; classification, centring and rounding run on the host
@@ -53,8 +53,11 @@ lead on 2026-11-16 and its docs/HOSTAPI.md, "The GPU backend":
   `cft_open`).
 - **G1C** held `hip:N` to the software backend's bits on both GPUs at
   every format: 14 corpora, 125,032 vector cases, and a replay of
-  1,228,415 cases. It measured about 87 µs a call on the RTX 5060 Ti and
-  234 µs on the RX 7600.
+  1,228,415 cases.
+- **A call's cost.** G1B's first part measured about 87 µs a call on the
+  RTX 5060 Ti and 234 µs on the RX 7600, staged. G1C measured 107 µs on
+  the 5060 Ti. V0 measured this port's own at 286 µs a call on the RX
+  7600 at binary64.
 
 **P0's measurements, 2026-11-16.**
 - `make HIP=1 all programs` built this tree on nvidia-box in 31 s, and
@@ -77,8 +80,11 @@ lead on 2026-11-16 and its docs/HOSTAPI.md, "The GPU backend":
   | binary256 | loop | 7.13 | 154.0 |
   | binary256 | program | 3.78 | 35.1 |
 
-  So this port's default path is bound by its calls on a GPU, as on the
-  card (entry 37).
+  So on kepler this port's default path is bound by its calls on a GPU,
+  as on the card (entry 37). It is not so for every problem. V0 found a
+  64-body ring wave faster on `hip:0` than in software: 6.31 against
+  7.19 s on the loop engine, and 4.85 against 7.26 s on the program
+  engine, one run each.
 - `CFT_HIP_INFO=1` names the device: "AMD Radeon RX 7600 (gfx1102, 16
   multiprocessors, bus 0000:03:00.0, 8176 MiB), HIP platform amd,
   runtime 71626385".
@@ -131,10 +137,19 @@ the earliest, and shares both GPUs.
 - **To do:** VALIDATION entry 54, the round's ledger, and P0's full
   `make check` on the desktop, where `HIP=0` changes nothing. The build
   in WSL `cft-gpu` is P1's, in its first window there.
-- **Found, not fixed:** GCC 13 on Ubuntu warns at src/ias15_cft.c:2155
-  that `vcopy`'s source may be null. That source is the program
-  engine's deposit, allocated before any program runs. BELIEVED a false
-  positive; the program engine ran and matched.
+- **Found, not fixed:**
+  - GCC 13 on Ubuntu warns at src/ias15_cft.c:2155 that `vcopy`'s
+    source is null. It does so only in the library object
+    (`-DIAS15_CFT_LIBRARY`), where `load_programs()`, which holds
+    `prog_dep`'s only allocation, is compiled out. That makes `prog_dep`
+    null there outright. It is harmless only because the library sets
+    `engine_program = 0` and nothing sets it to 1, so the call is never
+    reached; a library path that turned the program engine on would copy
+    from null. The program's own object does not warn (V0).
+  - `HIP_PLATFORM=cuda`, libcft's plain-nvcc platform, falls into the
+    Makefile's amd branch and fails at link. `make HIP=1 example` fails:
+    examples/Makefile has no HIP block. Neither is this round's path
+    (V0).
 
 ## The parcels
 
@@ -152,11 +167,20 @@ default path costs on a GPU, so that P2 knows what it replaces.
   - check_zonal and check_reversal;
   - check_corrector and check_dropin, through the registered integrator.
 
-  A full `make check` is out of reach: the calls make it 7 to 30 times
-  slower there.
+  A full `make check` is out of reach. On kepler the calls make a run 7
+  to 30 times slower, and V0 measured `check_dropin --light` at 449 s in
+  software on nvidia-box, so roughly 1 to 3.5 hours on `hip:0`. Book
+  such windows long, or hold a named subset.
 - **Prove the GPU ran.** A leg that quietly ran the software backend is
-  a stand-in, and is a finding. Each run's `CFT_HIP_INFO` device line
-  or its record's `backend=hip:0` is kept beside its verdict.
+  a stand-in, and is a finding. Each run's `CFT_HIP_INFO` device line is
+  required beside its verdict. The record's `backend=hip:0` only echoes
+  the artifact string the run was given (src/ias15_cft.c:4697-4699), so
+  it proves nothing (V0).
+- **The routes on `hip:0`** (V0): forced on, `scalar` and `reduce_seg`
+  run on the GPU in the software backend's bits, and `indexed` and
+  `pair_gather` are refused by name. `--door-selftest` on `hip:0` holds
+  116 cases identical, with 48 not compared because their routes are
+  absent. P1 holds them.
 - **The GPU seam test** (ROUND4.md, "What the integrator keeps"):
   tools/compare_run.py pointed at P1's first `hip:0` ring record, with a
   difference planted in that record and shown caught by name.
@@ -165,8 +189,10 @@ default path costs on a GPU, so that P2 knows what it replaces.
   program route; the index-table routes absent; programs within 256
   scratch slots and 512 bank slots.
 - **Costs:** per call and per step, at each format, on each GPU,
-  MEASURED and labelled. One run a row ranks nothing within the noise
-  (CLAUDE.md).
+  MEASURED and labelled, on the trailer's `wall_seconds`. Its `seconds`
+  and `steps_per_s` are CPU time, which HIP's own threads make 1.7 to
+  1.9 times the wall time on `hip:0` (V0). One run a row ranks nothing
+  within the noise (CLAUDE.md).
 - **Physics counters beside the bits,** as every gate prints them.
 - **Not P1's:** any change to the port's source. A refusal that would
   need one is reported first.
@@ -263,6 +289,9 @@ where this round's GPUs change them:
 - **The device trap.** In cft-gpu, `CUDA_DEVICE_ORDER=PCI_BUS_ID
   CUDA_VISIBLE_DEVICES=1` comes before any `hip:0`. Keep `CFT_HIP_INFO`'s
   line in every record set.
+- **The stale-library trap** (V0). In a tree first built without HIP,
+  `make HIP=1 all` returns 0 but leaves libcft.a software-only, and
+  `hip:0` is then refused by name. `make clean` first.
 - **No speed claims** beyond MEASURED rows, labelled, one run each,
   unranked within the noise.
 - **No card, and never the RTX 4070.**
