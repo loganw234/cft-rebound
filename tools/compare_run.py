@@ -10,6 +10,7 @@
 #          [--exe build/ias15_cft] [--programs programs/out]
 #          [--seed 1] [--strata 8] [--format-diff F2] [--plan]
 #          [--rerun-engine loop|program] [--keep DIR]
+#          [--producer-files DIR [--particle-strata P]]
 #
 # RECORD is the run's record: an ensemble's, or one system's (a --member k
 # run's, or a single problem's). Today it is this tree's own run; the point
@@ -39,7 +40,10 @@
 #     engine, steps, sample, N, pc_tol_shift, max_iter, problem, dt0,
 #     epsilon, G, pc_tol, the member's index, name and bodies, the columns,
 #     the `# active` line both ways, and every other header line this tree
-#     writes, P1's `# zonal` line among them.
+#     writes, P1's `# zonal` line among them;
+#   - with --producer-files, a directory that is not one, or is --keep's;
+#     a member's file that is not of its form or has no run key; and a file
+#     whose run key is not its member's run (THE PRODUCER'S OWN FILES).
 #
 # FAIL (exit 1), each by member, with its name:
 #   - a member missing from the record or incomplete in it: its system
@@ -102,11 +106,52 @@
 # every sample's fields before the bodies, the particle and every massive
 # body, value for value, the exact-time pair, and the trailer's counters.
 # A replay that is not the record's FAILs, naming the member, the particle,
-# the line and the column.
-# The attempts records are this tree's reruns', so a particle is sampled
-# only in a member that was rerun; a producer that writes its own attempts
-# records (the GPU half) would let particles be sampled in members that are
-# not, and that is not built here.
+# the line and the column. Beside each particle, its replay's counters and
+# its closest approach to each active body at the samples.
+# Without --producer-files the attempts records are this tree's reruns', so
+# a particle is sampled only in a member that was rerun.
+#
+# THE PRODUCER'S OWN FILES (ROUND5.md, P3: a GPU run of 10^6 particles
+# cannot afford a rerun of every member whose particles are sampled).
+# --producer-files DIR names a directory holding, for member k (its index in
+# the problem file: system k of an ensemble file, the k of a --member k
+# record, 0 for a single problem), the producer's own
+#     DIR/member<k>.att    the attempts record, in --attempts-out's form
+#     DIR/member<k>.sched  the corrector schedule, in --record-iters's form
+# each written by the member's run alone and keyed, on its `# run` line,
+# with exactly what `ias15_cft --run-key` prints for that run: the arguments
+# the member is rerun with here, its engine the record's own if this tree
+# has it and --rerun-engine's if not (PRODUCER_FILES, below; P2's kernel
+# writes them, and tools/check_compare_run.py writes its producer's by
+# these names, imported from here). Then:
+#   - the members whose particles are sampled are the member sample's and,
+#     besides them, one from each of --particle-strata ranges of member
+#     index (default: as many as --strata), by the least SHA-256 of (seed,
+#     index) under a name of their own, so the two samples are drawn apart;
+#   - before anything runs, each pair found is held to its member's run by
+#     its key, the program's own (--run-key): a file keyed for another wave,
+#     format, active line or zonal line is REFUSED, naming the member, the
+#     file and every key field that differs, as --replay-iters refuses a
+#     schedule recorded from another run;
+#   - each sampled particle is replayed against the producer's own
+#     attempts record and schedule, with no rerun of its member;
+#   - a member's own lines are still held as without the files: rerun here
+#     where the member sample holds it, and by the record alone where it
+#     does not (and by its particles' replays, which hold every massive
+#     body and the exact-time pair). The driver says which, and why;
+#   - a member whose pair is not both in DIR falls back to today's rerun,
+#     which then holds its lines too and writes the files its particles
+#     replay from; the driver names the file that is not there.
+# What the replay cannot hold, stated: it takes the producer's decisions
+# as given - each attempt's dt and outcome, and its passes - and holds the
+# arithmetic of each attempt for the particle, every massive body and the
+# exact-time pair. The decisions are held only where the member is rerun,
+# by this tree's own step control and exit test: a producer whose exit test
+# took another pass, its record that schedule's replay, passes in a member
+# that is not rerun and FAILs in one that is (tools/check_compare_run.py
+# measures both). And a rejected attempt after an accepted step moves no
+# state bit (docs/VALIDATION.md entry 49): its dt shows only as the dt_next
+# of a sample line printed just before it.
 # Without P3's tools in the tree the driver prints
 #     particles: not sampled (no particle replay in this tree)
 # and with them present but not callable (an extract() that will not
@@ -172,6 +217,16 @@ NAME_WIDTH, SYS_WIDTH = 63, 31
 # P3's tools (ROUND4.md, P3). Either one in the tree means the particle
 # place below is due.
 P3_TOOLS = ("extract_particle.py", "check_replay.py")
+# A producer's own files, one pair a member k (ROUND5.md, P3), in the forms
+# ias15_cft's --attempts-out and --record-iters write. The one statement of
+# the names: tools/check_compare_run.py imports it to write its producer's.
+PRODUCER_FILES = (("attempts record", "member%d.att"), ("corrector schedule", "member%d.sched"))
+# The schedule's first line, as src/ias15_cft.c's sched_open() writes it and
+# --replay-iters and tools/extract_particle.py hold it; the attempts
+# record's is extract_particle's ATT_MAGIC. A copy that drifted would refuse
+# every producer's file, loudly, never pass a wrong one.
+SCHED_MAGIC = "# cft-rebound corrector schedule v1"
+ENGINES = ("loop", "program")                 # this tree's, as --engine takes them
 FLOOR = re.compile(r"^FLOOR (\S+) vs (\S+): (\d+) common samples, last step (\d+), max \|dE/E\| (\S+) \(last \S+\), "
                    r"max \|dx\|/L (\S+) \(last \S+\)$", re.M)
 # What a format difference can and cannot show, printed beside its number
@@ -639,6 +694,68 @@ def plan(E, strata, seed, rejected):
     return ranges, picks, sorted(set(picks) | set(rejected))
 
 
+def particle_plan(E, strata, seed):
+    """With the producer's files, the members whose particles are sampled
+    besides the member sample's: one from each of `strata` ranges of member
+    index, by the least SHA-256 of (seed, index) under a name of its own, so
+    that it is drawn apart from the member sample. None for strata 0."""
+    if strata < 1:
+        return [], []
+    K = min(strata, E)
+    ranges = [(i * E // K, (i + 1) * E // K) for i in range(K)]
+    picks = [min(range(lo, hi), key=lambda m: hashlib.sha256(b"cft-rebound compare_run particle member %d %d"
+                                                           % (seed, m)).digest()) for lo, hi in ranges]
+    return ranges, picks
+
+
+def producer_paths(directory, k):
+    """Member k's attempts record and corrector schedule in a producer's
+    directory (--producer-files)."""
+    return tuple(os.path.join(directory, name % k) for _, name in PRODUCER_FILES)
+
+
+def run_key(rec, args, s, engine):
+    """Member s's run key, as its schedule's and its attempts record's `# run`
+    lines hold it: the program's own (ias15_cft --run-key, on the arguments
+    the member is rerun with), so that nothing here hashes anything and no
+    copy of the key can drift from sched_key()."""
+    rc, out, err = run(rerun_cmd(rec, args, s, engine=engine) + ["--run-key"])
+    if rc != 0 or len(out.splitlines()) != 1:
+        raise Refused("this tree's ias15_cft gave no run key for member %d's run (rc %d): %s"
+                      % (rec.label_of(s), rc, (err or out).strip()[-300:]))
+    return out.strip()
+
+
+def file_key(k, what, path, magic):
+    """A producer's file's run key, its first two lines held to its form."""
+    try:
+        with open(path, encoding="ascii", errors="replace") as f:
+            head = [f.readline().rstrip("\r\n") for _ in range(2)]
+    except OSError as e:
+        raise Refused("member %d's %s %s cannot be read: %s" % (k, what, path, e))
+    if head[0] != magic:
+        raise Refused("member %d's %s %s is not one: its first line is %r, where the form's is %r"
+                      % (k, what, path, head[0][:100], magic))
+    if not head[1].startswith("# run "):
+        raise Refused("member %d's %s %s has no run key: its second line is %r, not `# run <key>`"
+                      % (k, what, path, head[1][:100]))
+    return head[1][6:]
+
+
+def hold_key(k, what, path, have, want):
+    """A producer's file against its member's run, by the run key: refused by
+    name, every field that differs named with both values."""
+    if have == want:
+        return
+    a, b = kv(have.split()), kv(want.split())
+    fields = [f for f in b if a.get(f) != b[f]] + [f for f in a if f not in b]
+    raise Refused("member %d's %s %s was recorded for another run, and a schedule replays only its own run: its run "
+                  "key differs from member %d's in %s (%s)" % (
+                      k, what, path, k, ", ".join(fields) or "its text, field for field alike",
+                      "; ".join("%s: %s in the file, %s for member %d" % (f, a.get(f, "absent"), b.get(f, "absent"), k)
+                                for f in fields)))
+
+
 def extract(path, rec, members):
     """Pass 2: the chosen members' sample lines, with their line numbers."""
     want = set(members)
@@ -665,9 +782,9 @@ def run(cmd):
     return p.returncode, p.stdout, p.stderr
 
 
-def rerun_cmd(rec, args, s, fmt=None, dt_file=None, dt_out=None, att_out=None, sched_out=None):
+def rerun_cmd(rec, args, s, fmt=None, dt_file=None, dt_out=None, att_out=None, sched_out=None, engine=None):
     p = rec.program
-    engine = args.rerun_engine or p["engine"]
+    engine = engine or args.rerun_engine or p["engine"]
     cmd = [args.exe, "--format", fmt or p["format"], "--problem", args.problem, "--steps", p["steps"],
            "--sample", p["sample"], "--cs", p["cs"], "--arith", p["arith"], "--engine", engine,
            "--max-iter", p["max_iter"], "--quiet"]
@@ -769,6 +886,19 @@ def compare(rec, s, lines, mine, mine_text, names):
     return True, "%d samples, %d values, and its trailer" % (len(rs), nvals), rt
 
 
+def closest_block(rec, k, names, lines):
+    """Prints member k's closest approaches, each test particle to each active
+    body at the samples (closest()), and returns them."""
+    best = closest(rec, lines)
+    print("  member %d: closest approach AT THE SAMPLES (%d of them, not between them), each test particle to each "
+          "active body:" % (k, len(lines)))
+    for j in range(rec.active[0], rec.N):
+        print("    %s (body %d): %s" % (names[j], j, "; ".join(
+            "%s %.6e at sample %d (step %d)" % ((names[i],) + best[(j, i)]) if (j, i) in best else
+            "%s: no sample line to measure" % names[i] for i in range(rec.active[0]))))
+    return best
+
+
 def closest(rec, lines):
     """Each test particle's closest approach to each active body AT THE
     SAMPLES, from the record's own x y z columns, in binary64."""
@@ -859,15 +989,19 @@ def particle_compare(rec, s, lines, out, bodies, names):
     return True, "%d samples, %d values and the trailer's counters" % (len(rs), nvals)
 
 
-def sample_particles(rec, info, args, work, state, xp):
-    """THE P3 x P4 SEAM - the lead's (ROUND4.md, "What the integrator keeps").
+def sample_particles(rec, info, args, work, state, xp, producer=None):
+    """THE P3 x P4 SEAM - the lead's (ROUND4.md, "What the integrator keeps"),
+    and the producer's own files (ROUND5.md, P3).
 
-    Two test particles of each rerun member (`info`): its least closest
-    approach at the samples, and one by the seed. Each is written alone with
-    the member's massive bodies by P3's extract(), from the member's attempts
-    record and schedule as this tree reran it, replayed, and held to the
-    record's lines (particle_compare). Returns (whole, failures): whole is
-    False when P3's replay is in the tree and cannot be called."""
+    Two test particles of each member in `info`: its least closest approach
+    at the samples, and one by the seed. Each is written alone with the
+    member's massive bodies by P3's extract(), from the member's attempts
+    record and schedule - the producer's own where --producer-files gave a
+    pair (`producer`), and otherwise this tree's rerun's - replayed on the
+    engine those files are keyed to, and held to the record's lines
+    (particle_compare). Each replay's record is kept beside its sub-system,
+    <work>/particles/<stem>.rec. Returns (whole, failures): whole is False
+    when P3's replay is in the tree and cannot be called."""
     if state == "absent":
         print("particles: not sampled (no particle replay in this tree)")
         return True, []
@@ -879,11 +1013,19 @@ def sample_particles(rec, info, args, work, state, xp):
         return True, []
     nact = rec.active[0]
     fails, n, members_done = [], 0, 0
-    for s, k, names, lines, best, att, sched in info:
+    n_prod, m_prod, m_alone = 0, 0, 0
+    for s, k, names, lines, best, att, sched, src, engine, rerun in info:
         parts = list(range(nact, rec.N))
         if not parts:
             continue
         members_done += 1
+        if src == "producer":
+            m_prod += 1
+            m_alone += not rerun
+            source = "the producer's own attempts record and schedule, %s and %s" % (att, sched)
+        else:
+            source = "this tree's rerun's attempts record and schedule%s" % (
+                "" if producer is None else ", the producer's pair not being there")
         def least(j):
             return min((best[(j, i)][0] for i in range(nact) if (j, i) in best), default=math.inf)
         near = min(parts, key=lambda j: (least(j), j))
@@ -893,7 +1035,9 @@ def sample_particles(rec, info, args, work, state, xp):
             seeded = min(rest, key=lambda j: hashlib.sha256(b"cft-rebound compare_run particle %d %d %d"
                                                              % (args.seed, k, j)).digest())
             picks.append((seeded, "by the seed"))
-        base = rerun_cmd(rec, args, s)[1:]
+        # the run the files are keyed to: a rerun's own engine, or for the
+        # producer's files the engine their key names (compare_run(), below)
+        base = rerun_cmd(rec, args, s, engine=engine)[1:]
         run_args = []
         i = 0
         while i < len(base):
@@ -905,27 +1049,44 @@ def sample_particles(rec, info, args, work, state, xp):
         member_arg = s if rec.kind == "ensemble" else rec.member
         for j, why in picks:
             n += 1
+            n_prod += src == "producer"
             label = "  member %d: particle %s (body %d, %s)" % (k, names[j], j, why)
             try:
                 res = xp.extract(args.exe, args.problem, att, sched, j, os.path.join(work, "particles"), run_args,
                                  member=member_arg)
             except xp.Refused as e:
-                print("%s: FAIL: P3's extract_particle refused: %s" % (label, e))
+                print("%s: FAIL: P3's extract_particle refused %s: %s" % (label, source, e))
                 fails.append((s, "particle %s refused" % names[j]))
                 continue
             rc, out, err = run([args.exe] + res["args"])
+            with open(os.path.splitext(res["problem"])[0] + ".rec", "w", newline="\n") as f:
+                f.write(out)
             if rc != 0:
-                print("%s: FAIL: its replay did not run (rc %d): %s" % (label, rc, (err or out).strip()[-300:]))
+                print("%s: FAIL: its replay from %s did not run (rc %d): %s" % (label, source, rc,
+                                                                            (err or out).strip()[-300:]))
                 fails.append((s, "particle %s's replay did not run" % names[j]))
                 continue
             ok, what = particle_compare(rec, s, lines, out, res["bodies"], names)
-            print("%s: replayed alone with the member's %d massive bodies%s through tools/extract_particle.py, "
-                  "and held to the record: %s: %s" % (label, nact, " and its zonal line" if " zonal=" in res["sub_key"]
-                                                     else "", "IDENTICAL" if ok else "FAIL", what))
+            pt = kv(next((l[2:].split() for l in out.splitlines() if l.startswith("# steps_done=")), []))
+            print("%s: replayed alone with the member's %d massive bodies%s through tools/extract_particle.py, from %s, "
+                  "and held to the record: %s: %s; its replay's counters: steps %s, rejected %s, mean passes %s, max "
+                  "passes %s, cap hits %s; its closest approach AT THE SAMPLES: %s" % (
+                      label, nact, " and its zonal line" if " zonal=" in res["sub_key"] else "", source,
+                      "IDENTICAL" if ok else "FAIL", what, pt.get("steps_done"), pt.get("steps_rejected"),
+                      pt.get("mean_pc_iterations"), pt.get("max_pc_iterations"), pt.get("iterations_max_exceeded"),
+                      "; ".join("%s %.6e at sample %d (step %d)" % ((names[i],) + best[(j, i)]) if (j, i) in best
+                                else "%s: no sample line to measure" % names[i] for i in range(nact))))
             if not ok:
                 fails.append((s, "particle %s" % names[j]))
-    print("particles: %d sampled in %d member(s), each replayed alone from its member's attempts record and schedule "
-          "as this tree reran it, and held to the record's own lines: %d identical" % (n, members_done, n - len(fails)))
+    if producer is None:
+        print("particles: %d sampled in %d member(s), each replayed alone from its member's attempts record and "
+              "schedule as this tree reran it, and held to the record's own lines: %d identical"
+              % (n, members_done, n - len(fails)))
+    else:
+        print("particles: %d sampled in %d member(s), each replayed alone and held to the record's own lines: %d from "
+              "the producer's own attempts records and schedules, in %d member(s), %d of them not rerun; %d from this "
+              "tree's reruns', where the producer's pair is not there; %d identical"
+              % (n, members_done, n_prod, m_prod, m_alone, n - n_prod, n - len(fails)))
     return True, fails
 
 
@@ -980,6 +1141,73 @@ def built(path):
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(os.path.getmtime(path)))
 
 
+def producer_plan(rec, args, sample, ranges, picks, rej, state, bad):
+    """THE PRODUCER'S OWN FILES (--producer-files): the members whose
+    particles are sampled, where each one's pair is, and how and why each
+    one's own lines are held. `sample` is the member sample less `bad`, the
+    members the record does not hold whole, which are FAILed already and
+    sampled for nothing; `ranges` and `picks` are its strata (None for a
+    one-system record); `rej` its members with a rejected step.
+    Returns ({member: (attempts record, schedule)} for each pair found, the
+    members whose particles are sampled, the members that fall back to a
+    rerun). Nothing is run."""
+    d = args.producer_files
+    if state == "absent":
+        raise Refused("--producer-files %s: this tree has no particle replay (tools/extract_particle.py) to take a "
+                      "producer's files" % d)
+    if not os.path.isdir(d):
+        raise Refused("--producer-files %s is not a directory" % d)
+    if args.keep and os.path.normcase(os.path.abspath(args.keep)) == os.path.normcase(os.path.abspath(d)):
+        raise Refused("--keep %s is the --producer-files directory, where this tree's reruns would write their own "
+                      "attempts records and schedules over the producer's, under the same names" % args.keep)
+    if not rec.active:
+        print("particles: the producer's files in %s are not read: the record has no `# active` line, so it has no "
+              "test particle" % d)
+        return {}, [], []
+    if rec.kind == "ensemble":
+        strata = args.strata if args.particle_strata is None else args.particle_strata
+        pranges, ppicks = particle_plan(rec.E, strata, args.seed)
+        members = sorted(set(sample) | set(m for m in ppicks if m not in bad))
+        print("particles: from the producer's own files in %s: %s; and the member sample's: %s; %d of %d members"
+              % (d, "%d strata by member index (%s), seed %d: %s" % (
+                  len(pranges), ", ".join("%d-%d" % (lo, hi - 1) for lo, hi in pranges), args.seed,
+                  ", ".join(str(m) for m in ppicks)) if pranges else "no strata of their own (--particle-strata 0)",
+                 ", ".join(str(m) for m in sample) or "none", len(members), rec.E))
+    else:
+        members = list(sample)
+        print("particles: from the producer's own files in %s: the record's one system" % d)
+    producer, fallback = {}, []
+    for s in members:
+        k = rec.label_of(s)
+        att, sched = producer_paths(d, k)
+        lost = [x for x in (att, sched) if not os.path.isfile(x)]
+        if s in sample:
+            how = "its lines held by a rerun here: the member sample holds it (%s)" % (
+                "the record's one system" if ranges is None else "; ".join(
+                    ["the pick of stratum %d-%d" % (lo, hi - 1) for (lo, hi), m in zip(ranges, picks) if m == s] +
+                    ["its trailer shows %d rejected step(s)" % rec_rejected(rec, s)] * (s in rej)))
+        else:
+            lo, hi = next((lo, hi) for lo, hi in ranges if lo <= s < hi)
+            how = "its lines held by %s: the member sample does not hold it (stratum %d-%d gives member %d, and its " \
+                  "trailer shows no rejected step)%s" % (
+                      "a rerun here" if lost else "the record alone, not rerun", lo, hi - 1, picks[ranges.index((lo, hi))],
+                      ", and its particles need one" if lost else "")
+        if lost:
+            fallback.append(s)
+            src = "the producer's pair is not there (no %s): its particles fall back to today's rerun, which writes " \
+                  "the attempts record and schedule they replay from" % " and no ".join(lost)
+        else:
+            producer[s] = (att, sched)
+            src = "its particles from the producer's own %s and %s" % (att, sched)
+        print("  member %d: %s; %s" % (k, how, src))
+    return producer, members, fallback
+
+
+def rec_rejected(rec, s):
+    t = rec.trailer.get(s)
+    return int(t[2]["steps_rejected"]) if t and t[2].get("steps_rejected", "").isdigit() else 0
+
+
 def compare_run(args):
     print("compare_run: %s against this tree" % args.record)
     if not os.path.isfile(args.exe):
@@ -1025,6 +1253,8 @@ def compare_run(args):
 
     rejected = {s: int(t[2]["steps_rejected"]) for s, t in rec.trailer.items()
                 if s not in bad and t[2].get("steps_rejected", "").isdigit()}
+    ranges = picks = None
+    rej = []
     if rec.kind == "ensemble":
         rej = sorted(s for s in rejected if rejected[s] > 0)
         ranges, picks, members = plan(rec.E, args.strata, args.seed, rej)
@@ -1036,29 +1266,55 @@ def compare_run(args):
         members = [0]
         print("sample: the record's one system%s" % (", member %d of its problem" % rec.member
                                                      if rec.member is not None else ""))
+    todo = [s for s in members if s not in bad]
+    state, xp = p3_replay()
+    # THE PRODUCER'S OWN FILES: which members' particles are sampled, from
+    # whose files, and how each one's lines are held (producer_plan())
+    producer, pmembers, fallback = None, [], []
+    if args.producer_files is not None:
+        producer, pmembers, fallback = producer_plan(rec, args, todo, ranges, picks, rej, state, bad)
+    extra = [s for s in fallback if s not in todo]                   # rerun only for the files
+    alone = [s for s in pmembers if s not in todo and s not in extra]   # the producer's pair, and no rerun
     if args.plan:
-        print("RESULT: PLAN: %d member(s) would be rerun%s" % (len(members), "; and the record FAILs, above"
-                                                              if bad or whole else ""))
+        print("RESULT: PLAN: %d member(s) would be rerun%s%s" % (
+            len(members) + len(extra), "; %d more sampled for particles alone, from the producer's files" % len(alone)
+            if alone else "", "; and the record FAILs, above" if bad or whole else ""))
         return 1 if bad or whole else 0
+    # each pair held to its member's run by the program's own key, before
+    # anything runs: the engine its key names is the record's when this tree
+    # has it, and otherwise the one the caller reruns on
+    key_engine = None
+    if producer and state == "wired":
+        key_engine = p["engine"] if p["engine"] in ENGINES else args.rerun_engine
+        if key_engine is None:
+            raise Refused("the record ran engine=%s, which this tree does not have, so its producer's files are keyed "
+                          "to the engine its rerun takes, and no --rerun-engine names one" % p["engine"])
+        for s in sorted(producer):
+            k, want = rec.label_of(s), run_key(rec, args, s, key_engine)
+            for (what, _), path, magic in zip(PRODUCER_FILES, producer[s], (xp.ATT_MAGIC, SCHED_MAGIC)):
+                hold_key(k, what, path, file_key(k, what, path, magic), want)
+        print("particles: %d producer's pair(s), each keyed to its member's run: its run key, both files', is the one "
+              "this tree's ias15_cft --run-key gives the member's arguments, at engine=%s" % (len(producer), key_engine))
 
     work = args.keep or tempfile.mkdtemp(prefix="compare_run_")
     os.makedirs(work, exist_ok=True)
     failed = set(bad)
     same = 0
     try:
-        todo = [s for s in members if s not in bad]
-        got = extract(args.record, rec, todo)
+        got = extract(args.record, rec, todo + extra + alone)
         engine = args.rerun_engine or p["engine"]
         if engine != p["engine"]:
             print("rerun: on the %s engine, where the record ran %s (--rerun-engine)" % (engine, p["engine"]))
-        state, xp = p3_replay()
         want_particles = state == "wired" and bool(rec.active)
         info = []
-        for s in todo:
+        for s in todo + extra:
             name, k = rec.name_of(s, prob), rec.label_of(s)
+            # this rerun writes the files its particles replay from, unless
+            # the producer's own pair is there for them
+            files_here = want_particles and (producer is None or s in fallback)
             dt_path = os.path.join(work, "member%d.dt" % k) if args.format_diff else None
-            att = os.path.join(work, "member%d.att" % k) if want_particles else None
-            sched = os.path.join(work, "member%d.sched" % k) if want_particles else None
+            att = os.path.join(work, "member%d.att" % k) if files_here else None
+            sched = os.path.join(work, "member%d.sched" % k) if files_here else None
             rc, out, err = run(rerun_cmd(rec, args, s, dt_out=dt_path, att_out=att, sched_out=sched))
             if rc != 0:
                 raise Refused("this tree's ias15_cft refused member %d's rerun with the record's arguments (rc %d): %s"
@@ -1081,24 +1337,35 @@ def compare_run(args):
             if not rec.active:
                 print("  member %d: no test particles (no `# active` line: every body is active)" % k)
             else:
-                best = closest(rec, got[s])
-                print("  member %d: closest approach AT THE SAMPLES (%d of them, not between them), each test particle "
-                      "to each active body:" % (k, len(got[s])))
-                for j in range(rec.active[0], rec.N):
-                    print("    %s (body %d): %s" % (names[j], j, "; ".join(
-                        "%s %.6e at sample %d (step %d)" % ((names[i],) + best[(j, i)]) if (j, i) in best else
-                        "%s: no sample line to measure" % names[i] for i in range(rec.active[0]))))
-                if want_particles:
-                    info.append((s, k, names, got[s], best, att, sched))
+                best = closest_block(rec, k, names, got[s])
+                if want_particles and producer is not None and s in producer:
+                    info.append((s, k, names, got[s], best, producer[s][0], producer[s][1], "producer", key_engine, True))
+                elif want_particles and (producer is None or s in pmembers):
+                    info.append((s, k, names, got[s], best, att, sched, "rerun", engine, True))
             if args.format_diff:
                 fok, fmsg = format_diff(rec, args, s, rerun_path, dt_path, work, int(rt.get("steps_rejected", "0")))
                 print("  member %d: format difference: %s%s" % (k, "" if fok else "FAIL: ", fmsg))
                 if not fok:
                     failed.add(s)
-        particles_whole, pfails = sample_particles(rec, info, args, work, state, xp)
+        # the members sampled for their particles alone: not rerun, their
+        # lines held by the record and by those particles' replays, which
+        # hold every massive body and the exact-time pair
+        for s in alone:
+            name, k = rec.name_of(s, prob), rec.label_of(s)
+            names = [n for n, _ in rec.bodies[s]]
+            rt = rec.trailer[s][2]
+            print("member %d (%s): NOT RERUN: its lines are held by the record alone, and by its particles' replays from "
+                  "the producer's own files; its trailer: steps %s, rejected %s, mean passes %s, max passes %s, cap "
+                  "hits %s" % (k, name, rt.get("steps_done"), rt.get("steps_rejected"), rt.get("mean_pc_iterations"),
+                               rt.get("max_pc_iterations"), rt.get("iterations_max_exceeded")))
+            best = closest_block(rec, k, names, got[s])
+            if want_particles:
+                info.append((s, k, names, got[s], best, producer[s][0], producer[s][1], "producer", key_engine, False))
+        particles_whole, pfails = sample_particles(rec, info, args, work, state, xp, producer)
     finally:
         if not args.keep:
             shutil.rmtree(work, ignore_errors=True)
+    nrerun = len(members) + len(extra)
     if failed or whole or not particles_whole or pfails:
         why = []
         if failed:
@@ -1109,10 +1376,12 @@ def compare_run(args):
             why.append("FAIL: " + ", ".join("member %d's %s" % (rec.label_of(s), what) for s, what in pfails))
         if not particles_whole:
             why.append("P3's replay is in this tree and cannot be called")
-        print("RESULT: FAIL: %d of %d sampled member(s) identical; %s" % (same, len(members), "; ".join(why)))
+        print("RESULT: FAIL: %d of %d sampled member(s) identical; %s" % (same, nrerun, "; ".join(why)))
         return 1
-    print("RESULT: PASS: %d sampled member(s) of %d, every one identical to this tree's rerun, its counters beside it%s"
-          % (same, rec.E, "; every sampled particle's replay identical to the record" if info else ""))
+    print("RESULT: PASS: %d sampled member(s) of %d, every one identical to this tree's rerun, its counters beside it%s%s"
+          % (same, rec.E, "; every sampled particle's replay identical to the record" if info else "",
+             "; and %d member(s) not rerun, each held by the record and its particles' replays from the producer's own "
+             "files" % len(alone) if alone else ""))
     return 0
 
 
@@ -1133,7 +1402,15 @@ def main():
                     help="rerun on this engine, not the record's (the two give the same bits in the FMA form)")
     ap.add_argument("--plan", action="store_true", help="say what would be rerun, and stop")
     ap.add_argument("--keep", help="keep the reruns' records in this directory")
+    ap.add_argument("--producer-files", metavar="DIR",
+                    help="the producer's own attempts record and corrector schedule for member k, DIR/member<k>.att "
+                         "and DIR/member<k>.sched: particles are replayed from them, with no rerun of their member")
+    ap.add_argument("--particle-strata", type=int, metavar="P",
+                    help="with --producer-files, sample particles in one more member from each of P ranges of member "
+                         "index, besides the member sample's (default: --strata's)")
     args = ap.parse_args()
+    if args.particle_strata is not None and (args.particle_strata < 0 or args.producer_files is None):
+        ap.error("--particle-strata takes a count of 0 or more, with --producer-files")
     args.problem = os.path.abspath(args.problem)
     # absolute, as Windows' CreateProcess runs no relative path written with
     # forward slashes (a traceback otherwise, measured 2026-11-12)
