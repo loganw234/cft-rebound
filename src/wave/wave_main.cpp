@@ -540,12 +540,18 @@ int main(int argc, char **argv){
     GpuRunner *dev = gpu ? new GpuRunner(K, S, att_dir ? &log : NULL) : NULL;
 #endif
     const double w0 = now_s();
-    double t_kernel = 0.0;
+    double t_kernel = 0.0, t_first = 0.0;   /* every launch's time, and the sample-0 launch's (the device's first) */
     long k = 0, blocks_done = 0;
     for (;;){
         const long long target = blocks_done;
 #ifdef WAVE_HIP
-        if (dev){ const double t0 = now_s(); dev->block(target, out); t_kernel += now_s() - t0; }
+        if (dev){
+            const double t0 = now_s();
+            dev->block(target, out);
+            const double d = now_s() - t0;
+            t_kernel += d;
+            if (target == 0) t_first += d;
+        }
         else
 #endif
             host.block(target, out);
@@ -588,10 +594,10 @@ int main(int argc, char **argv){
                    o.done + o.rejected ? (double)o.pc_total / (double)(o.done + o.rejected) : 0.0, o.pc_max);
     }
     printf("# steps_done=%lld iterations_max_exceeded=%lld steps_rejected=%lld mean_pc_iterations=%.3f max_pc_iterations=%d "
-           "flags_checked=0x0f flags_raised=0x%02x wall_seconds=%.3f kernel_seconds=%.3f E=%d system_steps=%lld "
-           "system_steps_per_s=%.2f\n",
+           "flags_checked=0x0f flags_raised=0x%02x wall_seconds=%.3f kernel_seconds=%.3f first_launch_seconds=%.3f E=%d "
+           "system_steps=%lld system_steps_per_s=%.2f\n",
            out[0].done, mx_all, rej_all, att_all ? (double)pc_all / (double)att_all : 0.0, pcmax_all, fl_all, wall,
-           t_kernel, E, (long long)steps * E, wall > 0 ? (double)steps * E / wall : 0.0);
+           t_kernel, t_first, E, (long long)steps * E, wall > 0 ? (double)steps * E / wall : 0.0);
     fflush(stdout);
     if (att_dir){
         for (int s = 0; s < E; s++){

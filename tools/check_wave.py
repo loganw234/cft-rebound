@@ -257,6 +257,7 @@ def main():
     ap.add_argument("--twin", default=None, help="on a GPU: the host twin each GPU record is also held to "
                                                  "(default: the GPU build's own --device host)")
     ap.add_argument("--corpus", default=None)
+    ap.add_argument("--expect", default=None, help="on a GPU: text its device line must contain, or nothing runs")
     args = ap.parse_args()
     B = os.path.abspath(args.build)
     gpu = args.device == "gpu"
@@ -278,6 +279,17 @@ def main():
     twin = None
     if gpu:
         twin = [os.path.abspath(args.twin)] if args.twin else [wave, "--device", "host"]
+        # The proof the GPU ran is its own description, not a backend= the
+        # program writes (V0, VALIDATION entry 54): every GPU record carries
+        # a `# device` line from the runtime, and --expect names the GPU it
+        # must be, so a shell that would open another device runs nothing.
+        rc, out, err = run([wave] + dev + ["--problem", os.path.join(root, "data", "problems", "kepler.txt"), "--dt",
+                                           "0.01", "--steps", "2", "--sample", "2", "--quiet"])
+        dline = next((l for l in out.splitlines() if l.startswith("# device ")), "")
+        print("  " + (dline or "no device line: %s" % (err or out).strip()[-200:]))
+        if rc != 0 or not dline or (args.expect and args.expect not in dline):
+            raise SystemExit("check_wave: REFUSED: the GPU is not the one expected (--expect %r): rc %d, %r"
+                             % (args.expect, rc, dline))
 
     # 1. gate 4 ------------------------------------------------------------
     print("1. gate 4: the arithmetic against libcft's software binary64")
@@ -357,6 +369,9 @@ def main():
         records[name] = (rec, prob, a, E, out)
         if not verdict(rc == 0, "%s %s: the program ran (rc %d)%s" % (name, what, rc, "" if rc == 0 else ": " + err.strip()[-300:])):
             continue
+        if gpu:
+            d = [l for l in out.splitlines() if l.startswith("# device ")]
+            verdict(len(d) == 1 and d[0] == dline, "%s: the record's one device line is the GPU's" % name)
         rc, cout = compare(rec, prob, cft, E)
         members, parts, res = compare_summary(cout)
         ident = sum(1 for m in members if m[2] == "IDENTICAL")
