@@ -202,6 +202,33 @@ ifneq ($(OS),Windows_NT)
   endif
 endif
 
+# A HIP build of libcft.a (cft-fp256's GPU backend, G1B: the `hip:N`
+# device; its docs/HOSTAPI.md, "The GPU backend") carries backend_hip.o,
+# which is C++ and needs the GPU runtime at link time: libamdhip64 on
+# ROCm, the CUDA runtime under HIP's NVIDIA layer. Nothing in the
+# environment says to build it, so it is HIP=1 by hand. HIP_ROOT,
+# HIP_PLATFORM, HIP_CUDA and HIP_ARCH pass through to libcft's Makefile,
+# whose defaults are /opt/rocm, amd, /usr/local/cuda and gfx1102 (89 120
+# on nvidia). One libcft holds a card or a GPU, never both (round 5, P0).
+ifneq ($(OS),Windows_NT)
+  HIP ?= 0
+  ifeq ($(HIP),1)
+    ifeq ($(XRT),1)
+      $(error HIP=1 with XRT=1: one libcft holds a card (XRT=1) or a GPU (HIP=1), never both - build them in two trees)
+    endif
+    HIP_ROOT     ?= /opt/rocm
+    HIP_PLATFORM ?= amd
+    HIP_CUDA     ?= /usr/local/cuda
+    ifeq ($(HIP_PLATFORM),nvidia)
+      LIBS += -L$(HIP_CUDA)/lib64 -Wl,-rpath,$(HIP_CUDA)/lib64 -lcudart -lstdc++ -lpthread -ldl -lrt
+    else
+      LIBS += -L$(HIP_ROOT)/lib -Wl,-rpath,$(HIP_ROOT)/lib -lamdhip64 -lstdc++
+    endif
+    CFT_MAKEVARS += HIP=1 HIP_ROOT=$(HIP_ROOT) HIP_PLATFORM=$(HIP_PLATFORM) HIP_CUDA=$(HIP_CUDA) \
+                    $(if $(HIP_ARCH),HIP_ARCH="$(HIP_ARCH)")
+  endif
+endif
+
 all: $(B)/ias15_ref$(EXE) $(B)/ias15_cft$(EXE) $(B)/check_dropin$(EXE) \
      $(B)/libcft_rebound.a $(B)/libcft_ias15.a
 
