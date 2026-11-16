@@ -380,13 +380,16 @@ int main(int argc, char **argv){
         HIPCHECK(hipGetDevice(&dv));
         HIPCHECK(hipGetDeviceProperties(&pr, dv));
         char line[512];
-        snprintf(line, sizeof line, "%s (%s, %d multiprocessors, PCI %02x:%02x.%x, %zu MiB, warp %d)", pr.name,
 #if defined(__HIP_PLATFORM_AMD__)
-                 pr.gcnArchName,
+        const char *arch = pr.gcnArchName;
 #else
-                 "sm",
+        char archb[32]; snprintf(archb, sizeof archb, "sm_%d%d", pr.major, pr.minor);
+        const char *arch = archb;
 #endif
-                 pr.multiProcessorCount, pr.pciBusID, pr.pciDeviceID, pr.pciDomainID, (size_t)(pr.totalGlobalMem >> 20), pr.warpSize);
+        /* the device as the kernel's record names it (wave_gpu.inc, gpu_open()) */
+        snprintf(line, sizeof line, "hip:%d = %s (%s, %d multiprocessors, bus %04x:%02x:%02x.0, %zu MiB, warp %d)", dv,
+                 pr.name, arch, pr.multiProcessorCount, pr.pciDomainID, pr.pciBusID, pr.pciDeviceID,
+                 (size_t)(pr.totalGlobalMem >> 20), pr.warpSize);
         gpu_name = line;
         printf("device: %s\n", line);
     }

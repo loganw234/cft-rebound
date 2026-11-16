@@ -259,6 +259,12 @@ __host__ __device__ WAVE_INLINE int no_flag(double r){
     return ar > DBL_MIN && ar <= DBL_MAX;
 }
 
+/* The slow path of an add or a subtract reads its operands' classes only -
+ * NaN, signaling, finite - and none of them depends on a sign, so w_sub
+ * hands it b as it is. It once handed it w_neg(b): a sign flip in bits,
+ * which nvcc compiles as a negation that quiets a signaling NaN, so a - sNaN
+ * raised no INVALID on the RTX 5060 Ti (gate 4, MEASURED: 3 cases of
+ * 1,064,352; the host twin's g++ keeps the bits, and found none). */
 __host__ __device__ inline void slow_add(double a, double b, double r, Fl &fl, unsigned kind){
     if (is_nan(r)){
         if ((!is_nan(a) && !is_nan(b)) || is_snan(a) || is_snan(b)) fl.raise(F_INVALID, kind);   /* inf - inf */
@@ -286,7 +292,7 @@ __host__ __device__ WAVE_INLINE double w_add(double a, double b, Fl &fl){
 }
 __host__ __device__ WAVE_INLINE double w_sub(double a, double b, Fl &fl){
     const double r = a - b;
-    WAVE_CHECK(!(w_abs(r) <= DBL_MAX), slow_add(a, w_neg(b), r, fl, K_SUB));
+    WAVE_CHECK(!(w_abs(r) <= DBL_MAX), slow_add(a, b, r, fl, K_SUB));
     return r;
 }
 

@@ -419,9 +419,14 @@ def main():
     mism = [l for l in out.splitlines() if l.startswith("MISMATCH")]
     for l in mism[:50]:
         print("    " + l)
-    verdict(rc == 0 and "RESULT: PASS" in out and not mism,
-            "every result's bits and every flag of %d operations are libcft's (rc %d, %d mismatches)"
-            % (sum(int(n) for n in re.findall(r"^\S+ +(\d+) cases", out, re.M)), rc, len(mism)))
+    # on a GPU the corpus names its device as the records do, and it must
+    # be the one expected
+    cdev = next((l for l in out.splitlines() if l.startswith("device: ")), "")
+    ondev = not gpu or (cdev != "" and (not args.expect or args.expect in cdev))
+    verdict(rc == 0 and "RESULT: PASS" in out and not mism and ondev,
+            "every result's bits and every flag of %d operations are libcft's (rc %d, %d mismatches)%s"
+            % (sum(int(n) for n in re.findall(r"^\S+ +(\d+) cases", out, re.M)), rc, len(mism),
+               "" if not gpu else ", on %s" % (cdev[8:].split(" (")[0] if cdev else "NO DEVICE LINE")))
 
     # 2. the constants ------------------------------------------------------
     print("2. the constants")
