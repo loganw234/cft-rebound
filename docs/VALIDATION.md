@@ -7057,3 +7057,82 @@ both.
   beside a second, stale row written with two spaces after its pipe,
   which it does not count. It refuses a correct row that writes the pin
   in 8 characters or in full (VP).
+
+## 54. Round 5's P0: this tree built with libcft's GPU backend, and the software backend's bits on an RX 7600 through `hip:0`
+
+**2026-11-16.** The desktop for the build rules, and nvidia-box for the
+GPU: the RX 7600 (gfx1102), Linux 7.0, ROCm with HIP 7.16, gcc 13.3,
+Python 3.12.3. Pins as in entry 53. The GPU window was booked in the
+TimeSheet (B0043 and B0044); P0's build and smoke, short runs, went
+first, after `check --short` found the window free. The lead's commits
+on `round5-p0`, from main at `1354a05`: `d95ac0d`, the Makefile;
+`5389ff7`, ROUND5.md; and this one.
+
+### The build
+
+The Makefile's `HIP=1` (`d95ac0d`) passes `HIP_ROOT`, `HIP_PLATFORM`,
+`HIP_CUDA` and `HIP_ARCH` through to libcft's own Makefile. It links the
+runtime libcft's HIPLIBS names: libamdhip64 and libstdc++ on ROCm; the
+CUDA runtime with libstdc++, pthread, dl and rt under HIP's NVIDIA layer.
+`HIP=1` with `XRT=1` is refused, as libcft refuses it. `HIP=0`, the
+default, adds nothing.
+
+On nvidia-box, ~/cft-rebound-r5 was cloned from git bundles of this
+repository at `round5-p0` and of its two pins, made from the desktop's
+local clones and carried over SSH. Nothing was fetched from the web.
+`check_pins.sh` passes there. `make HIP=1 PYTHON=python3 all programs`
+built in 31 s, and `build/ias15_cft` links ROCm's libamdhip64.so.7.
+
+It has 15 warnings:
+- 14 are REBOUND's own: `fread` and `vasprintf` results unchecked, in
+  binarydata.c and simulationarchive.c, under Ubuntu's fortified glibc.
+- 1 is this port's. GCC 13 warns at src/ias15_cft.c:2155 that
+  `vcopy`'s source may be null. That source is the program engine's
+  deposit, allocated before any program runs. BELIEVED a false
+  positive: the program engine ran and matched below. MinGW's build
+  does not raise it.
+
+### The smoke: one binary, the software backend against `hip:0`
+
+kepler, `--dt 0.01 --epsilon 1e-9 --steps 50 --sample 10`, at binary64,
+binary128 and binary256, on the loop engine and on the program engine in
+the FMA form. Each case ran twice from the same build, once on the
+software backend and once with `CFT_REBOUND_ARTIFACT=hip:0`
+`CFT_HIP_INFO=1`. MEASURED:
+- **The bits.** Every sample line and every counter is the same in all
+  6 cases. The physics counters, the same both ways: 50 steps; 3.44
+  passes a step at binary64, 8.52 and 8.58 at binary128 (loop and
+  program), and 12.00, the corrector's cap, at binary256.
+- **The two lines that differ are routes.** `indexed` and
+  `pair_gather` read `by=absent` on `hip:0` and `by=opt_in` on the
+  software backend. The device publishes no INDEXED, and both routes are
+  off either way.
+- **The device line:** "hip:0 = AMD Radeon RX 7600 (gfx1102, 16
+  multiprocessors, bus 0000:03:00.0, 8176 MiB), HIP platform amd,
+  runtime 71626385, driver 71626385; of 1 visible; this libcft: HIP_ARCH
+  gfx1102, stage 64 MiB, page 256 bytes, kernels 46/46/64 registers and
+  5572/5572/13716 bytes local a thread (run/level/seq)".
+- **Wall seconds,** the program's own clock, one run each, not ranked:
+
+| format | engine | software | `hip:0` |
+|---|---|---|---|
+| binary64 | loop | 1.10 | 31.6 |
+| binary64 | program | 0.85 | 7.98 |
+| binary128 | loop | 3.29 | 85.9 |
+| binary128 | program | 2.40 | 18.8 |
+| binary256 | loop | 7.13 | 154.0 |
+| binary256 | program | 3.78 | 35.1 |
+
+  The default path is bound by its calls on a GPU, as on the card (entry
+  37). cft-fp256's G1C measured 234 µs a call on this GPU (READ).
+
+The comparison first called all 6 cases different. It had not expected
+the route lines; the data never differed.
+
+### What this does not establish
+
+- **The RTX 5060 Ti.** P0 did not build in WSL `cft-gpu`; that is P1's.
+- **The suite on `hip:0`.** One problem was run, not the gates: P1.
+- **The Python gates on nvidia-box.** Its Python has no mpmath, which
+  they need (ROUND5.md, decision 2).
+- **This commit's own suite,** which is in the report to Logan.
