@@ -7130,10 +7130,12 @@ software backend and once with `CFT_REBOUND_ARTIFACT=hip:0`
 | binary256 | loop | 7.13 | 154.0 |
 | binary256 | program | 3.78 | 35.1 |
 
-  On kepler the default path is bound by its calls on a GPU, as on the
-  card (entry 37). cft-fp256's G1B measured 234 µs a call on this GPU,
-  staged, in its first part (READ), and V0 measured this port's own at
-  286 µs.
+  The default path is bound by its calls on a GPU, as on the card (entry
+  37). cft-fp256's G1B measured 234 µs a call on this GPU, staged, in its
+  first part (READ). V0 measured this port's own, `wall_seconds` over the
+  trailer's calls: 286 µs on kepler's loop engine at binary64, and 218
+  to 769 µs over its 24 runs (binary64 218 to 364, binary128 336 to 472,
+  binary256 364 to 769).
 
 The comparison first called all 6 cases different. It had not expected
 the route lines; the data never differed.
@@ -7164,26 +7166,31 @@ TimeSheet (B0050). MEASURED:
 - **Controls:** eight kinds of planted change, on copies of eight cases'
   GPU files, were all caught: three hex digits, two counters, the
   header's backend, the device line and an attempts file.
-- **The routes,** forced on: on `hip:0`, `scalar` and `reduce_seg` run in
-  the software backend's bits, and `indexed` and `pair_gather` are
-  refused by name. `--door-selftest` on `hip:0` holds 116 cases
-  identical, with 48 not compared because their routes are absent.
-- **Not every problem is slower.** A 64-body ring wave ran faster on
-  `hip:0` than in software: 6.31 against 7.19 s on the loop engine, and
-  4.85 against 7.26 s on the program engine, one run each.
+- **The routes,** forced on, at binary64 and binary128: on `hip:0`,
+  `scalar` and `reduce_seg` run in the software backend's bits, and
+  `indexed` and `pair_gather` are refused by name. `--door-selftest` on
+  `hip:0`, at binary64, holds 116 cases identical, with 48 not compared
+  because their routes are absent.
+- **The ratio to software depends on the problem.** A 64-body ring wave
+  ran faster on `hip:0` than in software: 6.31 against 7.19 s on the
+  loop engine, and 4.85 against 7.26 s on the program engine, one run
+  each. Its GPU time is still its calls, at 244 and 271 µs a call. What
+  changes at 64 bodies is that software is slower.
 - **The record's `backend=hip:0` echoes the artifact string**
   (src/ias15_cft.c:4697-4699). It does not prove the GPU ran; the device
-  line does. The trailer's `seconds` and `steps_per_s` are CPU time, 1.7
-  to 1.9 times the wall time on `hip:0`.
+  line does. The trailer's `seconds` and `steps_per_s` are CPU time, 1.5
+  to 2.0 times the wall time over V0's 24 `hip:0` runs.
 - **Found:**
-  - `HIP_PLATFORM=cuda` falls into the amd branch and fails at link;
-  - `make HIP=1 example` fails, because examples/Makefile has no HIP
-    block;
-  - in a tree first built without HIP, `make HIP=1 all` leaves libcft.a
+  - `HIP_PLATFORM=cuda` falls into the amd branch. `make -n` shows
+    `-lamdhip64` on its link, so it is expected to fail there; not run,
+    since nvidia-box has no CUDA.
+  - `make HIP=1 example` fails (run): examples/Makefile has no HIP block.
+  - In a tree first built without HIP, `make HIP=1 all` leaves libcft.a
     software-only, and `hip:0` is then refused by name: `make clean`
     first.
 
-  None is this round's path. All fail loudly.
+  The first two are not this round's path. The third is, and ROUND5.md
+  lists it among the rules. Each that ran failed loudly.
 
 V0 sent P0 back for the warning's account, the per-call figures' source
 (G1B's, not G1C's), "refused by its loader" for index tables (they are

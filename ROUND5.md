@@ -56,8 +56,10 @@ lead on 2026-11-16 and its docs/HOSTAPI.md, "The GPU backend":
   1,228,415 cases.
 - **A call's cost.** G1B's first part measured about 87 µs a call on the
   RTX 5060 Ti and 234 µs on the RX 7600, staged. G1C measured 107 µs on
-  the 5060 Ti. V0 measured this port's own at 286 µs a call on the RX
-  7600 at binary64.
+  the 5060 Ti. V0 measured this port's own on the RX 7600, `wall_seconds`
+  over the trailer's calls: 286 µs on kepler's loop engine at binary64,
+  and 218 to 769 µs over its 24 runs (binary64 218 to 364, binary128 336
+  to 472, binary256 364 to 769).
 
 **P0's measurements, 2026-11-16.**
 - `make HIP=1 all programs` built this tree on nvidia-box in 31 s, and
@@ -80,11 +82,13 @@ lead on 2026-11-16 and its docs/HOSTAPI.md, "The GPU backend":
   | binary256 | loop | 7.13 | 154.0 |
   | binary256 | program | 3.78 | 35.1 |
 
-  So on kepler this port's default path is bound by its calls on a GPU,
-  as on the card (entry 37). It is not so for every problem. V0 found a
-  64-body ring wave faster on `hip:0` than in software: 6.31 against
-  7.19 s on the loop engine, and 4.85 against 7.26 s on the program
-  engine, one run each.
+  So this port's default path is bound by its calls on a GPU, as on the
+  card (entry 37). How that compares with software depends on the
+  problem. V0 found a 64-body ring wave faster on `hip:0` than in
+  software: 6.31 against 7.19 s on the loop engine, and 4.85 against
+  7.26 s on the program engine, one run each. Its GPU time is still its
+  calls (244 and 271 µs a call). What changes at 64 bodies is that
+  software is slower.
 - `CFT_HIP_INFO=1` names the device: "AMD Radeon RX 7600 (gfx1102, 16
   multiprocessors, bus 0000:03:00.0, 8176 MiB), HIP platform amd,
   runtime 71626385".
@@ -147,9 +151,10 @@ the earliest, and shares both GPUs.
     reached; a library path that turned the program engine on would copy
     from null. The program's own object does not warn (V0).
   - `HIP_PLATFORM=cuda`, libcft's plain-nvcc platform, falls into the
-    Makefile's amd branch and fails at link. `make HIP=1 example` fails:
-    examples/Makefile has no HIP block. Neither is this round's path
-    (V0).
+    Makefile's amd branch. `make -n` shows `-lamdhip64` on its link, so
+    it is expected to fail there; not run, since nvidia-box has no CUDA.
+    `make HIP=1 example` fails (run): examples/Makefile has no HIP block.
+    Neither is this round's path (V0).
 
 ## The parcels
 
@@ -174,13 +179,14 @@ default path costs on a GPU, so that P2 knows what it replaces.
 - **Prove the GPU ran.** A leg that quietly ran the software backend is
   a stand-in, and is a finding. Each run's `CFT_HIP_INFO` device line is
   required beside its verdict. The record's `backend=hip:0` only echoes
-  the artifact string the run was given (src/ias15_cft.c:4697-4699), so
-  it proves nothing (V0).
-- **The routes on `hip:0`** (V0): forced on, `scalar` and `reduce_seg`
-  run on the GPU in the software backend's bits, and `indexed` and
-  `pair_gather` are refused by name. `--door-selftest` on `hip:0` holds
-  116 cases identical, with 48 not compared because their routes are
-  absent. P1 holds them.
+  the artifact string the run was given (src/ias15_cft.c:4697-4699). It
+  does not prove the GPU ran; the device line does (V0).
+- **The routes on `hip:0`** (V0, at binary64 and binary128): forced on,
+  `scalar` and `reduce_seg` run on the GPU in the software backend's
+  bits, and `indexed` and `pair_gather` are refused by name.
+  `--door-selftest` on `hip:0` at binary64 holds 116 cases identical,
+  with 48 not compared because their routes are absent. P1 holds them
+  at every format.
 - **The GPU seam test** (ROUND4.md, "What the integrator keeps"):
   tools/compare_run.py pointed at P1's first `hip:0` ring record, with a
   difference planted in that record and shown caught by name.
@@ -190,8 +196,8 @@ default path costs on a GPU, so that P2 knows what it replaces.
   scratch slots and 512 bank slots.
 - **Costs:** per call and per step, at each format, on each GPU,
   MEASURED and labelled, on the trailer's `wall_seconds`. Its `seconds`
-  and `steps_per_s` are CPU time, which HIP's own threads make 1.7 to
-  1.9 times the wall time on `hip:0` (V0). One run a row ranks nothing
+  and `steps_per_s` are CPU time, which HIP's own threads make 1.5 to
+  2.0 times the wall time on `hip:0` (V0, over 24 runs). One run a row ranks nothing
   within the noise (CLAUDE.md).
 - **Physics counters beside the bits,** as every gate prints them.
 - **Not P1's:** any change to the port's source. A refusal that would
