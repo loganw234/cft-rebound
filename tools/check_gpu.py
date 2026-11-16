@@ -182,6 +182,20 @@ def probe(real, art, info=True):
     return p.returncode, p.stdout, p.stderr, caps, routes, devlines
 
 
+def feature_names(bits):
+    """The cft_caps.seq_features bits in a mask, by their names in the pinned
+    cft.h, read rather than typed."""
+    names = []
+    try:
+        with open(os.path.join(root, "third_party", "cft-fp256", "host", "include", "cft.h")) as f:
+            for m in re.finditer(r"^#define (CFT_(?:SEQ_FEAT|FEAT|ALU_EXT)_\w+)\s+0x([0-9a-fA-F]+)u", f.read(), re.M):
+                if bits & int(m.group(2), 16):
+                    names.append(m.group(1))
+    except OSError:
+        pass
+    return " and ".join(names) or "?"
+
+
 def libcft_has_hip(lib):
     """Whether libcft.a carries the GPU backend's object, by its member list."""
     try:
@@ -392,24 +406,25 @@ def first_diff(a, b):
     return None
 
 
-def name_column(line, x, y):
-    """Which field of a record line two texts first differ in, by the
-    record's own column layout (system s sample k step, t dt_next dt_last E,
-    then six a body, then | t_hi t_lo)."""
+def name_column(x, y):
+    """Where two lines first differ: the field, by the record's column layout
+    on a sample line (system s sample k step, t dt_next dt_last E, six a body,
+    then | t_hi t_lo), and its two values."""
     xs, ys = x.split(), y.split()
     j = next((k for k, (p, q) in enumerate(zip(xs, ys)) if p != q), min(len(xs), len(ys)))
+    vals = (xs[j] if j < len(xs) else "<end>", ys[j] if j < len(ys) else "<end>")
     off = 2 if xs[:1] == ["system"] else 0
     if xs[off:off + 1] != ["sample"]:
-        return "field %d" % (j + 1)
+        return "field %d" % (j + 1), vals
     k = j - off - 3
     if "|" in xs and j > xs.index("|"):
-        return ("t_hi", "t_lo")[min(j - xs.index("|") - 1, 1)]
+        return ("t_hi", "t_lo")[min(j - xs.index("|") - 1, 1)], vals
     if k < 0:
-        return ("sample", "step")[min(j - off - 1, 1)] if j > off else "sample"
+        return ("sample", "step")[min(j - off - 1, 1)] if j > off else "sample", vals
     if k < 4:
-        return ("t", "dt_next", "dt_last", "E")[k]
+        return ("t", "dt_next", "dt_last", "E")[k], vals
     b, c = divmod(k - 4, 6)
-    return "%s of body %d" % (("x", "y", "z", "vx", "vy", "vz")[c], b)
+    return "%s of body %d" % (("x", "y", "z", "vx", "vy", "vz")[c], b), vals
 
 
 def physics(text):
@@ -468,8 +483,8 @@ def analyse(d, probe_line, unpublished):
         fd = first_diff(a, b)
         if fd:
             i, x, y = fd
-            why.append("stdout line %d (%s): device %r, software %r" % (i + 1, name_column(None, x, y),
-                                                                       short(x, 160), short(y, 160)))
+            col, (vx, vy) = name_column(x, y)
+            why.append("stdout line %d, %s: device %s, software %s" % (i + 1, col, short(vx, 80), short(vy, 80)))
         for flag in r.get("outputs", []):
             if flag.endswith(":missing"):
                 continue
@@ -552,11 +567,14 @@ def witness_verdict(label, res, need_device=True):
     return ok, text, detail
 
 
-def run_witnessed(shadow, leg, cmd, env, log):
+def run_witnessed(shadow, leg, cmd, env, log, errlog=None):
+    """A leg's command, its stdout to log and its stderr with it unless
+    errlog names a file of its own."""
     d = shadow.start(leg)
     t0 = time.time()
-    with open(log, "w") as f:
-        p = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env, cwd=root)
+    with open(log, "w") as f, open(errlog or os.devnull, "w") as g:
+        p = subprocess.run(cmd, stdout=f, stderr=g if errlog else subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                           env=env, cwd=root)
     return p.returncode, time.time() - t0, d
 
 
@@ -580,17 +598,17 @@ def controls(shadow, work, art, probe_line, unpublished, env_dev):
     out = read(os.path.join(pd, tag + ".dev.out")).splitlines()
     i = max(k for k, l in enumerate(out) if l.startswith("sample "))
     toks = out[i].split()
-    j = 3 + 4 + 2                                  # sample k step, t dt_next dt_last E, body 0's x y, then its z
+    j = 3 + 4 + 6                                  # sample k step, t dt_next dt_last E, body 0's six, then body 1's x
     mant = toks[j].split("p")[0]
     toks[j] = mant[:-1] + "%x" % (int(mant[-1], 16) ^ 1) + toks[j][len(mant):]
     out[i] = " ".join(toks)
     with open(os.path.join(pd, tag + ".dev.out"), "w", newline="\n") as f:
         f.write("\n".join(out) + "\n")
     pres = analyse(pd, probe_line, unpublished)
-    hit = pres["differ"] and ("stdout line %d (z of body 0)" % (i + 1)) in pres["differ"][0]
+    hit = pres["differ"] and ("stdout line %d, x of body 1: device %s" % (i + 1, toks[j])) in pres["differ"][0]
     verdict(hit and not witness_verdict("", pres)[0],
-            "control a: one hex digit of body 0's z on the record's line %d, planted in the device's output: %s"
-            % (i + 1, "caught, " + short(pres["differ"][0].split(": ", 1)[1], 200) if pres["differ"] else "NOT CAUGHT"))
+            "control a: one hex digit of body 1's x on the record's line %d, planted in the device's output: %s"
+            % (i + 1, "caught: " + pres["differ"][0].split(": ", 1)[1] if pres["differ"] else "NOT CAUGHT"))
     # (b) one byte of the device's attempts record
     with open(os.path.join(pd, tag + ".dev.out"), "w", newline="\n") as f:
         f.write(read(os.path.join(d, tag + ".dev.out")))
@@ -766,7 +784,7 @@ def seam(shadow, work, art, probe_line, unpublished, env_dev, env_sw, real):
                 "--steps", "8", "--sample", "4", "--quiet"]
     recpath = os.path.join(work, "ring2w_z.%s.rec" % art.replace(":", ""))
     rc, secs, d = run_witnessed(shadow, "seam", [os.path.join(shadow.dir, "ias15_cft" + EXE)] + run_args, env_dev,
-                                recpath)
+                                recpath, recpath + ".err")
     rec_text = read(recpath)
     res = analyse(d, probe_line, unpublished)
     ok, text, detail = witness_verdict("the ring's record", res)
@@ -875,6 +893,8 @@ def main():
     ap.add_argument("--legs", default="", help="only these legs, by name, comma separated")
     ap.add_argument("--skip", default="", help="every leg but these")
     ap.add_argument("--no-legs", action="store_true", help="the device, the controls, the routes and the seam only")
+    ap.add_argument("--parts", default="controls,routes,seam",
+                    help="which of the controls, the routes and the seam run before the legs (all three by default)")
     ap.add_argument("--formats", default="fp64,fp128,fp256", help="the routes' formats")
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--list", action="store_true", help="print each leg's command and exit")
@@ -934,10 +954,11 @@ def main():
         except ValueError:
             diff = -1
         verdict(rcs == 0 and not slines and caps.get("formats") and caps.get("max_scratch") and caps.get("max_consts"),
-                "%s --probe: backend %s, formats %s, seq_features %s (the software backend's %s less 0x%x), "
-                "max_scratch %s, max_consts %s; routes published: %s; NOT published: %s"
+                "%s --probe: backend %s, formats %s, seq_features %s (the software backend's %s less 0x%x, %s), "
+                "max_scratch %s, max_consts %s, buffers_resident %s; routes published: %s; NOT published: %s"
                 % (art, caps.get("backend"), caps.get("formats"), caps.get("seq_features"),
-                   scaps.get("seq_features"), diff, caps.get("max_scratch"), caps.get("max_consts"),
+                   scaps.get("seq_features"), diff, feature_names(diff) if diff > 0 else "none",
+                   caps.get("max_scratch"), caps.get("max_consts"), caps.get("buffers_resident"),
                    ", ".join(published) or "none", ", ".join(unpublished) or "none"))
         if os.name == "nt":
             raise Refused("the witness is a POSIX script; run this on the GPU host's Linux")
@@ -961,11 +982,23 @@ def main():
     print("  work: %s; every witnessed program's kept output is under %s" % (work, shadow.legs))
 
     t_start = time.time()
+    parts = [p for p in args.parts.split(",") if p]
+    if [p for p in parts if p not in ("controls", "routes", "seam")]:
+        print("REFUSED: --parts takes controls, routes and seam")
+        return 2
     if not want or args.no_legs:
-        controls(shadow, work, art, probe_line, unpublished, env_dev)
-        routes(real, art, probe_line, unpublished, published, (env_dev, env_sw),
-               [f for f in args.formats.split(",") if f])
-        seam(shadow, work, art, probe_line, unpublished, env_dev, env_sw, real)
+        if "controls" in parts:
+            controls(shadow, work, art, probe_line, unpublished, env_dev)
+        if "routes" in parts:
+            routes(real, art, probe_line, unpublished, published, (env_dev, env_sw),
+                   [f for f in args.formats.split(",") if f])
+        if "seam" in parts:
+            seam(shadow, work, art, probe_line, unpublished, env_dev, env_sw, real)
+        skipped = [p for p in ("controls", "routes", "seam") if p not in parts]
+        if skipped:
+            print("  note: NOT RUN, by --parts: %s" % ", ".join(skipped))
+    else:
+        print("  note: the controls, the routes and the seam NOT RUN: --legs names a subset")
 
     if chosen:
         print("4. the legs, each in its quick form, as the Makefile runs it, on %s through the witness" % art)
