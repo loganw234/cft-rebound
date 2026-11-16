@@ -824,13 +824,16 @@ check-light: check-pins all programs $(ARCHIVE_GATES)
 # the software backend's record from the same arguments. Then the routes on
 # the device, the GPU seam test and the witness's own controls. Not through
 # the gate cache: a GPU run is its own evidence, and a cached pass would
-# carry no device line. GPU_LEGS names a subset, GPU_SKIP leaves legs out.
+# carry no device line. GPU_LEGS names a subset, GPU_SKIP leaves legs out,
+# and GPU_EXPECT is text the device line must contain or nothing runs (in
+# WSL cft-gpu, "RTX 5060 Ti": hip:0 must never be the 4070 there).
 GPU_ARTIFACT ?= hip:0
 GPU_LEGS     ?=
 GPU_SKIP     ?=
+GPU_EXPECT   ?=
 .PHONY: check-gpu
 check-gpu: check-pins all programs
-	$(PYTHON) tools/check_gpu.py --build $(B) --artifact $(GPU_ARTIFACT) --hip '$(HIP)' \
+	$(PYTHON) tools/check_gpu.py --build $(B) --artifact $(GPU_ARTIFACT) --hip '$(HIP)' --expect '$(GPU_EXPECT)' \
 	    $(if $(GPU_LEGS),--legs $(GPU_LEGS)) $(if $(GPU_SKIP),--skip $(GPU_SKIP))
 
 # The worked round trip, built in the tree and run against the

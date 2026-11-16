@@ -890,6 +890,8 @@ def main():
     ap.add_argument("--build", default=os.path.join(root, "build"))
     ap.add_argument("--artifact", default="hip:0")
     ap.add_argument("--hip", default="", help="the Makefile's HIP, so a stale libcft.a can be named")
+    ap.add_argument("--expect", default="", help="text the device line must contain, or nothing runs: the GPU "
+                    "this host's run is meant for (in cft-gpu, RTX 5060 Ti, so that hip:0 is never the 4070)")
     ap.add_argument("--legs", default="", help="only these legs, by name, comma separated")
     ap.add_argument("--skip", default="", help="every leg but these")
     ap.add_argument("--no-legs", action="store_true", help="the device, the controls, the routes and the seam only")
@@ -945,6 +947,9 @@ def main():
             raise Refused("%s opened with CFT_HIP_INFO=1 and printed %d device line(s), not one naming it: %s"
                           % (art, len(lines), short(err, 400)))
         probe_line = lines[0]
+        if args.expect and args.expect not in probe_line:
+            raise Refused("%s is not the GPU this run is meant for: its device line does not name %r: %s"
+                          % (art, args.expect, probe_line))
         rcs, outs, errs, scaps, srts, slines = probe(real, "")
         unpublished = sorted(r for r, (bit, pub) in rts.items() if not pub)
         published = sorted(r for r, (bit, pub) in rts.items() if pub)
