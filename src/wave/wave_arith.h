@@ -61,6 +61,30 @@ struct Fl {
     }
 };
 
+/* ---- the two operations a compiler might hand to a library ------------
+ * On an x86-64 host, fma() and sqrt() are what the C runtime defines them
+ * as unless the compiler inlines them, and it does so only when it
+ * optimises: MEASURED with MinGW's g++ 16.1 at -O0, three calls to
+ * libmingwex's fma, a software emulation, and a ring record that differed
+ * from the port's. So the host takes the instructions themselves through
+ * their intrinsics, vfmadd and sqrtsd, at every optimisation level; the
+ * device takes its own fma and sqrt, which gate 4 holds to libcft. */
+#if !WAVE_DEVICE_PASS && (defined(__x86_64__) || defined(_M_X64))
+}   /* namespace wave */
+#  include <immintrin.h>
+namespace wave {
+__host__ __device__ WAVE_INLINE double hw_fma(double a, double b, double c){
+    return _mm_cvtsd_f64(_mm_fmadd_sd(_mm_set_sd(a), _mm_set_sd(b), _mm_set_sd(c)));
+}
+__host__ __device__ WAVE_INLINE double hw_sqrt(double a){
+    const __m128d v = _mm_set_sd(a);
+    return _mm_cvtsd_f64(_mm_sqrt_sd(v, v));
+}
+#else
+__host__ __device__ WAVE_INLINE double hw_fma(double a, double b, double c){ return fma(a, b, c); }
+__host__ __device__ WAVE_INLINE double hw_sqrt(double a){ return sqrt(a); }
+#endif
+
 /* ---- bits ------------------------------------------------------------ */
 __host__ __device__ WAVE_INLINE uint64_t d2u(double x){ uint64_t u; memcpy(&u, &x, 8); return u; }
 __host__ __device__ WAVE_INLINE double u2d(uint64_t u){ double x; memcpy(&x, &u, 8); return x; }
@@ -169,7 +193,7 @@ __host__ __device__ WAVE_INLINE int uf_mul(double a, double b){
     decomp(a, Ma, Ea); decomp(b, Mb, Eb);
     const double fa = (double)Ma, fb = (double)Mb;
     const double hi = fa * fb;
-    const double lo = fma(fa, fb, -hi);
+    const double lo = hw_fma(fa, fb, -hi);
     decomp(hi, Mh, Eh);                               /* hi >= 1 is normal: 2^52 <= Mh < 2^53 */
     return uf_from53(Mh, Eh + Ea + Eb, lo == 0.0);
 }
@@ -182,7 +206,7 @@ __host__ __device__ WAVE_INLINE int uf_div(double a, double b){
     decomp(a, Ma, Ea); decomp(b, Mb, Eb);
     const double fa = (double)Ma, fb = (double)Mb;
     const double q = fa / fb;
-    const double rem = fma(-q, fb, fa);
+    const double rem = hw_fma(-q, fb, fa);
     decomp(q, Mq, Eq);
     return uf_from53(Mq, Eq + Ea - Eb, rem == 0.0);
 }
@@ -305,7 +329,7 @@ __host__ __device__ WAVE_INLINE double w_div(double a, double b, Fl &fl){
 /* A square root never overflows, and the root of a positive binary64 is at
  * least 2^-537, so it never underflows: only the root of a negative. */
 __host__ __device__ WAVE_INLINE double w_sqrt(double a, Fl &fl){
-    const double r = sqrt(a);
+    const double r = hw_sqrt(a);
     WAVE_CHECK((sign_of(a) && !is_zero(a) && !is_nan(a)) || is_snan(a), fl.raise(F_INVALID, K_SQRT));
     return r;
 }
@@ -325,7 +349,7 @@ __host__ __device__ inline void slow_fma(double a, double b, double c, double r,
 }
 /* The port's FMA form issues fma at exactly the sites the step calls this. */
 __host__ __device__ WAVE_INLINE double w_fma(double a, double b, double c, Fl &fl){
-    const double r = fma(a, b, c);
+    const double r = hw_fma(a, b, c);
     WAVE_CHECK(!no_flag(r), slow_fma(a, b, c, r, fl));
     return r;
 }
