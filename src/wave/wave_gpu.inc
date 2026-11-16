@@ -34,12 +34,22 @@ struct DevExec {
 
 __constant__ Consts dK;
 
-__global__ void wave_kernel(Sys *S, SampleOut *out, long long target, Attempt *log, int logcap, int *logn){
+/* One launch: every system that has not reached `target` makes at most
+ * max_attempts step attempts, so that no launch runs long (a GPU under
+ * Windows' display driver model, WSL's, is reset by its watchdog after
+ * about two seconds); a system that reaches it forms its energy and
+ * writes its sample; one that has not counts itself in *unfinished, and
+ * the host launches again. The state is the system's own between
+ * launches, so where a launch ends moves no bit. */
+__global__ void wave_kernel(Sys *S, SampleOut *out, long long target, int max_attempts, Attempt *log, int logcap,
+                            int *logn, int *unfinished){
     __shared__ Shared sh;
     DevExec ex; ex.N = dK.N;
     Sys &y = S[blockIdx.x];
+    if (y.stopped || y.sampled_at == target) return;          /* the whole workgroup, read alike */
     Fl fl; fl.clear();
-    while (y.done < target && !y.stopped){
+    int n = 0;
+    while (y.done < target && !y.stopped && n < max_attempts){
         step_attempt(ex, dK, y, sh, fl);
         gather_flags(ex, dK, y, sh, fl);
         if (log && threadIdx.x == 0){
@@ -49,13 +59,19 @@ __global__ void wave_kernel(Sys *S, SampleOut *out, long long target, Attempt *l
                 a.dt = y.last_dt; a.accepted = y.last_accepted; a.iters = y.last_iters; a.capped = y.last_capped;
             }
         }
+        n++;
         __syncthreads();
     }
-    if (!y.stopped){
+    if (!y.stopped && y.done >= target){
         energy(ex, dK, y, sh, fl);
         gather_flags(ex, dK, y, sh, fl);
     }
-    if (threadIdx.x == 0) fill_sample(y, sh, dK.N, out[blockIdx.x]);
+    if (threadIdx.x == 0){
+        if (y.stopped || y.done >= target){
+            fill_sample(y, sh, dK.N, out[blockIdx.x]);
+            if (!y.stopped) y.sampled_at = target;
+        }else atomicAdd(unfinished, 1);
+    }
 }
 
 /* --zonal-selftest-from --device gpu: the term at the port's points, a
@@ -106,47 +122,51 @@ struct GpuRunner {
     Sys *dS = nullptr;
     SampleOut *dOut = nullptr;
     Attempt *dLog = nullptr;
-    int *dLogN = nullptr;
-    int logcap = 0;
+    int *dLogN = nullptr, *dUnf = nullptr;
+    int per_launch = 1;            /* step attempts a system a launch: doubled while a launch takes under 0.1 s */
+    long long launches = 0;
     GpuRunner(const Consts &K_, std::vector<Sys> &S_, std::vector<std::vector<Attempt>> *log_) : K(K_), S(S_), log(log_){
         const size_t E = S.size();
         HIPCHECK(hipMemcpyToSymbol(HIP_SYMBOL(dK), &K, sizeof K));
         HIPCHECK(hipMalloc((void **)&dS, E * sizeof(Sys)));
         HIPCHECK(hipMemcpy(dS, S.data(), E * sizeof(Sys), hipMemcpyHostToDevice));
         HIPCHECK(hipMalloc((void **)&dOut, E * sizeof(SampleOut)));
+        HIPCHECK(hipMalloc((void **)&dUnf, sizeof(int)));
+        HIPCHECK(hipMalloc((void **)&dLog, E * (size_t)MAXPL * sizeof(Attempt)));
+        HIPCHECK(hipMalloc((void **)&dLogN, E * sizeof(int)));
     }
-    ~GpuRunner(){ hipFree(dS); hipFree(dOut); if (dLog) hipFree(dLog); if (dLogN) hipFree(dLogN); }
+    static const int MAXPL = 256;
+    ~GpuRunner(){ hipFree(dS); hipFree(dOut); hipFree(dUnf); hipFree(dLog); hipFree(dLogN); }
     void block(long long target, std::vector<SampleOut> &out){
         const size_t E = S.size();
-        if (log){
-            /* each block's attempts: its steps plus its rejections, bounded here */
-            const long long have = out.empty() ? 0 : out[0].done;
-            const int cap = (int)(4 * (target - have) + 64);
-            if (cap > logcap){
-                if (dLog) hipFree(dLog);
-                if (dLogN) hipFree(dLogN);
-                HIPCHECK(hipMalloc((void **)&dLog, E * (size_t)cap * sizeof(Attempt)));
-                HIPCHECK(hipMalloc((void **)&dLogN, E * sizeof(int)));
-                logcap = cap;
+        std::vector<Attempt> buf;
+        std::vector<int> n(E);
+        for (;;){
+            int unf = 0;
+            HIPCHECK(hipMemcpy(dUnf, &unf, sizeof unf, hipMemcpyHostToDevice));
+            if (log) HIPCHECK(hipMemset(dLogN, 0, E * sizeof(int)));
+            const double t0 = now_s();
+            hipLaunchKernelGGL(wave_kernel, dim3((unsigned)E), dim3((unsigned)K.N), 0, 0, dS, dOut, target, per_launch,
+                               log ? dLog : nullptr, per_launch, log ? dLogN : nullptr, dUnf);
+            HIPCHECK(hipGetLastError());
+            HIPCHECK(hipDeviceSynchronize());
+            const double dt = now_s() - t0;
+            launches++;
+            HIPCHECK(hipMemcpy(&unf, dUnf, sizeof unf, hipMemcpyDeviceToHost));
+            if (log){
+                buf.resize(E * (size_t)per_launch);
+                HIPCHECK(hipMemcpy(n.data(), dLogN, E * sizeof(int), hipMemcpyDeviceToHost));
+                HIPCHECK(hipMemcpy(buf.data(), dLog, buf.size() * sizeof(Attempt), hipMemcpyDeviceToHost));
+                for (size_t s = 0; s < E; s++){
+                    if (n[s] > per_launch) die(3, "system %zu made %d step attempts in a launch of %d", s, n[s], per_launch);
+                    for (int i = 0; i < n[s]; i++) (*log)[s].push_back(buf[s * (size_t)per_launch + i]);
+                }
             }
-            HIPCHECK(hipMemset(dLogN, 0, E * sizeof(int)));
+            if (!unf) break;
+            if (dt < 0.1 && per_launch < MAXPL) per_launch *= 2;
+            else if (dt > 0.5 && per_launch > 1) per_launch /= 2;
         }
-        const unsigned threads = (unsigned)K.N;
-        hipLaunchKernelGGL(wave_kernel, dim3((unsigned)E), dim3(threads), 0, 0, dS, dOut, target, log ? dLog : nullptr,
-                           logcap, log ? dLogN : nullptr);
-        HIPCHECK(hipGetLastError());
-        HIPCHECK(hipDeviceSynchronize());
         HIPCHECK(hipMemcpy(out.data(), dOut, E * sizeof(SampleOut), hipMemcpyDeviceToHost));
-        if (log){
-            std::vector<int> n(E);
-            std::vector<Attempt> buf(E * (size_t)logcap);
-            HIPCHECK(hipMemcpy(n.data(), dLogN, E * sizeof(int), hipMemcpyDeviceToHost));
-            HIPCHECK(hipMemcpy(buf.data(), dLog, buf.size() * sizeof(Attempt), hipMemcpyDeviceToHost));
-            for (size_t s = 0; s < E; s++){
-                if (n[s] > logcap) die(3, "system %zu made %d step attempts in one sample block, past the log's %d", s, n[s], logcap);
-                for (int i = 0; i < n[s]; i++) (*log)[s].push_back(buf[s * (size_t)logcap + i]);
-            }
-        }
     }
 };
 

@@ -478,6 +478,7 @@ int main(int argc, char **argv){
             for (int c = 0; c < 3; c++){ y.x[c][p] = b.x[c]; y.v[c][p] = b.v[c]; }
         }
         y.dt = dt0;
+        y.sampled_at = -1;
     }
 
     /* ---- the header: main()'s, line for line (src/ias15_cft.c:4696) ---- */
@@ -541,6 +542,7 @@ int main(int argc, char **argv){
 #endif
     const double w0 = now_s();
     double t_kernel = 0.0, t_first = 0.0;   /* every launch's time, and the sample-0 launch's (the device's first) */
+    long long launches = 0;
     long k = 0, blocks_done = 0;
     for (;;){
         const long long target = blocks_done;
@@ -582,6 +584,9 @@ int main(int argc, char **argv){
         k++;
     }
     const double wall = now_s() - w0;
+#ifdef WAVE_HIP
+    if (dev) launches = dev->launches;
+#endif
     long long rej_all = 0, mx_all = 0, att_all = 0, pc_all = 0; int pcmax_all = 0; unsigned fl_all = 0;
     for (int s = 0; s < E; s++){
         const SampleOut &o = out[s];
@@ -594,10 +599,10 @@ int main(int argc, char **argv){
                    o.done + o.rejected ? (double)o.pc_total / (double)(o.done + o.rejected) : 0.0, o.pc_max);
     }
     printf("# steps_done=%lld iterations_max_exceeded=%lld steps_rejected=%lld mean_pc_iterations=%.3f max_pc_iterations=%d "
-           "flags_checked=0x0f flags_raised=0x%02x wall_seconds=%.3f kernel_seconds=%.3f first_launch_seconds=%.3f E=%d "
+           "flags_checked=0x0f flags_raised=0x%02x wall_seconds=%.3f kernel_seconds=%.3f first_launch_seconds=%.3f launches=%lld E=%d "
            "system_steps=%lld system_steps_per_s=%.2f\n",
            out[0].done, mx_all, rej_all, att_all ? (double)pc_all / (double)att_all : 0.0, pcmax_all, fl_all, wall,
-           t_kernel, t_first, E, (long long)steps * E, wall > 0 ? (double)steps * E / wall : 0.0);
+           t_kernel, t_first, launches, E, (long long)steps * E, wall > 0 ? (double)steps * E / wall : 0.0);
     fflush(stdout);
     if (att_dir){
         for (int s = 0; s < E; s++){

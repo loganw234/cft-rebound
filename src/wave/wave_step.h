@@ -95,6 +95,7 @@ struct Sys {
     long long attempts;                         /* step attempts made, accepted or not */
     int last_iters, last_capped, last_accepted; /* the last attempt's, for a schedule */
     double last_dt;                             /* the dt the last attempt tried */
+    long long sampled_at;                       /* the target whose sample the kernel has written, -1 for none */
 };
 
 /* The workgroup's shared block: positions for gravity, the reductions, J2
