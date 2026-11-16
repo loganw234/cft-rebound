@@ -588,6 +588,100 @@ programs: $(ASM)
 	@for f in programs/*.cfta; do b=$$(basename $$f .cfta); $(ASM) $$f -o programs/out/$$b.cftp || exit 1; done
 	@echo "assembled $$(ls programs/out/*.cftp | wc -l) programs"
 
+# ---------------------------------------------------------------------
+# The wave kernel (ROUND5.md, P2): the port's step under --arith fma at
+# the hardware's binary64, written once in src/wave/ as __host__
+# __device__ functions over double.
+#
+#   make wave-host        the host twin, the same source as plain C++
+#                         (MinGW g++ here, g++ on Linux): build/wave_host,
+#                         its contraction control build/wave_host_contract,
+#                         and gate 4's corpus build/wave_corpus, which links
+#                         libcft for its reference
+#   make HIP=1 wave       the kernel: build/wave (the twin too, --device
+#                         host), build/wave_corpus_gpu, and the GPU's
+#                         contraction control build/wave_contract. hipcc
+#                         for an AMD GPU (HIP_ARCH, gfx1102 by default), or
+#                         HIP's NVIDIA layer with HIP_PLATFORM=nvidia
+#                         (HIP_ARCH 120 by default)
+#
+# The flags are part of the arithmetic, and each one's absence is a silent
+# wrong answer (src/wave/wave_hd.h): no contraction of a*b + c, the CPU's
+# own fma (-mfma on x86-64; wave_hd.h refuses a host build without it), no
+# fast-math, subnormals kept, and under nvcc the correctly rounded divide
+# and square root. tools/check_wave.py holds the result, and its
+# contraction control is a build of the same source with contraction on,
+# which must fail. Linked static on Windows, so a gate's subprocess needs
+# no MinGW runtime on its PATH.
+WAVE_DEPS     := $(wildcard src/wave/*.h) src/wave/wave_gpu.inc src/ias15_constants.h src/ias15_limits.h
+WAVE_CXXFLAGS := -std=c++17 -O2 -ffp-contract=off -fno-math-errno -Wall -Wextra
+ifneq ($(filter x86_64% amd64%,$(shell $(CXX) -dumpmachine 2>/dev/null)),)
+  WAVE_CXXFLAGS += -mfma
+endif
+ifeq ($(OS),Windows_NT)
+  WAVE_LDFLAGS := -static
+else
+  WAVE_LDFLAGS :=
+endif
+
+.PHONY: wave-host wave
+wave-host: $(B)/wave_host$(EXE) $(B)/wave_host_unchecked$(EXE) $(B)/wave_host_contract$(EXE) $(B)/wave_corpus$(EXE)
+
+$(B)/wave_host$(EXE): src/wave/wave_main.cpp $(WAVE_DEPS)
+	@mkdir -p $(B)
+	$(CXX) $(WAVE_CXXFLAGS) -Isrc -o $@ src/wave/wave_main.cpp $(WAVE_LDFLAGS)
+
+# The contraction control (src/wave/wave_arith.h, WAVE_UNCHECKED): the
+# source with its flag checks compiled out, once with contraction off,
+# which must pass the gate, and once with a*b + c fused wherever the
+# compiler can, which must fail it.
+$(B)/wave_host_unchecked$(EXE): src/wave/wave_main.cpp $(WAVE_DEPS)
+	@mkdir -p $(B)
+	$(CXX) $(WAVE_CXXFLAGS) -DWAVE_UNCHECKED -Isrc -o $@ src/wave/wave_main.cpp $(WAVE_LDFLAGS)
+
+$(B)/wave_host_contract$(EXE): src/wave/wave_main.cpp $(WAVE_DEPS)
+	@mkdir -p $(B)
+	$(CXX) $(filter-out -ffp-contract=off,$(WAVE_CXXFLAGS)) -ffp-contract=fast -DWAVE_UNCHECKED -Isrc -o $@ src/wave/wave_main.cpp $(WAVE_LDFLAGS)
+
+$(B)/wave_corpus$(EXE): src/wave/wave_corpus.cpp $(WAVE_DEPS) $(CFTLIB)
+	@mkdir -p $(B)
+	$(CXX) $(WAVE_CXXFLAGS) -Isrc -I$(CFT)/include -o $@ src/wave/wave_corpus.cpp $(CFTLIB) $(LIBS) $(WAVE_LDFLAGS)
+
+ifeq ($(HIP),1)
+  HIPCC ?= $(HIP_ROOT)/bin/hipcc
+  ifeq ($(HIP_PLATFORM),nvidia)
+    WAVE_GPUFLAGS := -std=c++17 -O2 $(foreach a,$(or $(HIP_ARCH),120),-arch=sm_$(a)) -ftz=false -prec-div=true \
+                     -prec-sqrt=true -Xcompiler -mfma,-fno-math-errno
+    WAVE_NOCONTRACT := --fmad=false -Xcompiler -ffp-contract=off
+    WAVE_CONTRACT   := --fmad=true -Xcompiler -ffp-contract=fast
+  else
+    WAVE_GPUFLAGS := -std=c++17 -O2 $(foreach a,$(or $(HIP_ARCH),gfx1102),--offload-arch=$(a)) \
+                     -fno-gpu-flush-denormals-to-zero -fno-math-errno -Xarch_host -mfma
+    WAVE_NOCONTRACT := -ffp-contract=off
+    WAVE_CONTRACT   := -ffp-contract=fast
+  endif
+wave: $(B)/wave $(B)/wave_corpus_gpu $(B)/wave_unchecked $(B)/wave_contract
+
+$(B)/wave: src/wave/wave_main.cpp $(WAVE_DEPS)
+	@mkdir -p $(B)
+	$(HIPCC) $(WAVE_GPUFLAGS) $(WAVE_NOCONTRACT) -DWAVE_HIP -Isrc -o $@ src/wave/wave_main.cpp
+
+$(B)/wave_unchecked: src/wave/wave_main.cpp $(WAVE_DEPS)
+	@mkdir -p $(B)
+	$(HIPCC) $(WAVE_GPUFLAGS) $(WAVE_NOCONTRACT) -DWAVE_UNCHECKED -DWAVE_HIP -Isrc -o $@ src/wave/wave_main.cpp
+
+$(B)/wave_contract: src/wave/wave_main.cpp $(WAVE_DEPS)
+	@mkdir -p $(B)
+	$(HIPCC) $(WAVE_GPUFLAGS) $(WAVE_CONTRACT) -DWAVE_UNCHECKED -DWAVE_HIP -Isrc -o $@ src/wave/wave_main.cpp
+
+$(B)/wave_corpus_gpu: src/wave/wave_corpus.cpp $(WAVE_DEPS) $(CFTLIB)
+	@mkdir -p $(B)
+	$(HIPCC) $(WAVE_GPUFLAGS) $(WAVE_NOCONTRACT) -DWAVE_HIP -Isrc -I$(CFT)/include -o $@ src/wave/wave_corpus.cpp $(CFTLIB) $(LIBS)
+else
+wave:
+	@echo "make wave builds the GPU kernel and needs HIP=1 (make HIP=1 wave); the host twin is make wave-host" >&2; exit 2
+endif
+
 # Program images compiled INTO the engine. The library half loads nothing
 # from disk - load_one() is the standalone program's alone - so a route
 # whose new half is a program run carries its image in the binary, one
@@ -700,6 +794,19 @@ IN_REVERSAL := --input tools/check_reversal.py --input tools/reversal.py --input
                --input tools/check_equivalence.py $(IN_PROGRAM) --input data/problems/zonal_saturn.txt \
                $(patsubst %,--input %,$(wildcard results/horizon/reversal/*))
 
+# tools/check_wave.py (round 5's P2): the wave kernel's host twin, its two
+# contraction-control builds and gate 4's corpus (src/wave/, make wave-host),
+# held to the program through P4's driver, which it runs with P3's replay;
+# the generator it makes its rings with, the replay gate's flyby it adapts,
+# every module those import, and the problems it runs
+IN_WAVE     := --input tools/check_wave.py --input $(B)/wave_host$(EXE) --input $(B)/wave_host_unchecked$(EXE) \
+               --input $(B)/wave_host_contract$(EXE) --input $(B)/wave_corpus$(EXE) $(IN_PROGRAM) \
+               --input tools/compare_run.py --input tools/check_ensemble.py --input tools/check_records.py \
+               --input tools/check_equivalence.py --input tools/make_ring.py \
+               $(patsubst %,--input %,$(wildcard tools/extract_particle.py tools/check_replay.py)) \
+               --input data/problems/kepler_e099.txt --input data/problems/zonal_saturn.txt \
+               --input data/problems/kepler.txt --input data/problems/outer.txt --input data/problems/pythagorean.txt
+
 # The pins, checked at build time and not only at fetch time: a clone
 # under third_party/ that is not at its MANIFEST commit fails every tier
 # before a single gate runs, and so does a README whose one cft-fp256
@@ -709,7 +816,7 @@ IN_REVERSAL := --input tools/check_reversal.py --input tools/reversal.py --input
 check-pins:
 	@bash tools/check_pins.sh
 
-check: check-pins all programs $(ARCHIVE_GATES)
+check: check-pins all programs wave-host $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg constants --mode full --input tools/gen_constants.py -- $(PYTHON) tools/gen_constants.py --no-write
 	$(GATE_CACHE) --leg check_dropin --mode full $(IN_DROPIN) -- $(B)/check_dropin$(EXE)
 	$(GATE_CACHE) --leg check_dropin_wide --mode full $(IN_DROPIN) -- $(B)/check_dropin$(EXE) --wide
@@ -735,6 +842,7 @@ check: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_seams --mode full $(IN_SEAMS) -- $(PYTHON) tools/check_seams.py --build $(B)
 	$(GATE_CACHE) --leg check_ring_seams --mode full $(IN_RSEAMS) -- $(PYTHON) tools/check_ring_seams.py --build $(B)
 	$(GATE_CACHE) --leg check_reversal --mode full $(IN_REVERSAL) -- $(PYTHON) tools/check_reversal.py --build $(B)
+	$(GATE_CACHE) --leg check_wave --mode full $(IN_WAVE) -- $(PYTHON) tools/check_wave.py --build $(B)
 
 # the same gates at binary64 only, in a few minutes
 .PHONY: check-quick
@@ -744,7 +852,7 @@ check: check-pins all programs $(ARCHIVE_GATES)
 gate-cache-report:
 	@$(PYTHON) tools/gate_cache.py --report --cache-dir $(B)/.gate-cache
 
-check-quick: check-pins all programs $(ARCHIVE_GATES)
+check-quick: check-pins all programs wave-host $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg constants --mode quick --input tools/gen_constants.py -- $(PYTHON) tools/gen_constants.py --no-write
 	$(GATE_CACHE) --leg check_dropin --mode quick $(IN_DROPIN) -- $(B)/check_dropin$(EXE)
 	$(GATE_CACHE) --leg check_dropin_wide --mode quick $(IN_DROPIN) -- $(B)/check_dropin$(EXE) --wide
@@ -770,6 +878,7 @@ check-quick: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_seams --mode quick $(IN_SEAMS) -- $(PYTHON) tools/check_seams.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_ring_seams --mode quick $(IN_RSEAMS) -- $(PYTHON) tools/check_ring_seams.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_reversal --mode quick $(IN_REVERSAL) -- $(PYTHON) tools/check_reversal.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_wave --mode quick $(IN_WAVE) -- $(PYTHON) tools/check_wave.py --build $(B) --quick
 	@$(PYTHON) tools/gate_cache.py --report --cache-dir $(B)/.gate-cache
 
 # Every case touched, none of them thoroughly - the step counts are
@@ -782,7 +891,7 @@ check-quick: check-pins all programs $(ARCHIVE_GATES)
 # but sharing a stamp file would make each overwrite the other's and
 # neither would ever skip.
 .PHONY: check-light
-check-light: check-pins all programs $(ARCHIVE_GATES)
+check-light: check-pins all programs wave-host $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg constants --mode quick --input tools/gen_constants.py -- $(PYTHON) tools/gen_constants.py --no-write
 	$(GATE_CACHE) --leg check_dropin_light --mode quick $(IN_DROPIN) -- $(B)/check_dropin$(EXE) --light
 	$(GATE_CACHE) --leg check_dropin_wide_light --mode quick $(IN_DROPIN) -- $(B)/check_dropin$(EXE) --wide --light
@@ -808,6 +917,7 @@ check-light: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_seams --mode quick $(IN_SEAMS) -- $(PYTHON) tools/check_seams.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_ring_seams --mode quick $(IN_RSEAMS) -- $(PYTHON) tools/check_ring_seams.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_reversal --mode quick $(IN_REVERSAL) -- $(PYTHON) tools/check_reversal.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_wave --mode quick $(IN_WAVE) -- $(PYTHON) tools/check_wave.py --build $(B) --quick
 	@$(PYTHON) tools/gate_cache.py --report --cache-dir $(B)/.gate-cache
 
 # The worked round trip, built in the tree and run against the
