@@ -122,9 +122,14 @@ GPU_LEGS = [
     ("check-quick", "check_corrector"),
     ("check-light", "check_dropin_light"),
 ]
-# The programs that open the engine, and so are witnessed. ias15_ref is
-# REBOUND's own and opens no device.
-WITNESSED = ("ias15_cft", "check_dropin")
+# The programs that link libcft, and so are witnessed: each must show a
+# device line when its environment names the device. The first two are
+# also replayed on the software backend (their records are held); the gate
+# programs are only watched, for --reach. ias15_ref is REBOUND's own and
+# links no libcft.
+WITNESSED = ("ias15_cft", "check_dropin", "gate_real", "gate_subprocess", "gate_restart", "gate_write",
+             "gate_stock", "gate_promote")
+REPLAYED = ("ias15_cft", "check_dropin")
 OUT_FLAGS = ("--dt-out", "--attempts-out", "--record-iters")
 DEVICE_LINE = "cft hip: "
 TIMING = re.compile(r" (?:seconds|steps_per_s|wall_seconds|system_steps_per_s|t_[a-z_]+)=\S+")
@@ -220,6 +225,7 @@ import json, os, subprocess, sys, threading, time
 REAL = %(real)r
 SHADOW = %(shadow)r
 OUT_FLAGS = %(out_flags)r
+REPLAY = %(replay)r
 
 
 def pump(src, sink, keep):
@@ -297,7 +303,7 @@ def main():
             rec["outputs"].append(flag)
         except OSError:
             rec["outputs"].append(flag + ":missing")
-    if art:
+    if art and REPLAY:
         sargv, i = [], 0
         while i < len(argv):
             a = argv[i]
@@ -341,10 +347,12 @@ class Shadow:
                 os.symlink(src, os.path.join(self.dir, name))
         for prog in WITNESSED:
             real = os.path.join(build, prog + EXE)
+            if not os.path.isfile(real):
+                continue                          # not built here (the gates are `make archive`'s)
             path = os.path.join(self.dir, prog + EXE)
             with open(path, "w") as f:
                 f.write(WRAPPER % {"python": sys.executable, "real": real, "shadow": self.dir,
-                                   "out_flags": OUT_FLAGS})
+                                   "out_flags": OUT_FLAGS, "replay": prog in REPLAYED})
             os.chmod(path, 0o755)
             st = os.stat(real)
             os.utime(path, (st.st_atime, st.st_mtime))   # a leg that prints a binary's build time prints the real one's
@@ -455,7 +463,8 @@ def analyse(d, probe_line, unpublished):
             invs.append(rec)
     invs.sort(key=lambda r: r.get("started", 0))
     res = {"n": len(invs), "by_prog": {}, "device": 0, "software": [], "no_line": [], "bad_line": [],
-           "lines": set(), "identical": 0, "routed": 0, "differ": [], "stderr": [], "phys": [], "dropin": []}
+           "lines": set(), "identical": 0, "routed": 0, "differ": [], "stderr": [], "phys": [], "dropin": [],
+           "per_prog": {}, "unreplayed": 0}
     for r in invs:
         prog = os.path.basename(r["real"])
         res["by_prog"][prog] = res["by_prog"].get(prog, 0) + 1
@@ -473,6 +482,13 @@ def analyse(d, probe_line, unpublished):
         bad = [l for l in lines if l != probe_line]
         if bad:
             res["bad_line"].append("%s: %s" % (what, bad[0]))
+        res["per_prog"].setdefault(prog, [0, 0, 0])
+        res["per_prog"][prog][0] += 1
+        res["per_prog"][prog][1] += bool(lines)
+        if "sw_rc" not in r:                   # a watched program, not replayed (--reach)
+            res["per_prog"][prog][2] += r["rc"] != 0
+            res["unreplayed"] += 1
+            continue
         sw_out = read(os.path.join(d, r["tag"] + ".sw.out")) or ""
         sw_err = read(os.path.join(d, r["tag"] + ".sw.err")) or ""
         a, ra = norm_stdout(dev_out, unpublished, "dev")
@@ -560,7 +576,8 @@ def witness_verdict(label, res, need_device=True):
     progs = ", ".join("%s %d" % kv for kv in sorted(res["by_prog"].items()))
     text = ("%s: %d of %d process(es) on the device (%s), a device line each and every line the probe's; "
             "%d of %d record(s) identical to the software backend's from the same arguments%s"
-            % (label, res["device"] - len(res["no_line"]), res["n"], progs or "none", res["identical"], res["device"],
+            % (label, res["device"] - len(res["no_line"]), res["n"], progs or "none", res["identical"],
+               res["device"] - res["unreplayed"],
                ", %d route line(s) by=absent against opt_in" % res["routed"] if res["routed"] else ""))
     for s in res["stderr"][:2]:
         detail.append("note: stderr differs, %s" % short(s, 300))
@@ -881,8 +898,47 @@ def leg_result(text):
         return m[-1] == "PASS", oks, fails, re.findall(r"^RESULT: .*$", text, re.M)[-1]
     if "check_dropin: every case passed" in text:
         return True, oks, fails, "check_dropin: every case passed"
-    g = re.search(r"^check_dropin: \d+ FAILURES$", text, re.M)
-    return False, oks, fails, g.group(0) if g else "no RESULT line"
+    # the C gates' and check_archive's own last words
+    g = re.findall(r"^(check_dropin: \d+ FAILURES|check_dropin --wide: (?:passed|\d+ FAILURES)|gate_real: (?:PASS|FAIL)"
+                   r"|gate_subprocess: (?:PASS|\d+ FAILURES)|check_archive: (?:all archive gates pass|FAIL.*))$", text, re.M)
+    if g:
+        return g[-1].endswith(("PASS", "passed", "pass")), oks, fails, g[-1]
+    return False, oks, fails, "no RESULT line"
+
+
+def reach(args, legs, shadow, work, art, probe_line, unpublished, env_dev):
+    """Legs this gate does not hold, run on the device through the witness:
+    which of their processes open it. A survey: it reports, and gates
+    nothing."""
+    print("5. the reach: legs NOT held by check-gpu, run on %s through the witness (a survey, not a gate)" % art)
+    for leg in [x for x in args.reach.split(",") if x]:
+        key = ("check-quick", leg) if ("check-quick", leg) in legs else next((k for k in legs if k[1] == leg), None)
+        if not key:
+            print("  %s: NOT RUN, no such leg in the Makefile's check-quick or check-light" % leg)
+            continue
+        cmd = expand(legs[key], shadow.dir)
+        if cmd[0].startswith(shadow.dir) and not os.path.exists(cmd[0]):
+            print("  %s: NOT RUN, %s is not built here (make HIP=1 archive)" % (leg, os.path.basename(cmd[0])))
+            continue
+        log = os.path.join(work, "reach-" + leg + ".log")
+        print("  ... %s: %s (log %s), from %s" % (leg, " ".join(cmd), log, time.strftime("%H:%M:%S")))
+        sys.stdout.flush()
+        rc, secs, d = run_witnessed(shadow, "reach-" + leg, cmd, env_dev, log)
+        text = read(log) or ""
+        passed, oks, fails, result = leg_result(text)
+        res = analyse(d, probe_line, unpublished)
+        per = "; ".join("%s: %d process(es), %d with a device line%s" % (p, n, k, ", %d rc != 0" % e if e else "")
+                        for p, (n, k, e) in sorted(res["per_prog"].items())) or "no witnessed process"
+        print("  reach %s: rc %d, %s, %d ok, %d FAIL, %dm%02ds; %s"
+              % (leg, rc, result, oks, len(fails), int(secs) // 60, int(secs) % 60, per))
+        for f in fails[:4]:
+            print("       leg FAIL: %s" % short(f, 300))
+        for s in res["software"][:2]:
+            print("       ran the software backend: %s" % short(s, 200))
+        sys.stdout.flush()
+    print("  kept: %s" % work)
+    print("RESULT: REACH (a survey: nothing above is a verdict on the leg)")
+    return 0
 
 
 def main():
@@ -900,6 +956,9 @@ def main():
     ap.add_argument("--formats", default="fp64,fp128,fp256", help="the routes' formats")
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--list", action="store_true", help="print each leg's command and exit")
+    ap.add_argument("--reach", default="", help="instead of the gate: legs NOT held here (gate_real_fp64, "
+                    "gate_subprocess, check_archive, ...), run on the device through the witness, each process "
+                    "reported by whether it opened the device; a survey, never a verdict")
     args = ap.parse_args()
     build = os.path.abspath(args.build)
     art = args.artifact
@@ -987,6 +1046,8 @@ def main():
     print("  work: %s; every witnessed program's kept output is under %s" % (work, shadow.legs))
 
     t_start = time.time()
+    if args.reach:
+        return reach(args, legs, shadow, work, art, probe_line, unpublished, env_dev)
     parts = [p for p in args.parts.split(",") if p]
     if [p for p in parts if p not in ("controls", "routes", "seam")]:
         print("REFUSED: --parts takes controls, routes and seam")
