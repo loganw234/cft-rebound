@@ -1,0 +1,322 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later
+     Copyright 2026 the cft-rebound contributors. -->
+
+# Round 5: the GPU half begins - this tree on a GPU as it is, then the wave kernel at the hardware's binary64
+
+**Status, 2026-11-16: P0 built and smoke-run on the RX 7600; the
+parcels not yet dispatched.**
+
+Logan approved the round on 2026-11-16 ("the plan is also approved"),
+after its outline: the pin to G1C, this tree on `hip:0`, then P5 at
+binary64. His answers of 2026-11-13, relayed by cft-fp256's lead
+(ROADMAP.md, "The decisions that are Logan's"):
+- decision 6, P5: "Yes";
+- decision 7, the pin: "Yes, to G1C", done in docs/VALIDATION.md entry
+  53;
+- GPU-E's question 4: "Yes", J2 and J4 held on the GPU as
+  tools/check_zonal.py holds them on the CPU;
+- decision 3, a device divide: "Yes with GPU round 2", which is
+  cft-fp256's work, not this round's.
+
+Round 4 built on the CPU what a GPU wave will be held to: the ring
+generator, tools/compare_run.py, the particle replay and J2 and J4 in
+libcft's format (docs/RING.md). This round takes the first two GPU steps
+of ROADMAP.md's "The GPU half": this tree as it stands, run on a GPU
+through libcft's new `hip:N` device, and the wave kernel at binary64,
+the hardware's own.
+
+## Where it starts
+
+**The pin.** cft-fp256 `eae74e3`, its main with G1B, the HIP backend,
+and G1C, its GPU gates (entry 53). The same calls return the same bits
+through it on the software backend.
+
+**What `hip:N` does with this port's calls.** READ, from cft-fp256's
+lead on 2026-11-16 and its docs/HOSTAPI.md, "The GPU backend":
+- **On the GPU:**
+  - elementwise `cft_run`, one `cft_sf_compute` an element;
+  - `cft_reduce`, softfloat.c's tree, one level a launch;
+  - `cft_program_run_ex`, one thread a lane. Scratch depth is fixed at
+    256 slots and banks at 512. A program using an index table, or
+    augmentedAddition's codes AUGADD and AUGERR, is refused by its
+    loader, by name. `seq_features` is 0x75f1f: the software backend's
+    less INDEXED and AUGADD.
+- **Partly on the host:** `cft_div` and `cft_sqrt` take the program
+  route. One sequencer program a chunk runs the floating core on the
+  GPU; classification, centring and rounding run on the host
+  (divsqrt.c's `divsqrt_via_program`).
+- **On the host, on every device:** `cft_augmented_add`, which this
+  port's exact-time clock calls at every step (src/ias15_cft.c:3049)
+  and its compensated sums under `--cs augmented` (:1680).
+- **Refused:** `cft_get_image_id`, since a GPU loads no image; and a
+  non-zero `cft_open_ex` depth, which this port never asks for (it calls
+  `cft_open`).
+- **G1C** held `hip:N` to the software backend's bits on both GPUs at
+  every format: 14 corpora, 125,032 vector cases, and a replay of
+  1,228,415 cases. It measured about 87 µs a call on the RTX 5060 Ti and
+  234 µs on the RX 7600.
+
+**P0's measurements, 2026-11-16.**
+- `make HIP=1 all programs` built this tree on nvidia-box in 31 s, and
+  ias15_cft links ROCm's libamdhip64.
+- One binary, the software backend against `hip:0`, on kepler at
+  binary64, binary128 and binary256, on the loop engine and on the
+  program engine in the FMA form. Every sample line and every counter is
+  the same in all 6 runs: 50 steps each, 3.44, 8.52 or 8.58, and 12.00
+  passes a step. The only differing lines are the routes: `indexed` and
+  `pair_gather` read `by=absent` on `hip:0` against `by=opt_in` in
+  software, since the device publishes no INDEXED.
+- Wall seconds, one run each (MEASURED, not ranked):
+
+  | format | engine | software | hip:0 |
+  |---|---|---|---|
+  | binary64 | loop | 1.10 | 31.6 |
+  | binary64 | program | 0.85 | 7.98 |
+  | binary128 | loop | 3.29 | 85.9 |
+  | binary128 | program | 2.40 | 18.8 |
+  | binary256 | loop | 7.13 | 154.0 |
+  | binary256 | program | 3.78 | 35.1 |
+
+  So this port's default path is bound by its calls on a GPU, as on the
+  card (entry 37).
+- `CFT_HIP_INFO=1` names the device: "AMD Radeon RX 7600 (gfx1102, 16
+  multiprocessors, bus 0000:03:00.0, 8176 MiB), HIP platform amd,
+  runtime 71626385".
+
+**Study GPU-E2** (cft-fp256's docs/studies/GPU-E-mi300x-ring.md, READ):
+- **The wave.** Its shape a2 is one 64-lane wave a system: Saturn with J2
+  and J4 and six moons in seven lanes, and 57 test particles. Each wave
+  takes one step and one pass count, and holds its maxima across the
+  wave. The study runs one kernel a substep, each thread a body.
+- **What it leaves open.** It states no mapping onto NVIDIA's 32-wide
+  warps or RDNA3's wave32.
+- **Hardware binary64.** Every binary64 figure in it is libcft's own,
+  and it says nothing about the hardware's binary64. cft-fp256's
+  ROADMAP believes the native FMA correctly rounded, but notes that
+  libcft's contract also needs flags and subnormals.
+- **Its estimates for the ring at binary64,** 10 orbits:
+  - the RX 7600, 3 x 10^4 particles: 13 minutes;
+  - the RTX 5060 Ti, 10^5 particles: 14 minutes.
+
+**cft-fp256's GPU round 2,** READ from its lead: augmentedAddition on
+the device, index tables and deeper scratch, and the in-program divide
+and square root. It is drafted, dispatched from Tuesday 2026-11-17 at
+the earliest, and shares both GPUs.
+
+**The GPUs:**
+- **The RX 7600:** nvidia-box (192.168.0.2, by SSH), ROCm with HIP 7.16
+  and hipcc for gfx1102. This round works in ~/cft-rebound-r5* there,
+  and never in another session's directories.
+- **The RTX 5060 Ti:** WSL `cft-gpu`, through HIP 7.2.4's NVIDIA layer
+  (`HIP_PLATFORM=nvidia HIP_ROOT=/opt/rocm-7.2.4 HIP_ARCH=120`).
+  - It is CUDA device 1 in PCI order. Set `CUDA_DEVICE_ORDER=PCI_BUS_ID
+    CUDA_VISIBLE_DEVICES=1`, so that `hip:0` is the 5060 Ti and never
+    the 4070.
+  - The RTX 4070 drives the displays and stays unused.
+- **Booking:** every run of 10 minutes or more is booked in the
+  TimeSheet (`C:\Users\logan\source\repos\TimeSheet`), with its mode
+  stated, and released when it ends.
+
+## P0 - a HIP build of this tree, and a GPU host it runs on *(the lead's)*
+
+- **Done:** the Makefile's `HIP=1` (`d95ac0d`). It passes `HIP_ROOT`,
+  `HIP_PLATFORM`, `HIP_CUDA` and `HIP_ARCH` to libcft's Makefile and
+  links the GPU runtime: libamdhip64 on ROCm, the CUDA runtime under
+  HIP's NVIDIA layer. `HIP=1` with `XRT=1` is refused, as libcft refuses
+  it.
+- **Done:** ~/cft-rebound-r5 on nvidia-box, cloned from git bundles of
+  this repository and its two pins, carried over SSH. Nothing was
+  fetched from the web, and check-pins passes there.
+- **Done:** the smoke above.
+- **To do:** VALIDATION entry 54, the round's ledger, and P0's full
+  `make check` on the desktop, where `HIP=0` changes nothing. The build
+  in WSL `cft-gpu` is P1's, in its first window there.
+- **Found, not fixed:** GCC 13 on Ubuntu warns at src/ias15_cft.c:2155
+  that `vcopy`'s source may be null. That source is the program
+  engine's deposit, allocated before any program runs. BELIEVED a false
+  positive; the program engine ran and matched.
+
+## The parcels
+
+### P1 - this tree on `hip:0` as it is *(ROADMAP's GPU half, step 2)*
+
+Every record the suite makes, made on `hip:0`, must be the software
+backend's, or its leg refuses by name. Beside the bits go what the
+default path costs on a GPU, so that P2 knows what it replaces.
+
+- **Where:** the RX 7600 first, then the RTX 5060 Ti.
+- **What:** the suite's record-making legs in `--quick`, with
+  `CFT_REBOUND_ARTIFACT=hip:0`:
+  - check_records, check_equivalence, check_program_engine at binary64;
+  - check_ensemble, check_ring, check_replay and check_compare_run;
+  - check_zonal and check_reversal;
+  - check_corrector and check_dropin, through the registered integrator.
+
+  A full `make check` is out of reach: the calls make it 7 to 30 times
+  slower there.
+- **Prove the GPU ran.** A leg that quietly ran the software backend is
+  a stand-in, and is a finding. Each run's `CFT_HIP_INFO` device line
+  or its record's `backend=hip:0` is kept beside its verdict.
+- **The GPU seam test** (ROUND4.md, "What the integrator keeps"):
+  tools/compare_run.py pointed at P1's first `hip:0` ring record, with a
+  difference planted in that record and shown caught by name.
+- **What runs where, confirmed by measurement:** the clock's augmented
+  sum on the host at every step; the divides and square roots by the
+  program route; the index-table routes absent; programs within 256
+  scratch slots and 512 bank slots.
+- **Costs:** per call and per step, at each format, on each GPU,
+  MEASURED and labelled. One run a row ranks nothing within the noise
+  (CLAUDE.md).
+- **Physics counters beside the bits,** as every gate prints them.
+- **Not P1's:** any change to the port's source. A refusal that would
+  need one is reported first.
+
+### P2 - the wave kernel at the hardware's binary64 *(decision 6, P5)*
+
+One system a 64-thread workgroup, in the hardware's own binary64. It
+writes this repository's record format, so that tools/compare_run.py
+holds it to the CPU port bit for bit.
+
+- **The shape,** GPU-E2's a2: Saturn with J2 and J4 and six moons in
+  seven lanes, and 57 test particles. One step and one pass count a
+  system. The system's maxima and minimum are reduced in shared memory,
+  so that the kernel is the same on NVIDIA's 32-wide warps and on
+  RDNA3's wave32 and wave64; a wave-level intrinsic is an optimisation
+  for later.
+- **The arithmetic is the hardware's binary64:** add, multiply, fma,
+  divide and square root. They are BELIEVED correctly rounded, with
+  subnormals, on both toolchains by default (no fast-math). P2's first
+  gate measures that on a corpus against libcft's software binary64,
+  `cft_div` and `cft_sqrt` included, before anything rests on it.
+- **Flags.** A GPU has no IEEE flags. Where the port aborts on OVERFLOW,
+  DIVBYZERO or UNDERFLOW, the kernel checks the results itself and
+  stops by name. Anything it cannot check is a stated limit.
+- **The form is the port's FMA form at binary64** (`--arith fma`),
+  operation for operation:
+  - the predictor and the corrector's passes;
+  - gravity in ascending pair order, with the `active` split;
+  - J2 and J4 in src/ias15_zonal.inc's order;
+  - the step control;
+  - the exact-time clock, an augmented sum done as TwoSum in binary64.
+
+  So its records are `ias15_cft --arith fma --format fp64`'s, bit for
+  bit, every column, member by member.
+- **How it is built:**
+  - The step's arithmetic is `__host__ __device__` functions over
+    `double`. They run first on the host, with no GPU slot, held to the
+    CPU port's records.
+  - Then the same source runs as a HIP kernel: hipcc for gfx1102 on
+    nvidia-box, and HIP's NVIDIA layer for sm_120 in cft-gpu.
+  - A `make HIP=1` target builds it.
+- **What it is held to:**
+  - tools/compare_run.py against CPU reruns, on the ring generator's
+    waves with their zonal line: each member, and particles through
+    round 4's replay;
+  - the GPU seam test on its first record;
+  - J2 and J4 at binary64 to the CPU port's bits, which check_zonal
+    holds to the golden model and mpmath (Logan's "Yes" to GPU-E's
+    question 4).
+- **What it measures:** system-steps a second on each GPU at a few wave
+  counts, MEASURED and labelled, set beside GPU-E2's estimates. No other
+  speed claim.
+- **Not P2's:** binary128 and binary256, which need the device divide
+  (cft-fp256's round 2); more than one GPU; the ladder's full sizes; the
+  MI300X.
+
+### P3 - the driver takes a producer's own attempts records and schedules *(CPU only)*
+
+docs/RING.md: "To sample its particles without a rerun, a GPU run must
+write each wave's attempts record and corrector schedule, and the driver
+must take them: not built."
+
+- **What it builds:** tools/compare_run.py learns to take, beside a
+  producer's record, each member's attempts record and corrector
+  schedule, in the formats ias15_cft's `--attempts-out` and
+  `--record-iters` write. It samples particles by replaying them against
+  the producer's own schedule, with no rerun of the member.
+- **What it is held to:**
+  - with ias15_cft as the producer, particles sampled from its own files
+    are identical to those sampled through a rerun;
+  - one change planted in each file, the attempts record and the
+    schedule, is caught by name;
+  - a schedule from another wave is refused by its run key.
+- **No GPU.** P2's kernel writes these files when it can, and the seam
+  test below joins them.
+
+## Rules for every parcel
+
+Round 4's rules (ROUND4.md, "Rules for every parcel") hold, except
+where this round's GPUs change them:
+- **The GPU hosts.** A parcel may use a GPU only in a window it has
+  booked in the TimeSheet, as `--who cft-REBOUND/<parcel>`, with its mode
+  stated (`exclusive` for gates and stage runs), and must release it.
+  - The TimeSheet is on the desktop, so a run is booked there before
+    its SSH session, with that session's Windows pid attached (`book ...
+    --pid`).
+  - It runs only in its own directory there, ~/cft-rebound-r5-<parcel>
+    on nvidia-box and /root/cft-rebound-r5-<parcel> in cft-gpu.
+  - It never touches another session's directories.
+  - One agent at a time on a GPU host.
+- **Pins come by bundle.** Every clone, here and on a GPU host, is made
+  from this repository's local clones, and nothing is fetched from the
+  web. P0's bundles are in the round's ledger.
+- **The device trap.** In cft-gpu, `CUDA_DEVICE_ORDER=PCI_BUS_ID
+  CUDA_VISIBLE_DEVICES=1` comes before any `hip:0`. Keep `CFT_HIP_INFO`'s
+  line in every record set.
+- **No speed claims** beyond MEASURED rows, labelled, one run each,
+  unranked within the noise.
+- **No card, and never the RTX 4070.**
+
+## What the integrator keeps
+
+- **P0,** before anything is dispatched.
+- **The seam tests:**
+  - **The GPU seam,** in P1's brief, which is the GPU half's first: a
+    difference planted in the first GPU record, shown caught.
+  - **P1 x P2:** one ring wave at binary64 in the FMA form three ways,
+    on the CPU, on `hip:0` through libcft, and in P2's kernel. All three
+    are the same bits, beside the physics counters.
+  - **P2 x P3:** the driver samples P2's particles from P2's own
+    attempts records and schedules, if P2 writes them.
+- **The integrator-only files,** as in round 4, and this file.
+- **Every merge serially,** each with a full `make check` on the desktop
+  after it, never while a suite runs. The GPU legs are not in the
+  desktop's tiers. Each parcel's GPU results are read from its logs at
+  the merge.
+- **A verifier per parcel,** V1 to V3, re-running from a clean build
+  and fixing nothing. A GPU verifier books its own window.
+- **VALIDATION entries** 54 (P0) onward.
+
+## Order of the week
+
+| when | who | what |
+|---|---|---|
+| Monday | lead | P0: done on the RX 7600 except the launcher, the entry and its suite. P3 dispatched (CPU). P2's host half dispatched (CPU). |
+| Monday afternoon | P1 | On the RX 7600, in the lead's window (09:00 to 17:00), or its own. |
+| from Tuesday | P1, P2 | The 5060 Ti and the RX 7600, in windows clear of cft-fp256's round 2. |
+| as each returns | V1 to V3 | Verify. |
+| as each lands | lead | Merge, seam test, full `make check`. |
+
+## Decisions that are Logan's
+
+1. **Merges and pushes for this round.** Delegated as in round 4, or
+   each at his word.
+2. **mpmath on the GPU hosts.** nvidia-box's Python has none, and the
+   gates that check exactly need it.
+   - (a) Copy the desktop's mpmath 1.3.0, which is pure Python, into a
+     directory beside the clone, on PYTHONPATH.
+   - (b) pip-install it, which is a download.
+
+   The plan takes (a) unless he says otherwise.
+3. **P2's flags at the hardware's binary64.** By default the kernel
+   checks its own results for what the port's flags catch, and states
+   whatever it cannot.
+
+## Not in this round, and why
+
+- **Binary128 and binary256 on the GPU,** in a kernel. They need a
+  divide and square root inside it: cft-fp256's GPU round 2.
+- **The ladder at full size** (3 x 10^4 and 10^5 particles) **and the
+  MI300X:** after P2's kernel is held at small sizes. The MI300X waits on
+  AMD's time.
+- **The card:** nothing in this round needs it.
