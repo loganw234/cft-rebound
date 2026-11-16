@@ -12,6 +12,8 @@
 #                             [--no-legs] [--parts controls,routes,seam]
 #                             [--formats fp64,fp128,fp256] [--keep] [--list]
 #   python tools/check_gpu.py --reach gate_real_fp64,gate_subprocess,check_archive
+#   python tools/check_gpu.py --analyse <build>/check_gpu/<pid>/witness/<leg>
+#                             (a kept leg's verdict re-read; runs nothing)
 #
 # 0. THE DEVICE. ias15_cft --probe opens the artifact with CFT_HIP_INFO=1. A
 #    host with no such device, or a build whose libcft has no GPU backend, is
@@ -35,7 +37,11 @@
 #    this driver holds:
 #    - its device line: at least one, and every one the probe's. A process
 #      that ran the software backend while its leg was pointed at the device
-#      is a STAND-IN and FAILs its leg by name, with its arguments;
+#      is a STAND-IN and FAILs its leg by name, with its arguments. Counted
+#      apart, and reported: a process refused by its own arguments before it
+#      opened any device (it exits non-zero with no record, and the software
+#      backend refuses the same arguments with the same rc, stdout and
+#      stderr; check_corrector's --trace-pc beside --replay-iters is one);
 #    - its record: the software backend's from the same arguments, every line,
 #      every counter and every output file (--dt-out, --attempts-out,
 #      --record-iters) byte for byte. Set aside: the header's backend= value
@@ -482,6 +488,20 @@ def physics(text):
         return None
 
 
+def refused_early(r, d, dev_out, dev_err):
+    """A process with no device line that opened no device: it exited non-zero,
+    printed no record (no trailer), and the software backend, given the same
+    arguments, refused it the same way - its rc, its stdout and its stderr.
+    Such a process computed nothing, on any backend. A process that computed
+    and printed no device line is still caught (no_line), and so is one that
+    exits 0."""
+    if r["rc"] == 0 or "sw_rc" not in r or r["sw_rc"] != r["rc"] or "# steps_done=" in dev_out:
+        return False
+    sw_out = read(os.path.join(d, r["tag"] + ".sw.out")) or ""
+    sw_err = read(os.path.join(d, r["tag"] + ".sw.err")) or ""
+    return dev_out == sw_out and norm_stderr(dev_err) == norm_stderr(sw_err) and bool(norm_stderr(dev_err))
+
+
 def analyse(d, probe_line, unpublished):
     """Every process a leg started, from what the witness kept."""
     invs = []
@@ -494,7 +514,7 @@ def analyse(d, probe_line, unpublished):
     invs.sort(key=lambda r: r.get("started", 0))
     res = {"n": len(invs), "by_prog": {}, "device": 0, "software": [], "no_line": [], "bad_line": [],
            "lines": set(), "identical": 0, "routed": 0, "differ": [], "stderr": [], "phys": [], "dropin": [],
-           "per_prog": {}, "unreplayed": 0}
+           "per_prog": {}, "unreplayed": 0, "refused": []}
     for r in invs:
         prog = os.path.basename(r["real"])
         res["by_prog"][prog] = res["by_prog"].get(prog, 0) + 1
@@ -507,7 +527,13 @@ def analyse(d, probe_line, unpublished):
         res["device"] += 1
         lines = [l for l in dev_err.splitlines() if l.startswith(DEVICE_LINE)]
         res["lines"].update(lines)
-        if not lines:
+        if not lines and refused_early(r, d, dev_out, dev_err):
+            # refused by its own arguments before it opened any device (on
+            # the 5060 Ti, check_corrector's --trace-pc beside --replay-iters,
+            # rc 3): nothing computed, and the same refusal in software
+            res["refused"].append("%s (rc %d): %s" % (what, r["rc"], short(norm_stderr(dev_err)[-1:][0]
+                                                                       if norm_stderr(dev_err) else "", 160)))
+        elif not lines:
             res["no_line"].append("%s (CFT_HIP_INFO=%s, rc %d)" % (what, r.get("hip_info"), r["rc"]))
         bad = [l for l in lines if l != probe_line]
         if bad:
@@ -604,11 +630,16 @@ def witness_verdict(label, res, need_device=True):
         for extra in res["differ"][1:4]:
             detail.append("  and %s" % short(extra, 300))
     progs = ", ".join("%s %d" % kv for kv in sorted(res["by_prog"].items()))
-    text = ("%s: %d of %d process(es) on the device (%s), a device line each and every line the probe's; "
+    refused = res.get("refused", [])
+    text = ("%s: %d of %d process(es) on the device (%s), a device line each and every line the probe's%s; "
             "%d of %d record(s) identical to the software backend's from the same arguments%s"
-            % (label, res["device"] - len(res["no_line"]), res["n"], progs or "none", res["identical"],
+            % (label, res["device"] - len(res["no_line"]) - len(refused), res["n"], progs or "none",
+               ", and %d refused by their own arguments before opening it, as the software backend refuses them"
+               % len(refused) if refused else "", res["identical"],
                res["device"] - res["unreplayed"],
                ", %d route line(s) by=absent against opt_in" % res["routed"] if res["routed"] else ""))
+    for x in refused[:2]:
+        detail.append("refused before the device: %s" % short(x, 300))
     for s in res["stderr"][:2]:
         detail.append("note: stderr differs, %s" % short(s, 300))
     return ok, text, detail
@@ -1081,6 +1112,35 @@ def reach(args, legs, shadow, work, art, probe_line, unpublished, env_dev):
     return 0
 
 
+def reanalyse(d):
+    """A leg's verdict again, from its kept witness directory and its log: the
+    device line is the one its processes' kept stderr share, and the routes
+    the device does not publish are those its kept records say by=absent."""
+    leg = os.path.basename(d.rstrip("/"))
+    work = os.path.dirname(os.path.dirname(d.rstrip("/")))
+    counts, unpublished = {}, set()
+    for name in os.listdir(d):
+        if name.endswith(".dev.err"):
+            for l in (read(os.path.join(d, name)) or "").splitlines():
+                if l.startswith(DEVICE_LINE):
+                    counts[l] = counts.get(l, 0) + 1
+        elif name.endswith(".dev.out"):
+            unpublished.update(re.findall(r"^# route (\w+)=\w+ by=absent ", read(os.path.join(d, name)) or "", re.M))
+    probe_line = max(counts, key=counts.get) if counts else ""
+    print("check_gpu --analyse %s: leg %s, the device line its processes share (%d of %d lines): %s; routes absent "
+          "on it: %s" % (d, leg, counts.get(probe_line, 0), sum(counts.values()), probe_line or "NONE",
+                         ", ".join(sorted(unpublished)) or "none"))
+    text = read(os.path.join(work, leg + ".log")) or ""
+    passed, oks, fails, result = leg_result(text)
+    res = analyse(d, probe_line, sorted(unpublished))
+    wok, wtext, wdetail = witness_verdict("witness", res)
+    ok = passed and not fails and wok
+    verdict(ok, "%s, re-read: %s, %d ok, %d FAIL; %s" % (leg, result, oks, len(fails), wtext),
+            ["leg FAIL: %s" % short(f, 300) for f in fails[:5]] + wdetail + ["physics: %s" % physics_text(res)])
+    print("RESULT: %s" % ("PASS" if ok else "FAIL"))
+    return 0 if ok else 1
+
+
 def main():
     ap = argparse.ArgumentParser(description="this tree on a GPU, held to the software backend gate by gate")
     ap.add_argument("--build", default=os.path.join(root, "build"))
@@ -1100,7 +1160,11 @@ def main():
     ap.add_argument("--reach", default="", help="instead of the gate: legs NOT held here (gate_real_fp64, "
                     "gate_subprocess, check_archive, ...), run on the device through the witness, each process "
                     "reported by whether it opened the device; a survey, never a verdict")
+    ap.add_argument("--analyse", default="", help="re-read a kept witness directory, <work>/witness/<leg>, and "
+                    "print that leg's verdict again from what it kept; runs nothing and opens no device")
     args = ap.parse_args()
+    if args.analyse:
+        return reanalyse(os.path.abspath(args.analyse))
     build = os.path.abspath(args.build)
     art = args.artifact
     ART[0] = art
