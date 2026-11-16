@@ -637,12 +637,24 @@ def bypassed(d, shadow):
     if not os.path.isfile(path):
         return None
     wrapper, real = {}, {}
+    done, pending = [], {}
     with open(path, errors="replace") as f:
         for line in f:
-            m = re.match(r'^\d+\s+execve\("([^"]+)", .* = 0$', line.rstrip("\n"))
-            if not m:
+            line = line.rstrip("\n")
+            # one process's execve is cut in two when another's interleaves:
+            # `PID execve("path", ... <unfinished ...>`, then `PID <... execve
+            # resumed>...) = 0` later
+            m = re.match(r'^(\d+)\s+execve\("([^"]+)", (.*)$', line)
+            if m:
+                if m.group(3).endswith("<unfinished ...>"):
+                    pending[m.group(1)] = m.group(2)
+                elif re.search(r"\)\s*=\s*0$", line):
+                    done.append(m.group(2))
                 continue
-            exe = m.group(1)
+            m = re.match(r"^(\d+)\s+<\.\.\. execve resumed>.*\)\s*=\s*0$", line)
+            if m and m.group(1) in pending:
+                done.append(pending.pop(m.group(1)))
+        for exe in done:
             prog = os.path.basename(exe)
             if prog.endswith(EXE) and EXE:
                 prog = prog[:-len(EXE)]
