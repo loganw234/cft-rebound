@@ -8,8 +8,10 @@
 # has no GPU, and there it refuses by name.
 #
 #   python tools/check_gpu.py [--build build] [--artifact hip:0] [--hip 1]
-#                             [--legs a,b,...] [--skip a,b,...] [--no-legs]
-#                             [--keep] [--list]
+#                             [--expect TEXT] [--legs a,b,...] [--skip a,b,...]
+#                             [--no-legs] [--parts controls,routes,seam]
+#                             [--formats fp64,fp128,fp256] [--keep] [--list]
+#   python tools/check_gpu.py --reach gate_real_fp64,gate_subprocess,check_archive
 #
 # 0. THE DEVICE. ias15_cft --probe opens the artifact with CFT_HIP_INFO=1. A
 #    host with no such device, or a build whose libcft has no GPU backend, is
@@ -22,47 +24,47 @@
 # 1. THE WITNESS. A record's `backend=hip:0` only echoes the artifact string
 #    the run was given (src/ias15_cft.c, main(); V0, entry 54), so it proves
 #    nothing. Each leg runs against a shadow of the build directory, its
-#    top-level files linked, in which ias15_cft and check_dropin are a
-#    witness: a script that runs the real program with the caller's
-#    arguments, environment and stdin, passes its output back as it comes,
-#    and keeps it. When the run was on a device (CFT_REBOUND_ARTIFACT, or
-#    --artifact, set) it runs the same arguments once more on the software
-#    backend, its output files redirected, and keeps that too. So for every
-#    process a leg starts, whatever spawns it (a gate, compare_run.py,
-#    extract_particle.py, check_corrector's check_dropin), this driver holds:
+#    top-level files linked, in which ias15_cft and check_dropin (and the gate
+#    programs, for --reach) are a witness: a script that runs the real program
+#    with the caller's arguments, environment and stdin, passes its output
+#    back as it comes, and keeps it. When the run was on a device
+#    (CFT_REBOUND_ARTIFACT, or --artifact, set) it runs the same arguments
+#    once more on the software backend, its output files redirected, and keeps
+#    that too. So for every process a leg starts, whatever spawns it (a gate,
+#    compare_run.py, extract_particle.py, check_corrector's check_dropin),
+#    this driver holds:
 #    - its device line: at least one, and every one the probe's. A process
 #      that ran the software backend while its leg was pointed at the device
 #      is a STAND-IN and FAILs its leg by name, with its arguments;
-#    - its record: the software backend's from the same arguments, every
-#      line, every counter and every output file (--dt-out, --attempts-out,
+#    - its record: the software backend's from the same arguments, every line,
+#      every counter and every output file (--dt-out, --attempts-out,
 #      --record-iters) byte for byte. Set aside: the header's backend= value
 #      and the two self-tests' banners, which name what they ran on; the
-#      trailer's timings (seconds, steps_per_s, wall_seconds, the t_
-#      buckets, system_steps_per_s); and the by= of a route the device does
-#      not publish (absent on the device, opt_in in software; entry 54),
-#      counted. stderr is compared too, device lines and the `done:` line's
-#      seconds set aside, and a difference there is printed;
+#      trailer's timings (seconds, steps_per_s, wall_seconds, the t_ buckets,
+#      system_steps_per_s); and the by= of a route the device does not publish
+#      (absent on the device, opt_in in software; entry 54), counted. stderr
+#      is compared too, device lines and the `done:` line's seconds set aside,
+#      and a difference there is printed;
 #    - its physics, beside the bits: steps, rejections, passes, flags.
 #    The leg's own verdict (rc 0, RESULT: PASS or check_dropin's "every case
 #    passed", no FAIL line) is required as well. So a leg passes on the GPU
 #    only if it passes, every process it started ran on the device, and every
 #    record it made is the software backend's.
 #    Where strace is installed (nvidia-box; not WSL cft-gpu), each leg runs
-#    under it, execve alone traced (seccomp-bpf), and every run of a
-#    witnessed program must be one its witness accounts for: a process that
-#    ran the real program past the witness, which the witness cannot see,
-#    FAILs its leg.
+#    under it, execve alone traced (seccomp-bpf), and every run of a witnessed
+#    program must be one its witness accounts for: a process that ran the real
+#    program past the witness, which the witness cannot see, FAILs its leg.
 #
 #    THE CONTROLS, permanent, each a real run through the witness: a record
 #    with one hex digit planted after the run must DIFFER by line and column,
-#    and so must the trailer's calls= one more (on the line whose timings
-#    are set aside) and an attempts record with one outcome turned; a device line
+#    and so must the trailer's calls= one more (on the line whose timings are
+#    set aside) and an attempts record with one outcome turned; a device line
 #    changed by one character must FAIL as not the probe's; a run whose
 #    environment names no artifact must FAIL as a stand-in; a run without
-#    CFT_HIP_INFO must FAIL for its missing device line; check_records'
-#    whole quick leg run with no artifact, which passes by itself, must FAIL
-#    here, every process of it a stand-in; and, under strace, a process that
-#    runs ias15_cft past its witness must be caught.
+#    CFT_HIP_INFO must FAIL for its missing device line; check_records' whole
+#    quick leg run with no artifact, which passes by itself, must FAIL here,
+#    every process of it a stand-in; and, under strace, a process that runs
+#    ias15_cft past its witness must be caught.
 #
 # 2. THE ROUTES (V0, entry 54), at every format. Forced on, `scalar` and
 #    `reduce_seg` run on the device in the software backend's bits: every
@@ -140,11 +142,12 @@ GPU_LEGS = [
     ("check-quick", "check_corrector"),
     ("check-light", "check_dropin_light"),
 ]
-# The programs that link libcft, and so are witnessed: each must show a
-# device line when its environment names the device. The first two are
-# also replayed on the software backend (their records are held); the gate
-# programs are only watched, for --reach. ias15_ref is REBOUND's own and
-# links no libcft.
+# The programs a leg may start that open the engine, or that --reach asks
+# whether they do: each must show a device line when its environment names
+# the device. The first two are also replayed on the software backend (their
+# records are held); the gate programs are only watched, for --reach.
+# gate_stock links no libcft at all (the Makefile), and is watched so that
+# the survey shows it opening nothing. ias15_ref is REBOUND's own.
 WITNESSED = ("ias15_cft", "check_dropin", "gate_real", "gate_subprocess", "gate_restart", "gate_write",
              "gate_stock", "gate_promote")
 REPLAYED = ("ias15_cft", "check_dropin")
