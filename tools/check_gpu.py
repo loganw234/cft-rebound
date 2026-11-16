@@ -105,9 +105,11 @@
 # It answers which legs can be pointed at a GPU, and gates nothing.
 #
 # Every verdict carries the device line captured from the run. Exit 0 PASS,
-# 1 FAIL, 2 REFUSED. The leg logs and the witness's files are kept under
-# <build>/check_gpu/<pid>/ after a FAIL or with --keep, and removed after a
-# PASS.
+# 1 FAIL, 2 REFUSED. Under <build>/check_gpu/<pid>/: each leg's stdout
+# (<leg>.log, which its verdict is read from) and stderr (<leg>.log.err)
+# apart, since two streams into one file can cut a line, and the witness's
+# copies of every process's output, which are removed after a PASS unless
+# --keep; the legs' logs stay.
 #
 # Not through the gate cache: a GPU run is its own evidence, and a cached
 # pass would carry no device line.
@@ -1216,7 +1218,9 @@ def main():
         print("  ... %s: %s (log %s), from %s" % (leg, " ".join(cmd[1:] if cmd[0] == sys.executable else cmd), log,
                                                   time.strftime("%H:%M:%S")))
         sys.stdout.flush()
-        rc, secs, d = run_witnessed(shadow, leg, cmd, env_dev, log)
+        # stderr apart: two streams into one file can cut a line, and a line
+        # cut is a verdict line not counted (measured: 169 ok of check_dropin's 170)
+        rc, secs, d = run_witnessed(shadow, leg, cmd, env_dev, log, log + ".err")
         text = read(log) or ""
         passed, oks, fails, result = leg_result(text)
         res = analyse(d, probe_line, unpublished)
@@ -1252,7 +1256,10 @@ def main():
     elif args.keep:
         print("  kept: %s" % work)
     else:
-        shutil.rmtree(work, ignore_errors=True)
+        # the witness's copies and the shadow go; the legs' own logs stay
+        shutil.rmtree(shadow.legs, ignore_errors=True)
+        shutil.rmtree(shadow.dir, ignore_errors=True)
+        print("  the legs' logs kept: %s" % work)
     print("RESULT: %s" % ("FAIL" if FAILS else "PASS"))
     return 1 if FAILS else 0
 
