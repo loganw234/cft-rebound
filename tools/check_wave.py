@@ -51,16 +51,24 @@
 #      schedule (--attempts-dir), which must be the port's own for that
 #      member, line for line, under the port's --run-key.
 #      Beside each: steps, rejections, passes and cap hits from the
-#      record's trailers, and for a ring the physics the bits cannot show:
-#      each test particle's distance from Saturn (circular in its own
-#      field, as round 4's seam tests hold it) and the angle it swept.
+#      record's trailers, and for a ring the physics the bits cannot show,
+#      asserted (ring_physics(), below): every particle started on its
+#      circular orbit in Saturn's field with J2 and J4, so its distance from
+#      Saturn moves by under 1e-2 of what the field's absence would move it
+#      (check_ring_seams' delta r (1 - cos M)), it sweeps its orbit's n t in
+#      that field to 1e-4 (Kepler's n misses by 2.2e-3 or more), and the
+#      energy holds to 1e-13; the worst particle is named, with the
+#      closest a moon came to it at a sample.
 #   5. Controls, each asserted to fail by name:
 #      - contraction: the same source with its flag checks compiled out
 #        passes, and with a*b + c fused (-ffp-contract=fast; --fmad=true
 #        under nvcc) fails compare_run;
 #      - one hex digit planted in a sampled member's record, a column on
 #        two lines, fails compare_run naming the member and the column;
-#      - a trailer counter changed fails it.
+#      - a trailer counter changed fails it;
+#      - the physics: wave 0 of A's ring with its zonal line deleted runs,
+#        its sample lines are the port's bit for bit, and the physics
+#        above must fail it (bit-identity is not validity).
 #   6. Flags: a problem made to raise each of INVALID, DIVBYZERO, OVERFLOW
 #      and UNDERFLOW stops the port (rc 3) and stops this program (rc 3),
 #      naming the flag; and with --no-flag-abort both run on and report
@@ -193,10 +201,67 @@ def flyby_ring(src, dst, wave):
 
 
 # ---- the physics beside the bits ---------------------------------------------
-def ring_physics(text, n_active, zk=0):
-    """For each system: the largest change of any test particle's distance
-    from body zk over the samples (km), and the least angle any of them
-    swept about it (radians); and |dE/E| over the run."""
+def ring_field(prob):
+    """From a ring's problem file: the oblate body's index and GM (G times
+    its mass), its zonal line's R, J2 and J4, and each system's body names."""
+    def num(x):
+        return float.fromhex(x) if x.lstrip("+-").startswith("0x") else float(x)
+    G, zl, systems = 1.0, None, []
+    for l in open(prob):
+        t = l.split()
+        if not t or t[0].startswith("#"):
+            continue
+        if t[0] == "G":
+            G = num(t[1])
+        elif t[0] == "zonal":
+            zl = (int(t[1]), num(t[2]), num(t[3]), num(t[4]))
+        elif t[0] == "system":
+            systems.append([])
+        elif t[0] == "body":
+            if not systems:
+                systems.append([])
+            systems[-1].append((t[1], num(t[2])))
+    if zl is None:
+        raise SystemExit("check_wave: %s has no zonal line, so no field to hold a ring's physics to" % prob)
+    k, R, J2, J4 = zl
+    return k, G * systems[0][k][1], R, J2, J4, [[n for n, _ in s] for s in systems]
+
+
+# Every particle of a make_ring ring starts on the circular orbit of the
+# oblate body's field, v^2 = (G M / r)(1 + delta), delta = 3/2 J2 (R/r)^2
+# - 15/8 J4 (R/r)^4 (tools/make_ring.py). So, the bits aside:
+#   circ - its distance from the body moves only by what the moons do: the
+#          largest change over the samples, over the largest excursion the
+#          field's ABSENCE would give at a sample, delta r (1 - cos M)
+#          (check_ring_seams' theory: without the field it starts at the
+#          pericentre of an orbit of eccentricity delta);
+#   mm   - it sweeps its circular orbit's n t about the body, n = sqrt(G M
+#          / r^3 (1 + delta)): the angle swept over n t, less 1. Kepler's n,
+#          without J2 and J4, misses by 2.2e-3 to 2.7e-3 on the gate's ring
+#          (MEASURED); so mm resolves J2, and not J4's share (about 4e-5);
+#   and the energy, the zonal potential included, over the run.
+# What the bounds stand on, MEASURED on the full tier's 3-wave ring (round
+# 5, P2, at 7dec985, where a fixed 1 km bound on the change failed): circ
+# at most 1.43e-3 in case A, from p0000159, 679 km from Pandora at a
+# sample, which moved 1.76 km (and p0000131, 1,911 km from Prometheus,
+# 1.46 km; every other particle 0.26 km at most); 3.4e-4 in B, and 2.34e-3
+# in C's waves but the flyby's; |mm| at most 9e-6; the energy 6.5e-15.
+# The field's absence gives circ about 1 and mm about -2 delta, -9e-3:
+# part 5's control runs it, and both must catch it.
+# circ reads the samples, so it holds a run whose samples are at most
+# GAP_MAX radians of the orbit apart: their largest theory excursion is then
+# at least (1 + cos 1) / 2, 0.77, of the run's. mm tracks each particle's phase
+# from sample to sample, and so holds any run in which a particle stays
+# within half a turn of its circular orbit between samples.
+CIRC_BOUND, MM_BOUND, E_BOUND, GAP_MAX = 1e-2, 1e-4, 1e-13, 2.0
+
+
+def ring_physics(text, prob, n_active, member=None):
+    """For each system of a ring's record: the largest change of any test
+    particle's distance from the oblate body (km), circ and mm at their
+    worst and whose, the closest a massive body came to circ's worst at a
+    sample, Kepler's n's range, the least angle swept, and |dE/E|."""
+    zk, GM, R, J2, J4, names = ring_field(prob)
     out = {}
     systems = sorted({int(l.split()[1]) for l in text.splitlines() if l.startswith("system ")}) or [None]
     for s in systems:
@@ -207,26 +272,80 @@ def ring_physics(text, n_active, zk=0):
         rows = []
         for _, _, v in samples:
             xs = [float(v[4 + 6 * b + c][0]) for b in range(nb) for c in range(3)]
-            rows.append((xs, float(v[3][0])))
-        worst, least = 0.0, math.inf
+            rows.append((float(v[0][0]), xs, float(v[3][0])))
+        nm = names[member if member is not None else (s or 0)]
+        t0, tend = rows[0][0], rows[-1][0] - rows[0][0]
+        res = {"dr": 0.0, "circ": 0.0, "circ_who": "", "mm": 0.0, "mm_who": "", "kepler": [math.inf, -math.inf],
+               "swept": math.inf, "near": ("", math.inf), "t": tend, "gap": 0.0}
         for b in range(n_active, nb):
             r0 = None
-            ang = 0.0
-            prev = None
-            for xs, _ in rows:
+            dr, th, ang, near = 0.0, 0.0, 0.0, ("", math.inf)
+            for t, xs, _ in rows:
                 p = [xs[3 * b + c] - xs[3 * zk + c] for c in range(3)]
                 r = math.sqrt(sum(c * c for c in p))
+                phi = math.atan2(p[1], p[0])          # about the oblate body's pole, the z axis
                 if r0 is None:
                     r0 = r
-                worst = max(worst, abs(r - r0))
-                if prev is not None:
-                    dot = sum(prev[c] * p[c] for c in range(3)) / (r * math.sqrt(sum(c * c for c in prev)))
-                    ang += math.acos(max(-1.0, min(1.0, dot)))
-                prev = p
-            least = min(least, ang)
-        e0, e1 = rows[0][1], rows[-1][1]
-        out[s if s is not None else 0] = (worst, least, abs(e1 - e0) / abs(e0) if e0 else 0.0)
+                    q = (R / r0) ** 2
+                    delta = 1.5 * J2 * q - 15.0 / 8.0 * J4 * q * q
+                    nk = math.sqrt(GM / r0 ** 3)
+                    n = nk * math.sqrt(1.0 + delta)
+                else:
+                    # the angle swept since the last sample: n dt, and what
+                    # the sample says beyond it, within half a turn - so the
+                    # samples may be any distance apart that leaves the
+                    # particle within half a turn of its circular orbit
+                    adv = n * (t - tp)
+                    ang += adv + ((phi - php - adv + math.pi) % (2.0 * math.pi) - math.pi)
+                    res["gap"] = max(res["gap"], adv)
+                tp, php = t, phi
+                dr = max(dr, abs(r - r0))
+                th = max(th, delta * r0 * (1.0 - math.cos(nk * (t - t0))))
+                for m in range(n_active):
+                    if m != zk:
+                        d = math.dist(xs[3 * b:3 * b + 3], xs[3 * m:3 * m + 3])
+                        if d < near[1]:
+                            near = (nm[m], d)
+            who = nm[b] if b < len(nm) else str(b)
+            circ = dr / th if th > 0 else math.inf
+            mm = ang / (n * tend) - 1.0 if tend > 0 else math.inf
+            kep = ang / (nk * tend) - 1.0 if tend > 0 else math.inf
+            res["dr"] = max(res["dr"], dr)
+            if circ >= res["circ"]:
+                res["circ"], res["circ_who"], res["near"] = circ, who, near
+            if abs(mm) >= abs(res["mm"]):
+                res["mm"], res["mm_who"] = mm, who
+            res["kepler"] = [min(res["kepler"][0], kep), max(res["kepler"][1], kep)]
+            res["swept"] = min(res["swept"], ang)
+        e0, e1 = rows[0][2], rows[-1][2]
+        res["dE"] = abs(e1 - e0) / abs(e0) if e0 else 0.0
+        out[s if s is not None else 0] = res
     return out
+
+
+def physics_verdict(ph, skip=()):
+    """circ, mm and the energy at their worst over a record's systems (less
+    those in skip), each against its bound: (ok, text)."""
+    sel = [v for s, v in sorted(ph.items()) if s not in skip]
+    w = max(sel, key=lambda v: v["circ"])
+    m = max(sel, key=lambda v: abs(v["mm"]))
+    de = max(v["dE"] for v in sel)
+    klo, khi = min(v["kepler"][0] for v in sel), max(v["kepler"][1] for v in sel)
+    swept = min(v["swept"] for v in sel)
+    gap = max(v["gap"] for v in sel)
+    ok = gap <= GAP_MAX and w["circ"] <= CIRC_BOUND and abs(m["mm"]) <= MM_BOUND and de <= E_BOUND and swept > 0.0
+    if gap <= GAP_MAX:
+        circ = ("every test particle's distance from Saturn moved %.4f km at most, %.2e of the largest excursion J2 "
+                "and J4's absence would give, delta r (1 - cos M) (the bound is %.0e; the worst, %s, %.0f km from %s "
+                "at a sample)" % (max(v["dr"] for v in sel), w["circ"], CIRC_BOUND, w["circ_who"], w["near"][1],
+                                  w["near"][0]))
+    else:
+        circ = ("the distance from Saturn NOT HELD: the samples are %.2f rad of an orbit apart, more than the %.0f "
+                "it reads (it moved %.4f km at most at the samples)" % (gap, GAP_MAX, max(v["dr"] for v in sel)))
+    text = ("%s; each swept its circular orbit's n t in that field to %.1e (%s; the bound is %.0e; Kepler's n "
+            "misses by %.1e to %.1e), at least %.3f rad; the energy moved %.2e of itself (the bound is %.0e)"
+            % (circ, m["mm"], m["mm_who"], MM_BOUND, klo, khi, swept, de, E_BOUND))
+    return ok, text
 
 
 # ---- compare_run ----------------------------------------------------------------
@@ -445,19 +564,15 @@ def main():
                     "D1: kepler_e099 rejects (%s) and hits the corrector's cap (%s)"
                     % (c.get("steps_rejected"), c.get("iterations_max_exceeded")))
         if n_active is not None and name in ("A", "B", "C", "E"):
-            phys = ring_physics(out, n_active)
-            worst = max(v[0] for v in phys.values())
-            least = min(v[1] for v in phys.values())
-            de = max(v[2] for v in phys.values())
-            bound = 1.0 if name != "C" else None
-            if bound is not None:
-                verdict(worst < bound and least > 0.0,
-                        "%s: in Saturn's own field every test particle's distance from it moved %.4f km at most (the bound "
-                        "is %.0f km; round 4's seam measured 0.18 km over 24 steps), each swept at least %.4f rad, and "
-                        "the energy moved %.2e of itself" % (name, worst, bound, least, de))
-            else:
-                print("    C: the flyby wave's particles moved %.1f km in radius at most and swept at least %.4f rad"
-                      % (worst, least))
+            member = int(a[a.index("--member") + 1]) if "--member" in a else None
+            phys = ring_physics(out, prob, n_active, member)
+            ok, text = physics_verdict(phys, skip=(1,) if name == "C" else ())
+            verdict(ok, "%s: the physics%s: %s" % (name, ", the flyby's wave aside" if name == "C" else "", text))
+            if name == "C":
+                f = phys[1]
+                print("    C: the flyby's wave: its particles' distance from Saturn moved %.1f km at most (%s, %.0f km "
+                      "from %s at a sample), each swept at least %.4f rad"
+                      % (f["dr"], f["circ_who"], f["near"][1], f["near"][0], f["swept"]))
 
     # 5. controls -------------------------------------------------------------
     print("5. controls, each of which must fail")
@@ -514,6 +629,27 @@ def main():
     line = next((l for l in cout.splitlines() if "FAIL" in l and "trailer" in l), "")
     verdict(rc == 1 and mut != outB and "steps_rejected" in line,
             "member 0's steps_rejected one more, the total with it: compare_run rc %d: %s" % (rc, line.strip()[:240]))
+    # bit-identity is not validity (CLAUDE.md): wave 0 of A's ring with its
+    # zonal line deleted (not regenerated, so the speeds are still its
+    # field's) runs, and this program's record is the port's bit for bit;
+    # the physics, held to the field the speeds were made for, must fail it
+    noz = os.path.join(work, "ring_no_zonal.txt")
+    write(noz, "".join(l for l in open(probA) if not l.startswith("zonal ")))
+    za = ["--member", "0"] + aA
+    rc1, out1, err1 = run([wave] + dev + ["--problem", noz, "--quiet"] + za)
+    rc2, out2, err2 = run([cft, "--format", "fp64", "--arith", "fma", "--engine", "loop", "--problem", noz, "--quiet"] + za)
+    write(os.path.join(work, "A_no_zonal.rec"), out1)
+    same = rc1 == 0 and rc2 == 0 and sample_lines(out1) == sample_lines(out2) and len(sample_lines(out1)) > 1
+    caught, text = False, err1.strip()[-200:]
+    if rc1 == 0:
+        php = ring_physics(out1, probA, 7, 0)
+        _, text = physics_verdict(php)
+        p0 = php[0]
+        caught = p0["gap"] <= GAP_MAX and p0["circ"] > CIRC_BOUND and abs(p0["mm"]) > MM_BOUND   # each, alone
+    verdict(same and caught,
+            "the physics control: wave 0 of A's ring with its zonal line deleted: this program's %d sample lines are "
+            "the port's (%s), and the physics FAILS it, the distance and the angle each: %s"
+            % (len(sample_lines(out1)), "IDENTICAL" if same else "NOT identical, rc %d/%d" % (rc1, rc2), text))
 
     # 6. flags ------------------------------------------------------------------
     print("6. flags: the port aborts, and this program stops by name")
