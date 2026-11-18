@@ -14,6 +14,7 @@
  *        [--format fp64] [--arith fma] [--cs kahan]
  *   wave --dump-constants
  *   wave --zonal-selftest-from FILE      (ias15_cft --zonal-selftest's output)
+ *   wave --device gpu --device-info      (the device line; nothing launched)
  *
  * What it takes is the port's: the problem file's lines (name, G, N, E,
  * system, body, active, zonal), --dt and --epsilon as a decimal (strtod,
@@ -405,7 +406,7 @@ int main(int argc, char **argv){
     const char *problem = NULL, *dt_txt = "0.01", *eps_txt = "1e-9", *device = "host", *att_dir = NULL;
     const char *zst = NULL, *key_engine = "loop";
     long steps = 1000, sample = 100;
-    int max_iter = 12, tol_shift = 0, member = -1, flag_abort = 1, do_dump = 0;
+    int max_iter = 12, tol_shift = 0, member = -1, flag_abort = 1, do_dump = 0, do_info = 0;
     for (int i = 1; i < argc; i++){
         const char *a = argv[i];
         const int more = i + 1 < argc;
@@ -423,6 +424,7 @@ int main(int argc, char **argv){
         else if (!strcmp(a, "--zonal-selftest-from") && more) zst = argv[++i];
         else if (!strcmp(a, "--no-flag-abort")) flag_abort = 0;
         else if (!strcmp(a, "--dump-constants")) do_dump = 1;
+        else if (!strcmp(a, "--device-info")) do_info = 1;
         else if (!strcmp(a, "--quiet")) quiet = 1;
         else if (!strcmp(a, "--format") && more){ if (strcmp(argv[++i], "fp64")) die(3, "--format %s: the wave kernel is the hardware's binary64 only (fp64); binary128 and binary256 wait for a device divide (ROUND5.md)", argv[i]); }
         else if (!strcmp(a, "--arith") && more){ if (strcmp(argv[++i], "fma")) die(3, "--arith %s: the wave kernel is the port's FMA form only (--arith fma)", argv[i]); }
@@ -441,6 +443,16 @@ int main(int argc, char **argv){
 #ifndef WAVE_HIP
     if (gpu) die(3, "--device gpu: this build has no GPU (make HIP=1 wave)");
 #endif
+    if (do_info){
+        /* the device line alone: the device opened and described, nothing
+         * launched on it and no problem read (tools/check_wave.py's probe,
+         * which refuses an unexpected device before anything runs) */
+#ifdef WAVE_HIP
+        if (gpu){ std::string b; printf("# device %s\n", gpu_open(b).c_str()); return 0; }
+#endif
+        printf("# device host\n");
+        return 0;
+    }
     if (zst) return zonal_selftest_from(zst, K, gpu);
     if (!problem) die(2, "usage: wave --problem FILE [--dt DT] [--epsilon EPS] [--steps N] [--sample K] [--member K] [--device host|gpu]");
     if (steps < 0 || sample < 1) die(3, "--steps %ld --sample %ld", steps, sample);
@@ -499,7 +511,22 @@ int main(int argc, char **argv){
     {
         std::string cv = __VERSION__;
         for (auto &ch : cv) if (ch == ' ') ch = ',';
-        printf("# identity wave_source=src/wave compiler=%s contract=off fma=hardware flags=checked\n", cv.c_str());
+        /* what this build is, from its own definitions: the Makefile passes
+         * -DWAVE_CONTRACT_ON only with the contraction flags (the contraction
+         * control), and -DWAVE_UNCHECKED only to the builds whose flag checks
+         * are compiled out (wave_arith.h) */
+#ifdef WAVE_CONTRACT_ON
+        const char *contract = "on";
+#else
+        const char *contract = "off";
+#endif
+#ifdef WAVE_UNCHECKED
+        const char *checks = "unchecked";
+#else
+        const char *checks = "checked";
+#endif
+        printf("# identity wave_source=src/wave compiler=%s contract=%s fma=hardware flags=%s\n", cv.c_str(), contract,
+               checks);
     }
     if (!devline.empty()) printf("# device %s\n", devline.c_str());
     printf("# dt0="); puthex(dt0); printf(" epsilon="); puthex(K.eps); printf(" G="); puthex(K.G); printf(" pc_tol="); puthex(K.tol);

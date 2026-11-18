@@ -30,8 +30,8 @@
 #      port's to cft-fp256's golden model and to mpmath.
 #   4. Records, through tools/compare_run.py --rerun-engine loop, every
 #      member sampled (--strata E), and every member's particle replays:
-#      A. a ring from tools/make_ring.py with its zonal line, 3 waves of 64
-#         (2 in --quick), from dt0 600 s;
+#      A. a ring from tools/make_ring.py with its zonal line, 3 waves of 64,
+#         from dt0 600 s (12 steps in --quick, 24 in full);
 #      B. the same ring from dt0 1e5 s, far too large: every wave must
 #         reject its first attempt, before any step is accepted (the one
 #         rejection that leaves state; CLAUDE.md);
@@ -49,7 +49,9 @@
 #         in a ring, is part 3's (its selftest catches it).
 #      Each run also writes every member's attempts record and corrector
 #      schedule (--attempts-dir), which must be the port's own for that
-#      member, line for line, under the port's --run-key.
+#      member, line for line, under the port's --run-key. Every ring's
+#      particles are replayed, as many as compare_run's plan makes them (two
+#      a rerun member), counted here, not taken from its summary.
 #      Beside each: steps, rejections, passes and cap hits from the
 #      record's trailers, and for a ring the physics the bits cannot show,
 #      asserted (ring_physics(), below): every particle started on its
@@ -62,19 +64,38 @@
 #   5. Controls, each asserted to fail by name:
 #      - contraction: the same source with its flag checks compiled out
 #        passes, and with a*b + c fused (-ffp-contract=fast; --fmad=true
-#        under nvcc) fails compare_run;
-#      - one hex digit planted in a sampled member's record, a column on
-#        two lines, fails compare_run naming the member and the column;
-#      - a trailer counter changed fails it;
+#        under nvcc) fails compare_run; each record's identity line says
+#        which build it is;
+#      - THE PLANTS, in an ensemble record of the program under test (P: the
+#        ring, 3 waves, 12 steps; A itself in --quick), on the host or on the
+#        GPU as the run is: one value a plant, every column kind the record
+#        carries - the schedule (t, dt_next, dt_last, E, t_hi, t_lo), a
+#        massive body's x to vz, a sampled particle's own x to vz, the step
+#        field and the five trailer counters - in members 0, 1 and 2, on the
+#        first sampled line and on the last. Each plant must FAIL its own
+#        member naming its line and column; FAIL that member's sampled
+#        particles whose replay carries the column (the schedule, the
+#        counters, the member's massive bodies, the particle's own body, as
+#        compare_run's own particle lines name them) and leave the others
+#        IDENTICAL; and every member it is not in must stay IDENTICAL, its
+#        particles too. A record copy holds up to one plant a member, and
+#        three of them leave one member unplanted;
+#      - E's plants: a column on two lines of the one-system record;
+#      - the attempts comparison: a member's attempts record with one dt
+#        changed must not be the port's;
 #      - the physics: wave 0 of A's ring with its zonal line deleted runs,
-#        its sample lines are the port's bit for bit, and the physics
-#        above must fail it (bit-identity is not validity).
+#        its sample lines are the port's bit for bit, and physics_verdict()
+#        must reject it, the distance and the angle each (bit-identity is
+#        not validity).
 #   6. Flags: a problem made to raise each of INVALID, DIVBYZERO, OVERFLOW
 #      and UNDERFLOW stops the port (rc 3) and stops this program (rc 3),
 #      naming the flag; and with --no-flag-abort both run on and report
 #      the same four flags.
 # On a GPU (--device gpu): the same parts on build/wave --device gpu, and
-# every record also against the host twin's, line for line.
+# every record also against the host twin's, line for line. First, before
+# anything runs on it, `wave --device gpu --device-info` names the device
+# (opened and described, nothing launched, no problem read); --expect, as
+# check_gpu.py takes it (empty: any), must be in that line, or nothing runs.
 #
 # Runs work in <build>/wave/<pid> unless --keep; a passing run removes it.
 
@@ -325,7 +346,8 @@ def ring_physics(text, prob, n_active, member=None):
 
 def physics_verdict(ph, skip=()):
     """circ, mm and the energy at their worst over a record's systems (less
-    those in skip), each against its bound: (ok, text)."""
+    those in skip), each against its bound: (ok, text, the criteria that
+    refuse it, by name)."""
     sel = [v for s, v in sorted(ph.items()) if s not in skip]
     w = max(sel, key=lambda v: v["circ"])
     m = max(sel, key=lambda v: abs(v["mm"]))
@@ -333,7 +355,10 @@ def physics_verdict(ph, skip=()):
     klo, khi = min(v["kepler"][0] for v in sel), max(v["kepler"][1] for v in sel)
     swept = min(v["swept"] for v in sel)
     gap = max(v["gap"] for v in sel)
-    ok = gap <= GAP_MAX and w["circ"] <= CIRC_BOUND and abs(m["mm"]) <= MM_BOUND and de <= E_BOUND and swept > 0.0
+    refused = [n for n, bad in (("samples", gap > GAP_MAX), ("circ", not w["circ"] <= CIRC_BOUND),
+                                ("mm", not abs(m["mm"]) <= MM_BOUND), ("energy", not de <= E_BOUND),
+                                ("swept", not swept > 0.0)) if bad]
+    ok = not refused
     if gap <= GAP_MAX:
         circ = ("every test particle's distance from Saturn moved %.4f km at most, %.2e of the largest excursion J2 "
                 "and J4's absence would give, delta r (1 - cos M) (the bound is %.0e; the worst, %s, %.0f km from %s "
@@ -345,7 +370,7 @@ def physics_verdict(ph, skip=()):
     text = ("%s; each swept its circular orbit's n t in that field to %.1e (%s; the bound is %.0e; Kepler's n "
             "misses by %.1e to %.1e), at least %.3f rad; the energy moved %.2e of itself (the bound is %.0e)"
             % (circ, m["mm"], m["mm_who"], MM_BOUND, klo, khi, swept, de, E_BOUND))
-    return ok, text
+    return ok, text, refused
 
 
 # ---- compare_run ----------------------------------------------------------------
@@ -363,6 +388,227 @@ def compare_summary(out):
     parts = re.findall(r"^  member \d+: particle (\S+) .*?: (IDENTICAL|FAIL)", out, re.M)
     res = re.search(r"^RESULT: (\w+)", out, re.M)
     return members, parts, res.group(1) if res else "none"
+
+
+def particle_lines(out):
+    """Each particle compare_run replayed, from its own line: (member, body,
+    the massive bodies its replay carries, IDENTICAL or FAIL, the line). A
+    line that says neither is a FAIL."""
+    found = []
+    for m in re.finditer(r"^  member (\d+): particle .*? \(body (\d+), [^)]*\): (.*)$", out, re.M):
+        nact = re.search(r"replayed alone with the member's (\d+) massive bodies", m.group(3))
+        said = re.search(r"held to the record: (IDENTICAL|FAIL)", m.group(3))
+        found.append((int(m.group(1)), int(m.group(2)), int(nact.group(1)) if nact else None,
+                      said.group(1) if said else "FAIL", m.group(0).strip()))
+    return found
+
+
+def particle_plan(prob, E):
+    """How many particles compare_run's plan replays for a record of `prob`
+    with every one of its E members rerun: two a member (its least closest
+    approach and one by the seed), one if it has one test particle, none
+    without an `active` line. Read from the problem file, not from
+    compare_run."""
+    active, bodies, systems = None, 0, 0
+    for l in open(prob):
+        t = l.split()
+        if t[:1] == ["active"]:
+            active = int(t[1])
+        elif t[:1] == ["body"]:
+            bodies += 1
+        elif t[:1] == ["system"]:
+            systems += 1
+    if active is None:
+        return 0
+    n = bodies // max(1, systems)
+    return E * min(2, max(0, n - active))
+
+
+def identity(text):
+    line = next((l for l in text.splitlines() if l.startswith("# identity ")), "")
+    return dict(kv.split("=", 1) for kv in line.split()[2:] if "=" in kv), line
+
+
+def attempts_same(mine_a, mine_s, port_a, port_s):
+    """A member's attempts record and corrector schedule against the port's,
+    line for line."""
+    return mine_a == port_a and mine_s == port_s
+
+
+class Cols:
+    """A sample line's tokens, from the record's own `# columns:` line:
+    [system s] sample k step, the scalars, six a body, `|`, the pair."""
+
+    def __init__(self, text):
+        line = next(l for l in text.splitlines() if l.startswith("# columns:"))
+        words = line.split(":", 1)[1].split()
+        self.lead = 3 if words[0] == "system" else 1        # "system s" before "sample"; the word "sample"
+        step = words.index("step")
+        self.head = words[step + 1:words.index("then")]
+        self.body = words[words.index("body") + 1:words.index(";")]
+        self.pair = words[words.index("pair") + 1:]
+        self.n = int(re.search(r"\bN=(\d+)", text).group(1))
+        self.step_tok = self.lead + 1                       # sample's index, then the step
+
+    def token(self, col, body=None):
+        base = self.step_tok + 1
+        if body is None and col in self.head:
+            return base + self.head.index(col)
+        if body is None and col in self.pair:
+            return base + len(self.head) + self.n * len(self.body) + 1 + self.pair.index(col)
+        return base + len(self.head) + body * len(self.body) + self.body.index(col)
+
+
+def flip(tok):
+    """One hex digit planted: the significand's last digit, xor 1."""
+    mant = tok.split("p")[0]
+    return mant[:-1] + "%x" % (int(mant[-1], 16) ^ 1) + tok[len(mant):]
+
+
+def plants(text, clean, quick):
+    """The plants' list for an ensemble record of three members, from its
+    clean compare_run (which particles each member's replays are): each
+    (member, kind, column, body, line selector). Kinds: value (a sample
+    line's value), step (its step field), counter (its trailer)."""
+    parts = particle_lines(clean)
+    def pbody(w, why):
+        got = [p[1] for p in parts if p[0] == w and why in p[4]]
+        return got[0] if got else None
+    seeded = {w: pbody(w, "by the seed") for w in range(3)}
+    near = {w: pbody(w, "its least closest approach") for w in range(3)}
+    # one plant a column kind; the first line (sample 1) or the last, in turn
+    plan = [("value", "t", None, 0), ("value", "dt_next", None, -1), ("value", "dt_last", None, 0),
+            ("value", "E", None, -1), ("value", "t_hi", None, 0), ("value", "t_lo", None, -1),
+            ("value", "x", 1, -1), ("value", "y", 2, 0), ("value", "z", 3, -1),
+            ("value", "vx", 4, 0), ("value", "vy", 5, -1), ("value", "vz", 6, 0),
+            ("value", "x", "seeded", 0), ("value", "y", "seeded", -1), ("value", "z", "seeded", 0),
+            ("value", "vx", "seeded", -1), ("value", "vy", "near", 0), ("value", "vz", "near", -1),
+            ("step", "step", None, -1), ("counter", "steps_rejected", None, None),
+            ("counter", "iterations_max_exceeded", None, None), ("counter", "mean_pc_iterations", None, None),
+            ("counter", "max_pc_iterations", None, None), ("counter", "steps_done", None, None)]
+    # copies: six with a plant in each of members 0, 1 and 2; three with two,
+    # leaving member 2, 0 and then 1 unplanted
+    layout = [(0, 1, 2)] * 6 + [(0, 1), (1, 2), (0, 2)]
+    copies, k = [], 0
+    for members in layout:
+        copy = []
+        for w in members:
+            kind, col, body, at = plan[k]
+            k += 1
+            if body in ("seeded", "near"):
+                b = (seeded if body == "seeded" else near)[w]
+                kind, body = ("missing", body) if b is None else (kind, b)
+            copy.append((w, kind, col, body, at))
+        copies.append(copy)
+    return copies, parts
+
+
+def hold_plants(work, tag, text, clean, prob, cft):
+    """THE PLANTS (part 5): copies of an ensemble record of three members,
+    one value planted a member a copy, each held to what compare_run must
+    say of it. Returns nothing; every plant is its own verdict."""
+    copies, _ = plants(text, clean, None)
+    rows = text.splitlines()
+    cols = Cols(text)
+    sampled = {w: [i for i, l in enumerate(rows) if l.startswith("system %d sample " % w)][1:] for w in range(3)}
+    trail = {w: next(i for i, l in enumerate(rows) if l.startswith("# system %d steps_done=" % w)) for w in range(3)}
+    total = next(i for i, l in enumerate(rows) if l.startswith("# steps_done="))
+    for n, copy in enumerate(copies, 1):
+        mut = list(rows)
+        made = []
+        for w, kind, col, body, at in copy:
+            if kind == "missing":
+                # the clean compare_run named no such particle of member w
+                verdict(False, "%s plant %d.%d: member %d, %s of its %s particle: compare_run's clean run replayed no "
+                        "such particle to plant in" % (tag, n, w, w, col, body))
+                continue
+            if kind == "value":
+                i = sampled[w][at]
+                toks = mut[i].split()
+                t = cols.token(col, body)
+                old, new = toks[t], flip(toks[t])
+                toks[t] = new
+                mut[i] = " ".join(toks)
+                label = ("the exact-time pair's %s" % col if col in cols.pair else col) if body is None else \
+                    "%s of body %d" % (col, body)
+                where = r"record line %d \(system %d sample \d+, step \d+\): %s(?: \([^)]*\))?: record " % (
+                    i + 1, w, re.escape(label))
+                mreg = r"^member %d \(\S+\): FAIL: first differing line: %s" % (w, where)
+                preg = r"held to the record: FAIL: " + where
+                # a replay carries the schedule, the member's massive bodies
+                # (as many as compare_run's line says) and its own body
+                carries = (lambda q, body=body: body is None or (q[2] is not None and (body < q[2] or body == q[1])))
+                desc = "%s on line %d (%s to %s)" % (label, i + 1, old, new)
+            elif kind == "step":
+                i = sampled[w][at]
+                toks = mut[i].split()
+                t = cols.step_tok
+                old, new = toks[t], str(int(toks[t]) + 1)
+                toks[t] = new
+                mut[i] = " ".join(toks)
+                mreg = (r"^member %d \(\S+\): FAIL: incomplete in the record: .*line %d is sample \d+ at step %s, where "
+                        r"its place makes it sample \d+ at step %s" % (w, i + 1, new, old))
+                preg, carries = None, None
+                desc = "the step field on line %d (%s to %s)" % (i + 1, old, new)
+            else:
+                i = trail[w]
+                toks = mut[i].split()
+                t = next(j for j, x in enumerate(toks) if x.startswith(col + "="))
+                old = toks[t].split("=", 1)[1]
+                new = (old[:-1] + str((int(old[-1]) + 1) % 10)) if col == "mean_pc_iterations" else str(int(old) + 1)
+                toks[t] = "%s=%s" % (col, new)
+                mut[i] = " ".join(toks)
+                if col == "steps_rejected":             # the record's total with it, as a producer's would be
+                    tt = mut[total].split()
+                    j = next(j for j, x in enumerate(tt) if x.startswith("steps_rejected="))
+                    tt[j] = "steps_rejected=%d" % (int(tt[j].split("=")[1]) + 1)
+                    mut[total] = " ".join(tt)
+                if col == "steps_done":
+                    mreg = (r"^member %d \(\S+\): FAIL: incomplete in the record: .*its trailer \(line %d\) says "
+                            r"steps_done=%s" % (w, i + 1, new))
+                    preg, carries = None, None
+                else:
+                    mreg = r"^member %d \(\S+\): FAIL: trailer %s is %s in the record \(line %d\), and %s here" % (
+                        w, col, re.escape(new), i + 1, re.escape(old))
+                    preg = r"held to the record: FAIL: trailer %s is %s in the record, and %s in the replay" % (
+                        col, re.escape(new), re.escape(old))
+                    carries = lambda q: True
+                desc = "the trailer's %s on line %d (%s to %s%s)" % (col, i + 1, old, new,
+                                                                    ", the total with it" if col == "steps_rejected" else "")
+            made.append((w, kind, desc, mreg, preg, carries))
+        path = os.path.join(work, "%s_plants_%d.rec" % (tag, n))
+        write(path, "\n".join(mut) + "\n")
+        rc, out = compare(path, prob, cft, 3)
+        said = {int(m.group(1)): m.group(2) for m in re.finditer(r"^member (\d+) \(\S+\): (IDENTICAL|FAIL)", out, re.M)}
+        parts = particle_lines(out)
+        planted = {m[0] for m in made}
+        quiet = [u for u in range(3) if u not in planted]
+        # a member a copy leaves alone: IDENTICAL, its two particles too
+        still = all(said.get(u) == "IDENTICAL" and len([q for q in parts if q[0] == u]) == 2 and
+                    all(q[3] == "IDENTICAL" for q in parts if q[0] == u) for u in quiet)
+        for w, kind, desc, mreg, preg, carries in made:
+            mine = [q for q in parts if q[0] == w]
+            named = re.search(mreg, out, re.M) is not None
+            if preg is None:
+                # a member whose record is incomplete is not rerun, so none of
+                # its particles is replayed
+                pok, ptext = not mine, "none replayed, as for any member incomplete in the record"
+            else:
+                held = [q for q in mine if carries(q)]
+                right = [q for q in mine if (re.search(preg, q[4]) if carries(q) else q[3] == "IDENTICAL")]
+                pok = len(mine) == 2 and len(right) == len(mine)
+                ptext = "%d of %d carry it and FAIL naming it, the rest IDENTICAL: %d of %d as they must be" % (
+                    len(held), len(mine), len(right), len(mine))
+            ok = rc == 1 and "\nRESULT: FAIL" in "\n" + out and named and pok and still
+            verdict(ok, "%s plant %d.%d: member %d, %s: member %d FAILs naming it (%s); its particles: %s; %s" % (
+                tag, n, w, w, desc, w, "yes" if named else "NO", ptext,
+                ("member(s) %s IDENTICAL, their particles too" % ", ".join(map(str, quiet)) if still else
+                 "member(s) %s NOT all IDENTICAL" % ", ".join(map(str, quiet))) if quiet else
+                "every member of this copy planted, each FAIL its own"))
+            if not ok:
+                for l in out.splitlines():
+                    if l.startswith(("member %d " % w, "  member %d: particle" % w, "RESULT")):
+                        print("      " + l[:300])
 
 
 # ---- the gate ---------------------------------------------------------------------
@@ -401,10 +647,13 @@ def main():
         twin = [os.path.abspath(args.twin)] if args.twin else [wave, "--device", "host"]
         # The proof the GPU ran is its own description, not a backend= the
         # program writes (V0, VALIDATION entry 54): every GPU record carries
-        # a `# device` line from the runtime, and --expect names the GPU it
-        # must be, so a shell that would open another device runs nothing.
-        rc, out, err = run([wave] + dev + ["--problem", os.path.join(root, "data", "problems", "kepler.txt"), "--dt",
-                                           "0.01", "--steps", "2", "--sample", "2", "--quiet"])
+        # a `# device` line from the runtime. Before anything runs, the probe
+        # opens the device and prints that line, launching nothing and
+        # reading no problem (--device-info); --expect, taken as check_gpu.py
+        # takes it (empty: any device), must be in it, so a shell that would
+        # open another device (cft-gpu without CUDA_VISIBLE_DEVICES: hip:0 is
+        # then the 4070) is refused here, with nothing run on it.
+        rc, out, err = run([wave] + dev + ["--device-info"])
         dline = next((l for l in out.splitlines() if l.startswith("# device ")), "")
         print("  " + (dline or "no device line: %s" % (err or out).strip()[-200:]))
         if rc != 0 or not dline or (args.expect and args.expect not in dline):
@@ -465,7 +714,7 @@ def main():
 
     # 4. records ------------------------------------------------------------
     print("4. records, through tools/compare_run.py --rerun-engine loop, every member sampled")
-    nwaves = 2 if args.quick else 3
+    nwaves = 3
     steps, sample = (12, 4) if args.quick else (24, 6)
     ring = os.path.join(work, "ring.txt")
     make_ring(ring, 57 * nwaves, 1)
@@ -510,16 +759,21 @@ def main():
             d = [l for l in out.splitlines() if l.startswith("# device ")]
             verdict(len(d) == 1 and d[0] == dline, "%s: the record's one device line is the GPU's" % name)
         rc, cout = compare(rec, prob, cft, E)
+        records[name] = records[name] + (cout,)
         members, parts, res = compare_summary(cout)
         ident = sum(1 for m in members if m[2] == "IDENTICAL")
         pid = sum(1 for p in parts if p[1] == "IDENTICAL")
+        want = particle_plan(prob, E)
         per, tot = trailers(out)
+        # a one-system record of member k (--member k) is compare_run's member k
+        label = (lambda s: int(a[a.index("--member") + 1])) if "--member" in a else (lambda s: s)
         cnt = "; ".join("member %d: steps %s, rejected %s, mean passes %s, max %s, cap hits %s" % (
-            s, c.get("steps_done"), c.get("steps_rejected"), c.get("mean_pc_iterations"), c.get("max_pc_iterations"),
-            c.get("iterations_max_exceeded")) for s, c in sorted(per.items()))
-        ok = rc == 0 and res == "PASS" and ident == E and pid == len(parts)
-        verdict(ok, "%s %s: compare_run %s: %d of %d members IDENTICAL%s; %s" % (
-            name, what, res, ident, E, ", %d of %d particles replayed IDENTICAL" % (pid, len(parts)) if parts else "", cnt))
+            label(s), c.get("steps_done"), c.get("steps_rejected"), c.get("mean_pc_iterations"),
+            c.get("max_pc_iterations"), c.get("iterations_max_exceeded")) for s, c in sorted(per.items()))
+        none_said = want > 0 or "particles: none to sample" in cout
+        ok = rc == 0 and res == "PASS" and ident == E and len(parts) == want and pid == want and none_said
+        verdict(ok, "%s %s: compare_run %s: %d of %d members IDENTICAL, %d of %d particles replayed IDENTICAL (the "
+                "plan: %d); %s" % (name, what, res, ident, E, pid, len(parts), want, cnt))
         if not ok:
             for l in cout.splitlines():
                 if "FAIL" in l or "REFUSED" in l:
@@ -558,7 +812,7 @@ def main():
             except OSError as e:
                 print("    %s member %d: %s" % (name, k, e))
                 continue
-            same += mine_a == port_a and mine_s == port_s
+            same += attempts_same(mine_a, mine_s, port_a, port_s)
             keys += r2 == 0 and mine_a[1:2] == ["# run " + kout.strip()]
             outcomes = [l.split()[1] for l in mine_a if l and not l.startswith("#")][:-1]
             first_rej += bool(outcomes) and outcomes[0] == "r"
@@ -576,6 +830,10 @@ def main():
                     "F: the test particles' masses move no bit: every sample line is A's (%d lines), as the port's "
                     "testparticle_type 0 makes it; a step that took their reaction on Saturn or their kinetic energy "
                     "would move them" % len(sample_lines(out)))
+        if name == "A":
+            idv, idl = identity(out)
+            verdict(idv.get("contract") == "off" and idv.get("flags") == "checked" and idv.get("fma") == "hardware",
+                    "A: the record's identity line says the shipped build: %s" % idl[2:])
         if name == "D1":
             c = per.get(0, {})
             verdict(int(c.get("steps_rejected", 0)) >= 1 and int(c.get("iterations_max_exceeded", 0)) >= 1,
@@ -584,7 +842,7 @@ def main():
         if n_active is not None and name in ("A", "B", "C", "E"):
             member = int(a[a.index("--member") + 1]) if "--member" in a else None
             phys = ring_physics(out, prob, n_active, member)
-            ok, text = physics_verdict(phys, skip=(1,) if name == "C" else ())
+            ok, text, _ = physics_verdict(phys, skip=(1,) if name == "C" else ())
             verdict(ok, "%s: the physics%s: %s" % (name, ", the flyby's wave aside" if name == "C" else "", text))
             if name == "C":
                 f = phys[1]
@@ -594,24 +852,50 @@ def main():
 
     # 5. controls -------------------------------------------------------------
     print("5. controls, each of which must fail")
-    recA, probA, aA, EA, outA = records["A"]
-    for label, exe, want in (("the flag checks compiled out, contraction off", unchecked, "PASS"),
-                             ("the flag checks compiled out, a*b + c fused (contraction on)", contract, "FAIL")):
+    recA, probA, aA, EA, outA = records["A"][:5]
+    coutA = records["A"][5] if len(records["A"]) > 5 else ""
+    for label, exe, want, wid in (("the flag checks compiled out, contraction off", unchecked, "PASS", ("off", "unchecked")),
+                                  ("the flag checks compiled out, a*b + c fused (contraction on)", contract, "FAIL",
+                                   ("on", "unchecked"))):
         rec = os.path.join(work, "A_%s.rec" % os.path.basename(exe).split(".")[0])
         rc, out, err = run([exe] + dev + ["--problem", probA, "--quiet"] + aA)
         write(rec, out)
+        idv, idl = identity(out)
         rc, cout = compare(rec, probA, cft, EA)
         members, parts, res = compare_summary(cout)
-        fails = [m for m in members if m[2] == "FAIL"]
         first = next((l for l in cout.splitlines() if re.match(r"^member \d+ .*: FAIL:", l)), "")
-        verdict(res == want, "contraction control, %s: compare_run %s%s" % (
-            label, res, (" (%s)" % first.strip()[:240]) if first else ", %d of %d members IDENTICAL" % (
-                sum(1 for m in members if m[2] == "IDENTICAL"), EA)))
-    # one hex digit planted in a sampled member's record: a column on two lines
-    recE, probE, aE, _, outE = records["E"]
+        verdict(res == want and (idv.get("contract"), idv.get("flags")) == wid,
+                "contraction control, %s: compare_run %s%s; its identity line: %s" % (
+                    label, res, (" (%s)" % first.strip()[:240]) if first else ", %d of %d members IDENTICAL" % (
+                        sum(1 for m in members if m[2] == "IDENTICAL"), EA), " ".join(idl.split()[4:])))
+    # THE PLANTS, in an ensemble record of the program under test: A itself
+    # in --quick (3 waves, 12 steps), P in full (A's ring, 12 steps)
+    if args.quick:
+        tag, recP, outP, coutP = "A", recA, outA, coutA
+    else:
+        tag, aP = "P", ["--dt", "600", "--steps", "12", "--sample", "4"]
+        recP = os.path.join(work, "P.rec")
+        rcp, outP, errp = run([wave] + dev + ["--problem", probA, "--quiet"] + aP)
+        write(recP, outP)
+        rc, coutP = compare(recP, probA, cft, 3)
+        members, parts, res = compare_summary(coutP)
+        want = particle_plan(probA, 3)
+        verdict(rcp == 0 and rc == 0 and res == "PASS" and sum(1 for m in members if m[2] == "IDENTICAL") == 3
+                and len(parts) == want and all(x[1] == "IDENTICAL" for x in parts),
+                "P, the plants' record (A's ring, 3 waves, 12 steps, from dt0 600 s): compare_run %s, %d of 3 members "
+                "IDENTICAL, %d of %d particles replayed IDENTICAL (the plan: %d)"
+                % (res, sum(1 for m in members if m[2] == "IDENTICAL"), sum(1 for x in parts if x[1] == "IDENTICAL"),
+                   len(parts), want))
+    if EA == 3 and coutP:
+        hold_plants(work, tag, outP, coutP, probA, cft)
+    else:
+        verdict(False, "the plants: no three-member record to plant in (E=%d)" % EA)
+    # E's: one hex digit planted in the one-system record, a column on two lines
+    recE, probE, aE, _, outE = records["E"][:5]
     lines = outE.splitlines()
     sl = [i for i, l in enumerate(lines) if l.startswith("sample ")]
-    cols = [("t", 3), ("E", 6), ("vz of the last body", -4), ("t_lo", -1)]
+    nE = Cols(outE).n
+    cols = [("t", 3), ("E", 6), ("vz of body %d" % (nE - 1), -4), ("the exact-time pair's t_lo", -1)]
     if args.quick:
         cols = cols[1:2] + cols[3:]
     for cname, tok in cols:
@@ -632,21 +916,28 @@ def main():
         write(rec, "\n".join(mut) + "\n")
         rc, cout = compare(rec, probE, cft, 1)
         line = next((l for l in cout.splitlines() if re.match(r"^member \d+ .*: FAIL:", l)), "")
-        verdict(rc == 1 and "FAIL" in line and planted == 2,
-                "a digit planted in %s on %d sample lines of the member's record: compare_run rc %d: %s"
+        where = r"^member 1 \(\S+\): FAIL: first differing line: record line %d \(sample \d+, step \d+\): %s(?: \([^)]*\))?: record " % (
+            sl[1] + 1, re.escape(cname))
+        verdict(rc == 1 and re.search(where, cout, re.M) is not None and planted == 2,
+                "E: a digit planted in %s on %d sample lines of member 1's one-system record: compare_run rc %d: %s"
                 % (cname, planted, rc, line.strip()[:260]))
-    # a trailer counter changed
-    recB, probB, aB, EB, outB = records["B"]
-    mut = re.sub(r"^(# system 0 steps_done=\S+ iterations_max_exceeded=\S+ steps_rejected=)(\d+)",
-                 lambda m: m.group(1) + str(int(m.group(2)) + 1), outB, flags=re.M)
-    mut = re.sub(r"^(# steps_done=\S+ iterations_max_exceeded=\S+ steps_rejected=)(\d+)",
-                 lambda m: m.group(1) + str(int(m.group(2)) + 1), mut, flags=re.M)
-    rec = os.path.join(work, "B_counter.rec")
-    write(rec, mut)
-    rc, cout = compare(rec, probB, cft, EB)
-    line = next((l for l in cout.splitlines() if "FAIL" in l and "trailer" in l), "")
-    verdict(rc == 1 and mut != outB and "steps_rejected" in line,
-            "member 0's steps_rejected one more, the total with it: compare_run rc %d: %s" % (rc, line.strip()[:240]))
+    # the attempts comparison (part 4's, attempts_same()): member 0 of A's
+    # attempts record with one dt changed is not the port's, and as written it is
+    pa0, att0 = os.path.join(work, "port_A_0.att"), os.path.join(work, "att_A", "member0.att")
+    ps0, sch0 = os.path.join(work, "port_A_0.sched"), os.path.join(work, "att_A", "member0.sched")
+    try:
+        mine_a, mine_s = open(att0).read().splitlines(), open(sch0).read().splitlines()
+        port_a = [l.rstrip("\r") for l in open(pa0).read().splitlines()]
+        port_s = [l.rstrip("\r") for l in open(ps0).read().splitlines()]
+        j = next(k for k, l in enumerate(mine_a) if l and not l.startswith("#"))
+        toks = mine_a[j].split()
+        bad = list(mine_a)
+        bad[j] = " ".join([flip(toks[0])] + toks[1:])
+        verdict(attempts_same(mine_a, mine_s, port_a, port_s) and not attempts_same(bad, mine_s, port_a, port_s),
+                "the attempts comparison: member 0 of A's attempts record is the port's as written, and not with one "
+                "dt changed (its line %d, %s to %s)" % (j + 1, toks[0], flip(toks[0])))
+    except (OSError, StopIteration) as e:
+        verdict(False, "the attempts comparison: no attempts record of A's member 0 to plant in: %s" % e)
     # bit-identity is not validity (CLAUDE.md): wave 0 of A's ring with its
     # zonal line deleted (not regenerated, so the speeds are still its
     # field's) runs, and this program's record is the port's bit for bit;
@@ -658,16 +949,17 @@ def main():
     rc2, out2, err2 = run([cft, "--format", "fp64", "--arith", "fma", "--engine", "loop", "--problem", noz, "--quiet"] + za)
     write(os.path.join(work, "A_no_zonal.rec"), out1)
     same = rc1 == 0 and rc2 == 0 and sample_lines(out1) == sample_lines(out2) and len(sample_lines(out1)) > 1
-    caught, text = False, err1.strip()[-200:]
+    caught, text, refused = False, err1.strip()[-200:], []
     if rc1 == 0:
-        php = ring_physics(out1, probA, 7, 0)
-        _, text = physics_verdict(php)
-        p0 = php[0]
-        caught = p0["gap"] <= GAP_MAX and p0["circ"] > CIRC_BOUND and abs(p0["mm"]) > MM_BOUND   # each, alone
+        # physics_verdict's own decision, and each of the distance and the
+        # angle among the criteria that make it
+        okp, text, refused = physics_verdict(ring_physics(out1, probA, 7, 0))
+        caught = not okp and "circ" in refused and "mm" in refused
     verdict(same and caught,
             "the physics control: wave 0 of A's ring with its zonal line deleted: this program's %d sample lines are "
-            "the port's (%s), and the physics FAILS it, the distance and the angle each: %s"
-            % (len(sample_lines(out1)), "IDENTICAL" if same else "NOT identical, rc %d/%d" % (rc1, rc2), text))
+            "the port's (%s), and physics_verdict() refuses it (by %s), the distance and the angle each: %s"
+            % (len(sample_lines(out1)), "IDENTICAL" if same else "NOT identical, rc %d/%d" % (rc1, rc2),
+               ", ".join(refused) or "nothing", text))
 
     # 6. flags ------------------------------------------------------------------
     print("6. flags: the port aborts, and this program stops by name")

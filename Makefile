@@ -643,7 +643,7 @@ $(B)/wave_host_unchecked$(EXE): src/wave/wave_main.cpp $(WAVE_DEPS)
 
 $(B)/wave_host_contract$(EXE): src/wave/wave_main.cpp $(WAVE_DEPS)
 	@mkdir -p $(B)
-	$(CXX) $(filter-out -ffp-contract=off,$(WAVE_CXXFLAGS)) -ffp-contract=fast -DWAVE_UNCHECKED -Isrc -o $@ src/wave/wave_main.cpp $(WAVE_LDFLAGS)
+	$(CXX) $(filter-out -ffp-contract=off,$(WAVE_CXXFLAGS)) -ffp-contract=fast -DWAVE_CONTRACT_ON -DWAVE_UNCHECKED -Isrc -o $@ src/wave/wave_main.cpp $(WAVE_LDFLAGS)
 
 $(B)/wave_corpus$(EXE): src/wave/wave_corpus.cpp $(WAVE_DEPS) $(CFTLIB)
 	@mkdir -p $(B)
@@ -661,13 +661,13 @@ ifeq ($(HIP),1)
                      $(foreach a,$(or $(HIP_ARCH),120),-gencode arch=compute_$(a),code=sm_$(a)) \
                      -ftz=false -prec-div=true -prec-sqrt=true -Xcompiler -mfma,-fno-math-errno
     WAVE_NOCONTRACT := --fmad=false -Xcompiler -ffp-contract=off
-    WAVE_CONTRACT   := --fmad=true -Xcompiler -ffp-contract=fast
+    WAVE_CONTRACT   := --fmad=true -Xcompiler -ffp-contract=fast -DWAVE_CONTRACT_ON
   else
     WAVE_HIPCC    := HIP_PLATFORM=$(HIP_PLATFORM) HIP_PATH=$(HIP_ROOT) $(HIP_ROOT)/bin/hipcc
     WAVE_GPUFLAGS := -std=c++17 -O2 $(foreach a,$(or $(HIP_ARCH),gfx1102),--offload-arch=$(a)) \
                      -fno-gpu-flush-denormals-to-zero -fno-math-errno -Xarch_host -mfma
     WAVE_NOCONTRACT := -ffp-contract=off
-    WAVE_CONTRACT   := -ffp-contract=fast
+    WAVE_CONTRACT   := -ffp-contract=fast -DWAVE_CONTRACT_ON
   endif
 wave: $(B)/wave $(B)/wave_corpus_gpu $(B)/wave_unchecked $(B)/wave_contract $(B)/wave_corpus$(EXE)
 
