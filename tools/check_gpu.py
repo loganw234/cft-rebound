@@ -88,14 +88,19 @@
 #    device from a first step far too large, so that both waves reject and
 #    are sampled. tools/compare_run.py, run with no artifact, holds that GPU
 #    record against this tree's CPU reruns: both members IDENTICAL, and
-#    their particles. Then one hex digit of one column on one line of wave 0
-#    is planted, a column at a time, on more than one line (the exact-time
-#    pair among them, which the host's augmented sum makes): each must FAIL
-#    wave 0 naming that line and column, while wave 1 stays IDENTICAL. The
-#    record's columns are read here from its own `# columns:` line, apart
-#    from compare_run.py's reader. That is REBOUND's order; the same is
-#    done once more in the FMA form (--arith fma), the form P2's kernel is
-#    held in, with one plant.
+#    their particles. Then, in each wave in turn, one hex digit of one column
+#    on one line is planted, one plant a run: five columns (x of body 1, vz
+#    of the last body, t, dt_next, and the exact-time pair's t_lo, which the
+#    host's augmented sum makes) on the wave's first and last sampled lines.
+#    Each must FAIL the planted wave naming that line and column, while the
+#    other wave stays IDENTICAL, its particles too. So a compare_run.py that
+#    never compares one of the two members FAILs the seam on that member's
+#    plants (V1 measured the gap while every plant was in wave 0: a copy
+#    that never compared member 1 passed). The record's columns are read
+#    here from its own `# columns:` line, apart from compare_run.py's
+#    reader. That is REBOUND's order; the same is done once more in the FMA
+#    form (--arith fma), the form P2's kernel is held in, with one plant in
+#    each wave.
 #
 # 4. THE LEGS, each in its quick form as the Makefile's check-quick runs it
 #    (check_dropin as check-light runs it, --light), the commands read from
@@ -957,8 +962,8 @@ def seam(shadow, work, art, probe_line, unpublished, env_dev, env_sw, real):
     if rc:
         verdict(False, "make_ring.py failed (rc %d): %s" % (rc, short(err or out)))
         return
-    # REBOUND's own order, with a plant in each of five columns; then the FMA
-    # form, P2's kernel's (ROUND5.md, P2), with one plant
+    # REBOUND's own order, with a plant in each of five columns in each wave;
+    # then the FMA form, P2's kernel's (ROUND5.md, P2), with one plant a wave
     for arith in ("rebound", "fma"):
         seam_form(shadow, work, art, probe_line, unpublished, env_dev, env_sw, real, waves, arith)
 
@@ -1006,31 +1011,39 @@ def seam_form(shadow, work, art, probe_line, unpublished, env_dev, env_sw, real,
     rows = rec_text.splitlines()
     n = int(re.search(r"\bN=(\d+)", rec_text).group(1))
     cols = Cols(next(l for l in rows if l.startswith("# columns:")), n)
-    lines0 = [k for k, l in enumerate(rows) if l.startswith("system 0 sample ")][1:]   # sample 0 is the problem's
-    # each label is the column as compare_run.py names it in its verdict
-    plants = [("x", 1, lines0[-1], "x of body 1"), ("dt_next", None, lines0[0], "dt_next"),
-              ("t_lo", None, lines0[0], "the exact-time pair's t_lo"), ("vz", n - 1, lines0[-1], "vz of body %d" % (n - 1)),
-              ("t", None, lines0[-1], "t")]
+    # each label is the column as compare_run.py names it in its verdict; each
+    # plant goes on its wave's first (0) or last (-1) sampled line
+    plants = [("x", 1, -1, "x of body 1"), ("dt_next", None, 0, "dt_next"),
+              ("t_lo", None, 0, "the exact-time pair's t_lo"), ("vz", n - 1, -1, "vz of body %d" % (n - 1)),
+              ("t", None, -1, "t")]
     if arith != "rebound":
         plants = plants[:1]
-    for col, body, i, label in plants:
-        toks = rows[i].split()
-        t = cols.token(col, body)
-        old = toks[t]
-        mant = old.split("p")[0]
-        toks[t] = mant[:-1] + "%x" % (int(mant[-1], 16) ^ 1) + old[len(mant):]
-        slug = re.sub(r"\W+", "_", label)
-        bad = os.path.join(work, "ring2w_z.%s.planted-%s.rec" % (arith, slug))
-        with open(bad, "w", newline="\n") as f:
-            f.write("\n".join(rows[:i] + [" ".join(toks)] + rows[i + 1:]) + "\n")
-        rc, out, err, mem, parts = drive(bad, "planted-" + slug)
-        named = re.search(r"^member 0 \(\S+\): FAIL: first differing line: record line %d \([^)]*\): %s(?: \([^)]*\))?: "
-                          r"record " % (i + 1, re.escape(label)), out, re.M)
-        verdict(rc == 1 and mem.get(0) == "FAIL" and mem.get(1) == "IDENTICAL" and named is not None,
-                "the plant, arith=%s: one hex digit of %s on wave 0's record line %d (%s to %s): wave 0 FAILs naming "
-                "that line and column, and wave 1 stays IDENTICAL (rc %d; particles %s)"
-                % (arith, label, i + 1, old, toks[t], rc, ", ".join("%s %s" % p for p in parts) or "none"),
-                [] if named else [short(next((l for l in out.splitlines() if l.startswith("member 0 ")), out), 400)])
+    for w in (0, 1):
+        o = 1 - w
+        # the wave's sampled lines; its sample 0 is the problem's
+        sampled = [k for k, l in enumerate(rows) if l.startswith("system %d sample " % w)][1:]
+        for col, body, at, label in plants:
+            i = sampled[at]
+            toks = rows[i].split()
+            t = cols.token(col, body)
+            old = toks[t]
+            mant = old.split("p")[0]
+            toks[t] = mant[:-1] + "%x" % (int(mant[-1], 16) ^ 1) + old[len(mant):]
+            slug = "w%d-%s" % (w, re.sub(r"\W+", "_", label))
+            bad = os.path.join(work, "ring2w_z.%s.planted-%s.rec" % (arith, slug))
+            with open(bad, "w", newline="\n") as f:
+                f.write("\n".join(rows[:i] + [" ".join(toks)] + rows[i + 1:]) + "\n")
+            rc, out, err, mem, parts = drive(bad, "planted-" + slug)
+            named = re.search(r"^member %d \(\S+\): FAIL: first differing line: record line %d \(system %d sample \d+, "
+                              r"step \d+\): %s(?: \([^)]*\))?: record " % (w, i + 1, w, re.escape(label)), out, re.M)
+            others = [v for m, v in parts if m == str(o)]
+            ok = (rc == 1 and mem.get(w) == "FAIL" and mem.get(o) == "IDENTICAL" and named is not None and others
+                  and all(v == "IDENTICAL" for v in others))
+            verdict(ok, "the plant, arith=%s: one hex digit of %s on wave %d's record line %d (%s to %s): wave %d "
+                        "FAILs naming that line and column, and wave %d stays IDENTICAL, its %d particle(s) too (rc %d; "
+                        "particles %s)" % (arith, label, w, i + 1, old, toks[t], w, o, len(others), rc,
+                                           ", ".join("%s %s" % p for p in parts) or "none"),
+                    [] if ok else [short(l, 400) for l in out.splitlines() if l.startswith(("member 0 ", "member 1 "))])
 
 
 # ---------------------------------------------------------------- 4. the legs
