@@ -46,11 +46,12 @@
 #      every counter and every output file (--dt-out, --attempts-out,
 #      --record-iters) byte for byte. Set aside: the header's backend= value
 #      and the two self-tests' banners, which name what they ran on; the
-#      trailer's timings (seconds, steps_per_s, wall_seconds, the t_ buckets,
-#      system_steps_per_s); and the by= of a route the device does not publish
-#      (absent on the device, opt_in in software; entry 54), counted. stderr
-#      is compared too, device lines and the `done:` line's seconds set aside,
-#      and a difference there is printed;
+#      trailer's timings, each by its name (seconds, steps_per_s,
+#      wall_seconds, today's nine t_ buckets, system_steps_per_s: a key not
+#      named is held, t_ or not); and the by= of a route the device does not
+#      publish (absent on the device, opt_in in software; entry 54), counted.
+#      stderr is compared too, device lines and the `done:` line's seconds
+#      set aside, and a difference there is printed;
 #    - its physics, beside the bits: steps, rejections, passes, flags.
 #    The leg's own verdict (rc 0, RESULT: PASS or check_dropin's "every case
 #    passed", no FAIL line) is required as well. So a leg passes on the GPU
@@ -64,13 +65,15 @@
 #    THE CONTROLS, permanent, each a real run through the witness: a record
 #    with one hex digit planted after the run must DIFFER by line and column,
 #    and so must the trailer's calls= one more (on the line whose timings are
-#    set aside) and an attempts record with one outcome turned; a device line
-#    changed by one character must FAIL as not the probe's; a run whose
-#    environment names no artifact must FAIL as a stand-in; a run without
-#    CFT_HIP_INFO must FAIL for its missing device line; check_records' whole
-#    quick leg run with no artifact, which passes by itself, must FAIL here,
-#    every process of it a stand-in; and, under strace, a process that runs
-#    ias15_cft past its witness must be caught.
+#    set aside), a key t_new=1 added to that line (a t_ key that is not one
+#    of today's timings; the clean run's own timings, every one set aside,
+#    are counted beside it) and an attempts record with one outcome turned;
+#    a device line changed by one character must FAIL as not the probe's; a
+#    run whose environment names no artifact must FAIL as a stand-in; a run
+#    without CFT_HIP_INFO must FAIL for its missing device line;
+#    check_records' whole quick leg run with no artifact, which passes by
+#    itself, must FAIL here, every process of it a stand-in; and, under
+#    strace, a process that runs ias15_cft past its witness must be caught.
 #
 # 2. THE ROUTES (V0, entry 54), at every format. Forced on, `scalar` and
 #    `reduce_seg` run on the device in the software backend's bits: every
@@ -166,7 +169,15 @@ WITNESSED = ("ias15_cft", "check_dropin", "gate_real", "gate_subprocess", "gate_
 REPLAYED = ("ias15_cft", "check_dropin")
 OUT_FLAGS = ("--dt-out", "--attempts-out", "--record-iters")
 DEVICE_LINE = "cft hip: "
-TIMING = re.compile(r" (?:seconds|steps_per_s|wall_seconds|system_steps_per_s|t_[a-z_]+)=\S+")
+# The trailer's timings, set aside, each by its name as src/ias15_cft.c
+# prints it today: seconds and steps_per_s in the trailer's printf,
+# wall_seconds and the nine t_ rows of trailer_keys[], and an ensemble's
+# system_steps_per_s. Named, not matched by a pattern: a key that is not one
+# of these is held, until it is named here (V1: under `t_[a-z_]+` a planted
+# t_new=1 passed). Control a3 plants one.
+TIMING_KEYS = ("seconds", "steps_per_s", "wall_seconds", "t_program", "t_elem", "t_divsqrt", "t_gravity", "t_g_copy",
+               "t_g_accum", "t_g_lib", "t_g_divsqrt", "t_reduce", "system_steps_per_s")
+TIMING = re.compile(r" (?:%s)=\S+" % "|".join(TIMING_KEYS))
 
 FAILS = []
 OKS = [0]
@@ -763,6 +774,27 @@ def controls(shadow, work, art, probe_line, unpublished, env_dev, legs=None):
     hit = pres["differ"] and ("stdout line %d" % (k + 1)) in pres["differ"][0]
     verdict(hit, "control a2: the trailer's calls= one more on line %d, the line whose timings are set aside: %s"
             % (k + 1, "caught" if hit else "NOT CAUGHT"))
+    # (a3) on that line, a key that is not one of today's timings, t_new=1,
+    # which `t_[a-z_]+` set aside with them (V1). Beside it, the clean run's
+    # own timings: each one named in TIMING_KEYS, and each one set aside
+    clean = read(os.path.join(d, tag + ".dev.out")).splitlines()
+    sw_line = next(l for l in read(os.path.join(d, tag + ".sw.out")).splitlines() if l.startswith("# steps_done="))
+    td = dict(m.group(0)[1:].split("=", 1) for m in TIMING.finditer(clean[k]))
+    ts = dict(m.group(0)[1:].split("=", 1) for m in TIMING.finditer(sw_line))
+    moved = [x for x in td if td[x] != ts.get(x)]
+    absent = [x for x in TIMING_KEYS if x not in td and x != "system_steps_per_s"]   # that one an ensemble's alone
+    with open(os.path.join(pd, tag + ".dev.out"), "w", newline="\n") as f:
+        f.write("\n".join(clean[:k] + [clean[k] + " t_new=1"] + clean[k + 1:]) + "\n")
+    pres = analyse(pd, probe_line, unpublished)
+    hit = bool(pres["differ"]) and ("stdout line %d, " % (k + 1)) in pres["differ"][0] \
+        and "device t_new=1, software <end>" in pres["differ"][0]
+    verdict(hit and not absent and sorted(td) == sorted(ts),
+            "control a3: t_new=1, a t_ key that is not one of today's timings, added to the device's trailer on line "
+            "%d: %s; the clean run's %d timing value(s) on that line, each named and set aside (%s), %d of them "
+            "different between the device and the software backend (%s)%s"
+            % (k + 1, "caught: " + pres["differ"][0].split(": ", 1)[1] if hit else "NOT CAUGHT", len(td),
+               ", ".join(td), len(moved), ", ".join(moved) or "none",
+               "; named and NOT printed today: %s" % ", ".join(absent) if absent else ""))
     # (b) one byte of the device's attempts record
     with open(os.path.join(pd, tag + ".dev.out"), "w", newline="\n") as f:
         f.write(read(os.path.join(d, tag + ".dev.out")))
