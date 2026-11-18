@@ -91,29 +91,38 @@
 #    device from a first step far too large, so that both waves reject and
 #    are sampled. tools/compare_run.py, run with no artifact, holds that GPU
 #    record against this tree's CPU reruns: both members IDENTICAL, and
-#    their particles. Then, in each wave in turn, one hex digit of one column
-#    on one line is planted, one plant a run: five columns (x of body 1, vz
-#    of the last body, t, dt_next, and the exact-time pair's t_lo, which the
-#    host's augmented sum makes) on the wave's first and last sampled lines.
-#    Each must FAIL the planted wave naming that line and column, while the
-#    other wave stays IDENTICAL, its particles too. The planted wave's
-#    sampled particles are held as well, by what each one's replay carries:
-#    the schedule (t, dt_next, dt_last, E, the exact-time pair), the wave's
-#    massive bodies (its first ones, tools/extract_particle.py) and the
-#    particle's own body, the bodies and their count read from
-#    compare_run.py's own particle lines. A particle whose replay carries the
-#    planted column must FAIL naming that line and column (x of body 1, a
-#    massive body; t, dt_next, t_lo); one whose replay does not must stay
-#    IDENTICAL (vz of the last body, a test particle, unless it is the one
-#    sampled). So a compare_run.py that never compares one of the two
-#    members, or never compares a member's particles, FAILs the seam on
-#    those plants (V1 measured both gaps: a copy that never compared member
-#    1 passed while every plant was in wave 0, and one whose
-#    particle_compare() never compared passed while no plant asked anything
-#    of its own wave's particles). The record's columns are read here from
-#    its own `# columns:` line, apart from compare_run.py's reader. That is
-#    REBOUND's order; the same is done once more in the FMA form (--arith
-#    fma), the form P2's kernel is held in, with one plant in each wave.
+#    their particles. A particle's replay (particle_compare()) carries four
+#    classes of value: the schedule (t, dt_next, dt_last, E, the exact-time
+#    pair), the trailer's counters, the wave's massive bodies (its first
+#    ones, tools/extract_particle.py) and the particle's own body, where the
+#    member's own comparison holds all four and every other body; the
+#    sampled bodies and the massive count are read from compare_run.py's own
+#    particle lines. In each wave in turn one value on one line is planted,
+#    one plant a run, in every class:
+#    - the schedule: t, dt_next and the exact-time pair's t_lo, which the
+#      host's augmented sum makes;
+#    - the trailer's counters: mean_pc_iterations, on the wave's trailer line;
+#    - a massive body: x of body 1;
+#    - a sampled particle's own body: vy of the wave's first sampled
+#      particle in the clean run;
+#    - and a body no sampled replay carries: vz of the last body, a test
+#      particle (unless it is one sampled).
+#    The sample-line plants go on the wave's first and last sampled lines.
+#    Each must FAIL the planted wave naming that line and column (or that
+#    counter), and FAIL naming them too every sampled particle of the wave
+#    whose replay carries the value (all of them for the schedule, the
+#    trailer and a massive body; the one for its own body; none for a body
+#    no replay carries), the rest staying IDENTICAL; the other wave stays
+#    IDENTICAL, its particles too. A last verdict a form holds that every
+#    class has a plant in each wave. So a compare_run.py that never compares
+#    a member, a member's particles, a particle's own body or the trailer's
+#    counters FAILs the seam on those plants (V1 measured the gaps in turn:
+#    every plant in wave 0; no plant asking anything of the planted wave's
+#    particles; none on a particle's own body). The record's columns are
+#    read here from its own `# columns:` line, apart from compare_run.py's
+#    reader. That is REBOUND's order; the same is done once more in the FMA
+#    form (--arith fma), the form P2's kernel is held in, with x of body 1,
+#    dt_next, the sampled particle's vy and the trailer in each wave.
 #
 # 4. THE LEGS, each in its quick form as the Makefile's check-quick runs it
 #    (check_dropin as check-light runs it, --light), the commands read from
@@ -1004,8 +1013,8 @@ def seam(shadow, work, art, probe_line, unpublished, env_dev, env_sw, real):
     if rc:
         verdict(False, "make_ring.py failed (rc %d): %s" % (rc, short(err or out)))
         return
-    # REBOUND's own order, with a plant in each of five columns in each wave;
-    # then the FMA form, P2's kernel's (ROUND5.md, P2), with one plant a wave
+    # REBOUND's own order, seven plants a wave; then the FMA form, P2's
+    # kernel's (ROUND5.md, P2), four a wave: each class in each wave
     for arith in ("rebound", "fma"):
         seam_form(shadow, work, art, probe_line, unpublished, env_dev, env_sw, real, waves, arith)
 
@@ -1073,54 +1082,105 @@ def seam_form(shadow, work, art, probe_line, unpublished, env_dev, env_sw, real,
     rows = rec_text.splitlines()
     n = int(re.search(r"\bN=(\d+)", rec_text).group(1))
     cols = Cols(next(l for l in rows if l.startswith("# columns:")), n)
-    # each label is the column as compare_run.py names it in its verdict; each
-    # plant goes on its wave's first (0) or last (-1) sampled line
-    plants = [("x", 1, -1, "x of body 1"), ("dt_next", None, 0, "dt_next"),
-              ("t_lo", None, 0, "the exact-time pair's t_lo"), ("vz", n - 1, -1, "vz of body %d" % (n - 1)),
-              ("t", None, -1, "t")]
-    if arith != "rebound":
-        plants = plants[:1]
+    # what the clean run sampled, from compare_run.py's own lines: each wave's
+    # particles, and how many massive bodies their replays carry
+    chosen = {w: [p[1] for p in parts if p[0] == w] for w in (0, 1)}
+    nact = sorted({p[2] for p in parts if p[2] is not None})
+    nact = nact[0] if len(nact) == 1 else None
+    # what a particle's replay carries, each class with as many particles of
+    # the planted wave as must FAIL on a plant in it: the schedule (t, dt_next,
+    # dt_last, E, the exact-time pair) and the trailer's counters, every one;
+    # a massive body (the wave's first nact, tools/extract_particle.py), every
+    # one; a sampled particle's own body, that particle alone; and a body no
+    # sampled replay carries, none
+    CARRIED = ("the schedule", "the trailer's counters", "a massive body", "a sampled particle's own body")
+
+    def kind(body, w, trailer):
+        if trailer:
+            return "the trailer's counters"
+        if body is None:
+            return "the schedule"
+        if nact is not None and body < nact:
+            return "a massive body"
+        return "a sampled particle's own body" if body in chosen[w] else "a body no sampled replay carries"
+
+    covered = {0: set(), 1: set()}
     for w in (0, 1):
         o = 1 - w
         # the wave's sampled lines; its sample 0 is the problem's
         sampled = [k for k, l in enumerate(rows) if l.startswith("system %d sample " % w)][1:]
+        # each label is the value as compare_run.py names it in its verdict;
+        # a sample-line plant goes on the wave's first (0) or last (-1)
+        # sampled line, the trailer's (at None) on the wave's trailer line
+        plants = [("x", 1, -1, "x of body 1"), ("dt_next", None, 0, "dt_next")]
+        if arith == "rebound":
+            plants += [("t_lo", None, 0, "the exact-time pair's t_lo"), ("vz", n - 1, -1, "vz of body %d" % (n - 1)),
+                       ("t", None, -1, "t")]
+        if chosen[w]:
+            plants.append(("vy", chosen[w][0], 0, "vy of body %d" % chosen[w][0]))
+        plants.append(("mean_pc_iterations", None, None, "the trailer's mean_pc_iterations"))
         for col, body, at, label in plants:
-            i = sampled[at]
-            toks = rows[i].split()
-            t = cols.token(col, body)
-            old = toks[t]
-            mant = old.split("p")[0]
-            toks[t] = mant[:-1] + "%x" % (int(mant[-1], 16) ^ 1) + old[len(mant):]
+            trailer = at is None
+            cls = kind(body, w, trailer)
+            covered[w].add(cls)
+            if trailer:
+                i = next(k for k, l in enumerate(rows) if l.startswith("# system %d steps_done=" % w))
+                toks = rows[i].split()
+                t = next(j for j, x in enumerate(toks) if x.startswith(col + "="))
+                old = toks[t]
+                toks[t] = old[:-1] + str(int(old[-1]) ^ 1)
+                was, now = old.split("=", 1)[1], toks[t].split("=", 1)[1]
+                where = r"trailer %s is %s in the record" % (col, re.escape(now))
+                named_re = r"FAIL: %s \(line %d\), and %s here" % (where, i + 1, re.escape(was))
+                where += r", and %s in the replay" % re.escape(was)
+                what = "one digit of %s on wave %d's trailer, record line %d (%s to %s)" % (label, w, i + 1, was, now)
+            else:
+                i = sampled[at]
+                toks = rows[i].split()
+                t = cols.token(col, body)
+                old = toks[t]
+                mant = old.split("p")[0]
+                toks[t] = mant[:-1] + "%x" % (int(mant[-1], 16) ^ 1) + old[len(mant):]
+                where = r"record line %d \(system %d sample \d+, step \d+\): %s(?: \([^)]*\))?: record " % (
+                    i + 1, w, re.escape(label))
+                named_re = "FAIL: first differing line: " + where
+                what = "one hex digit of %s on wave %d's record line %d (%s to %s)" % (label, w, i + 1, old, toks[t])
             slug = "w%d-%s" % (w, re.sub(r"\W+", "_", label))
             bad = os.path.join(work, "ring2w_z.%s.planted-%s.rec" % (arith, slug))
             with open(bad, "w", newline="\n") as f:
                 f.write("\n".join(rows[:i] + [" ".join(toks)] + rows[i + 1:]) + "\n")
             rc, out, err, mem, parts = drive(bad, "planted-" + slug)
-            where = r"record line %d \(system %d sample \d+, step \d+\): %s(?: \([^)]*\))?: record " % (
-                i + 1, w, re.escape(label))
-            named = re.search(r"^member %d \(\S+\): FAIL: first differing line: %s" % (w, where), out, re.M)
+            named = re.search(r"^member %d \(\S+\): %s" % (w, named_re), out, re.M)
             others = [p for p in parts if p[0] == o]
             mine = [p for p in parts if p[0] == w]
-            # a particle's replay carries the schedule (t, dt_next, dt_last, E,
-            # the exact-time pair), the wave's massive bodies (its first ones,
-            # tools/extract_particle.py; as many as compare_run.py's line says)
-            # and the particle's own body; so it holds the plant when the plant
-            # is in the schedule (body None) or in a body it carries
+            # the particles whose replay carries the planted value, from this
+            # run's own lines: every one for the schedule and the trailer, and
+            # for a body those whose replay carries it, a massive one or its own
             holds = [p for p in mine if body is None or (p[2] is not None and (body < p[2] or body == p[1]))]
+            want = {"a sampled particle's own body": 1, "a body no sampled replay carries": 0}.get(cls, len(chosen[w]))
             right = [p for p in mine if (re.search(r"held to the record: FAIL: " + where, p[4]) if p in holds
                                          else p[3] == "IDENTICAL")]
-            ok = (rc == 1 and mem.get(w) == "FAIL" and mem.get(o) == "IDENTICAL" and named is not None and mine
-                  and len(right) == len(mine) and others and all(p[3] == "IDENTICAL" for p in others))
-            verdict(ok, "the plant, arith=%s: one hex digit of %s on wave %d's record line %d (%s to %s): wave %d "
-                        "FAILs naming that line and column, and so do those of its %d sampled particle(s) whose replay "
-                        "carries that column, %d here (a replay carries the schedule, the wave's %s massive bodies and "
-                        "the particle's own body), the rest IDENTICAL: %d of %d as they must be; wave %d stays "
-                        "IDENTICAL, its %d particle(s) too (rc %d; particles, wave:body, %s)"
-                    % (arith, label, w, i + 1, old, toks[t], w, len(mine), len(holds),
-                       "/".join(sorted({str(p[2]) for p in mine})) or "no", len(right), len(mine), o, len(others), rc,
-                       listed(parts)),
+            ok = (rc == 1 and mem.get(w) == "FAIL" and mem.get(o) == "IDENTICAL" and named is not None
+                  and len(mine) == len(chosen[w]) > 0 and len(holds) == want and len(right) == len(mine)
+                  and others and all(p[3] == "IDENTICAL" for p in others))
+            verdict(ok, "the plant, arith=%s, on %s: %s: wave %d FAILs naming it; of its %d sampled particle(s) the "
+                        "%d whose replay carries it FAIL naming it too, where a plant on %s must make %d, and the rest "
+                        "stay IDENTICAL: %d of %d as they must be (a replay carries the schedule, the trailer's "
+                        "counters, the wave's %s massive bodies and the particle's own body); wave %d stays IDENTICAL, "
+                        "its %d particle(s) too (rc %d; particles, wave:body, %s)"
+                    % (arith, cls, what, w, len(mine), len(holds), cls, want, len(right), len(mine),
+                       nact if nact is not None else "no", o, len(others), rc, listed(parts)),
                     [] if ok else [short(l, 400) for l in out.splitlines() if l.startswith(("member 0 ", "member 1 "))]
                     + ["wave %d's particle, body %d: %s" % (p[0], p[1], told(p[4])) for p in mine if p not in right])
+    missing = ["wave %d: no plant on %s" % (w, ", ".join(c for c in CARRIED if c not in covered[w])) for w in (0, 1)
+               if any(c not in covered[w] for c in CARRIED)]
+    uncarried = all("a body no sampled replay carries" in covered[w] for w in (0, 1))
+    verdict(not missing, "the plants, arith=%s: every class a particle's replay carries has a plant in each wave - "
+                         "the schedule, the trailer's counters, a massive body, a sampled particle's own body (bodies "
+                         "%s and %s, the clean run's)%s"
+            % (arith, ",".join(map(str, chosen[0])) or "none", ",".join(map(str, chosen[1])) or "none",
+               "; and a body no sampled replay carries" if uncarried else ""),
+            missing)
 
 
 # ---------------------------------------------------------------- 4. the legs
