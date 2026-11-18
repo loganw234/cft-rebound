@@ -68,6 +68,70 @@
 #   (full only) Case 1 at binary128 and binary256, the binary128 one with
 #      --format-diff fp256; and 6, the FMA form on the program engine, held
 #      as recorded and again with --rerun-engine loop.
+#   7. A producer's own attempts records and schedules (ROUND5.md, P3), at
+#      every format case 1 runs. The producer is ias15_cft, each member run
+#      alone with --attempts-out and --record-iters, under the names the
+#      driver states (PRODUCER_FILES, imported here, so a driver looking
+#      anywhere else finds nothing); each run's lines and counters are
+#      asserted to be the record's member's, so the files are the record's
+#      run's. Their directory's name holds " and ", which the driver's lines
+#      put between the two paths, so no reading of those lines here may
+#      split them there (V3, 2026-11-16): each is matched whole, against the
+#      paths this gate wrote. The driver on case 1's record with
+#      --producer-files and --particle-strata 9 samples every member's
+#      particles, the members its member sample leaves NOT RERUN: PASS,
+#      every pair held to its member's run by its key, and the limit of the
+#      producer's files printed beside the plan, word for word as
+#      PRODUCER_LIMIT here states it (V3's D1: only the driver's source
+#      said it); and with an empty directory instead, each member falls
+#      back to today's rerun, naming both its files. The limit is held as
+#      lines, not substrings (two adjacent copies share a newline, and a
+#      substring count saw them as one: V3, 2026-11-18): one line, after the
+#      plan's, and no other line in any wording, in every run of this case
+#      that reads a producer's files, twelve at binary64; and no line of it
+#      in any wording where no files are read: case 1 at each format, case
+#      5's two records, and kepler here.
+#      GATE 1, the same particles: each particle, picked alike in the two
+#      runs, replayed from the producer's files is IDENTICAL to the same
+#      particle replayed from a rerun's - every sample line and the
+#      trailer's counters, flags and calls, read from the replays' own
+#      records, which the driver keeps and which each name the attempts
+#      record they ran from - with the members whose first attempt was
+#      rejected, the one rejection that leaves state, among them.
+#      GATE 2, beside each particle: its replay's counters are its member's
+#      trailer, read here, and so is each not-rerun member's trailer line;
+#      and its closest approaches agree with this gate's mpmath.
+#      GATE 1b, at binary64: gate 1's producer is this tree, so a driver
+#      reading a rerun's schedule in place of the producer's passes it
+#      (measured, with such a mutant of the driver). So a
+#      producer whose exit test is not this tree's: two fewer passes on the
+#      first attempt of a member that is not rerun, which moves its bits,
+#      one fewer on a member that is, which moves no bit at the samples and
+#      only its trailer's counters (which ones, the gate derives and
+#      prints: V3 found the max moving with the mean where this said "only
+#      the mean"), each member's lines that schedule's replay. From the
+#      producer's files the first member holds - the limit, measured, as the
+#      driver now prints it: without a rerun the producer's passes are
+#      taken as given - and the second FAILs on its rerun, its particles
+#      IDENTICAL; from a rerun's, all four of their particles FAIL. So the
+#      same-particles gate cannot pass against itself. And the waves in
+#      their primary's zonal field (`zonal 0 R J2
+#      J4`): PASS, every particle replayed with the line. And half a pair,
+#      one member's schedule taken away: that member falls back to a rerun,
+#      naming the schedule alone, PASS. One system's records: a --member k
+#      record takes member k's pair, PASS; a single problem with no system
+#      lines and an active line (the waves' w0), run with no --member, keys
+#      its files member=-1 and names them member0's, PASS; kepler, every
+#      body active, says the files are not read, PASS. And case 1's
+#      record rewritten as another producer's (program=wave backend=hip:0
+#      engine=wave), held with --rerun-engine loop: its files keyed at the
+#      engine it is rerun on, PASS; with no --rerun-engine, REFUSED, naming
+#      the engine. And the FMA form's program-engine record, rerun on the
+#      loop engine: its files keyed at engine=program, the engine it ran,
+#      and its particles replayed there, PASS - 4 steps in --quick, 20 in
+#      full, so that a driver keying the files to --rerun-engine's engine
+#      (V3's mutant Mj, which only the full gate's case saw) is refused by
+#      name in every tier.
 #
 # NEGATIVE CONTROLS, each asserted to FAIL or be REFUSED by name:
 #   a. one byte of one sampled member's last sample line (an x of a test
@@ -119,6 +183,38 @@
 #      three trailer counters: each FAILs that member's least-closest
 #      particle's replay, naming its line and column (VL: control p alone
 #      held two columns, and plants on the last line alone held one line).
+#   Case 7's, each on a copy of the producer's files, deleted after it runs:
+#   q1. one attempt's dt in an attempts record (its last hex digit), a
+#      member a line: the first attempt of a member whose first attempt was
+#      rejected, and of one whose was accepted, a middle accepted attempt,
+#      and the next line; and the other column, a rejected first attempt's
+#      outcome made an acceptance. At every format: each FAILs both its
+#      member's particles by name; every other particle, and every member
+#      rerun, IDENTICAL.
+#   q2. one pass count in a schedule, a member a line: two fewer on a first
+#      attempt and one more on a middle one, in members not rerun; one
+#      fewer on a first attempt in a member rerun; and two fewer on the
+#      rejected first attempt of a member whose first attempt was rejected
+#      (V3, 2026-11-16: with no plant on a rejected attempt, a driver that
+#      read a rerun's schedule for rejecting members alone passed, its
+#      mutant Mf2). At every format: each FAILs both its member's particles
+#      by name, by a line and column or a trailer counter, while that
+#      member's own rerun is IDENTICAL; and the gate prints, for each, what
+#      the plant moves - the bits, or which of the trailer's counters - as
+#      measured, not asserted: what a plant moves at a given format is a
+#      description (V3, 2026-11-18), and only that it moves something is
+#      held. It reads the replays gate 1 kept, and a replay that is not
+#      there FAILs by name.
+#   q3. a schedule, and an attempts record, from another wave of the same
+#      ring: REFUSED by the run key, naming member and state, and nothing
+#      compared;
+#   q4. a schedule from the zonal waves under another J2: REFUSED, naming
+#      zonal and no other field;
+#   q5. a schedule recorded at binary128: REFUSED, naming format among the
+#      fields;
+#   q6. a schedule recorded under `active 3`: REFUSED, naming active and no
+#      other field;
+#   q7. an attempts record given as the schedule: REFUSED by its form.
 #
 # Every case runs a fixed seed and fixed bits, so the verdict is the same
 # on every run (tools/gate_cache.py). None of its step counts is scaled by
@@ -198,9 +294,11 @@ def flyby(name, r, at):
     return "body %s %s" % (name, " ".join(float.hex(x) for x in vals))
 
 
-def write_waves(path, name="cr_waves", tp_mass=None, ulp=None, active=True):
+def write_waves(path, name="cr_waves", tp_mass=None, ulp=None, active=True, zonal=None):
     """The waves. tp_mass=(k, j, m) gives system k's particle j mass m;
-    ulp=(k, j) moves system k's particle j's x by one ulp."""
+    ulp=(k, j) moves system k's particle j's x by one ulp; active=n other
+    than True writes `active n`; zonal, the text of a zonal line after the
+    word (case 7's waves in their primary's own field)."""
     lines = ["# tools/check_compare_run.py: a small ring of waves, member index = radius",
              "name " + name, "G " + float.hex(1.0), "N %d" % (2 + NTP), "E %d" % E]
     for k in range(E):
@@ -219,7 +317,9 @@ def write_waves(path, name="cr_waves", tp_mass=None, ulp=None, active=True):
                 b = " ".join(t)
             lines.append(b)
     if active:
-        lines.append("active 2")
+        lines.append("active %d" % (2 if active is True else active))
+    if zonal:
+        lines.append("zonal " + zonal)
     with open(path, "w", newline="\n") as f:
         f.write("\n".join(lines) + "\n")
     return path
@@ -322,17 +422,787 @@ def value_index(text, name):
     return head[2:].index(name)
 
 
+# ------------------------------------------------------------------ case 7
+# The producer's own files (ROUND5.md, P3; tools/compare_run.py, THE
+# PRODUCER'S OWN FILES). The names a producer writes are stated once, in the
+# driver, and imported here to write ias15_cft's under them: so a driver
+# that looked anywhere else would find none, fall back, and fail gate 1.
+from compare_run import PRODUCER_FILES                       # noqa: E402
+
+# a member's counters, as the record's trailer carries them
+TRAILER = ("steps_done", "steps_rejected", "iterations_max_exceeded", "mean_pc_iterations", "max_pc_iterations")
+SAID = ("steps_done", "steps_rejected", "mean_pc_iterations", "max_pc_iterations", "iterations_max_exceeded")
+PF_LINE = re.compile(r"^  member (\d+): its lines held by (a rerun here|its particles' replays alone, NOT RERUN): (.*)$",
+                     re.M)
+PF_PART = re.compile(r"^  member (\d+): particle (\S+) \(body (\d+), (its least closest approach at the samples|by "
+                     r"the seed)\): (.*)$", re.M)
+PF_VERDICT = re.compile(r"held to the record: (IDENTICAL|FAIL): (.*?); its replay's counters: steps (\S+), rejected "
+                        r"(\S+), mean passes (\S+), max passes (\S+), cap hits (\S+); its closest approach AT THE "
+                        r"SAMPLES: (.*)$")
+# The two sources a particle line can name. Paths follow the producer's
+# phrase, and are never split out of it (a path may hold " and ", the word
+# the driver puts between them: V3, 2026-11-16): the source is the phrase
+# that comes first, and a pair is matched whole against the paths written.
+OWN, RERUNS = "the producer's own attempts record and schedule, ", "this tree's rerun's attempts record and schedule"
+# A member that is not rerun, as the driver must report it: held by its
+# particles' replays only, and within the limit printed beside the plan
+# (V3's D1: "its lines are held by the record alone, and by its particles'
+# replays" claimed more).
+PF_ALONE = re.compile(r"^member (\d+) \(\w+\): NOT RERUN: held only by its particles' replays from the producer's own "
+                      r"files - its massive bodies, its sampled particles, each sample's head fields and exact-time "
+                      r"pair, and its trailer's counters - and its other particles by nothing, within the limit printed "
+                      r"above; its trailer: steps (\S+), rejected (\S+), mean passes (\S+), max passes (\S+), cap hits "
+                      r"(\S+)$", re.M)
+# What the producer's files cannot hold, which the driver must print beside
+# its plan, once, and never without --producer-files. Stated here as this
+# gate's expectation, not read from the driver, as SAMPLE_LIMIT and SCOPE are
+# (V3's D1, 2026-11-16). Its last clause: a rerun holds a setting only
+# through what it moves (V3, 2026-11-18: pc_tol_shift 2 and 8 and max_iter
+# 12 IDENTICAL on a rerun, epsilon 1e-8 and max_iter 6 FAILing).
+PRODUCER_LIMIT = ("particles: the limit of the producer's own files: each replay takes the producer's dts, outcomes "
+                  "and passes as given, so only a member that is rerun holds its decisions; a NOT RERUN member's "
+                  "particles that are not sampled are held by nothing; and the run key holds the files to the "
+                  "arguments the record names, not to those the producer ran with, so its epsilon, pc_tol_shift and "
+                  "max_iter, and the settings no record carries, are held only in a member that is rerun, and there "
+                  "only through what they move in its lines")
+PF_PLAN = "\nparticles: from the producer's own files in "
+# the opening words of the limit's line, by which a copy of it in any wording
+# is found where none may be
+LIMIT_OPENS = "particles: the limit of the producer's own files"
+PF_REFUSED = re.compile(r"^RESULT: REFUSED: member (\d+)'s (attempts record|corrector schedule) (.+?) was recorded for "
+                        r"another run, and a schedule replays only its own run: its run key differs from member \d+'s "
+                        r"in (.+?) \(", re.M)
+CLOSE = re.compile(r"(\S+) (\S+) at sample (\d+) \(step \d+\)")
+
+
+def pf(d, k):
+    """Member k's pair in a producer's directory, by the driver's names."""
+    return tuple(os.path.join(d, name % k) for _, name in PRODUCER_FILES)
+
+
+def same_path(a, b):
+    return a is not None and b is not None and \
+        os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
+def pf_members(out):
+    """The driver's line for each member it samples particles in: how its
+    lines are held, and whether it names a producer's pair (which one is
+    names_pair()'s question, asked with the paths this gate wrote)."""
+    res = {}
+    for m in PF_LINE.finditer(out):
+        res[int(m.group(1))] = {"rerun": m.group(2) == "a rerun here", "text": m.group(3),
+                                "producer": "; its particles from the producer's own " in m.group(3)}
+    return res
+
+
+def names_pair(entry, pair):
+    """Whether a member's plan line or a particle's line names exactly this
+    producer's pair, matched whole: no path is split out of the line."""
+    if "verdict" in entry:                                   # a particle's line
+        return (OWN + "%s and %s, " % pair) in entry["text"]
+    return entry["text"].endswith("; its particles from the producer's own %s and %s" % pair)
+
+
+def pf_particles(out):
+    """Each sampled particle's line, by (member, body): its verdict and what
+    it says, the source it names (the phrase that comes first), its counters
+    and its closest approaches."""
+    res = {}
+    for m in PF_PART.finditer(out):
+        rest = m.group(5)
+        v = PF_VERDICT.search(rest)
+        at = {src: rest.find(phrase) for src, phrase in (("producer", OWN), ("rerun", RERUNS)) if phrase in rest}
+        res[(int(m.group(1)), int(m.group(3)))] = {
+            "name": m.group(2), "why": m.group(4), "text": rest,
+            "verdict": v.group(1) if v else "FAIL" if rest.startswith("FAIL") else "?",
+            "what": v.group(2) if v else rest,
+            "counters": dict(zip(SAID, v.groups()[2:7])) if v else {},
+            "closest": [(c.group(1), c.group(2), int(c.group(3))) for c in CLOSE.finditer(v.group(8))] if v else [],
+            "source": min(at, key=at.get) if at else None,
+            "zonal": " massive bodies and its zonal line through " in rest}
+    return res
+
+
+def limit_once(out):
+    """The limit of the producer's files printed as one line, word for word,
+    after the plan's line, and as no other line. Lines are counted, not
+    substrings: two adjacent copies share a newline, and a count of
+    "\\n" + line + "\\n" saw them as one (V3, 2026-11-18)."""
+    lines = out.splitlines()
+    plan = next((i for i, l in enumerate(lines) if l.startswith(PF_PLAN[1:])), None)
+    return lines.count(PRODUCER_LIMIT) == 1 and plan is not None and lines.index(PRODUCER_LIMIT) > plan and \
+        sum(1 for l in lines if l.startswith(LIMIT_OPENS)) == 1
+
+
+def limit_absent(out):
+    """No line of the limit of a producer's files, in any wording: a run
+    without --producer-files reads no producer's files (V3, 2026-11-18: the
+    line printed on the default path too passed every case)."""
+    return not any(l.startswith(LIMIT_OPENS) for l in out.splitlines())
+
+
+def replays(keep):
+    """The replays' records the driver kept, <keep>/particles/<stem>.rec, by
+    (member, body), from tools/extract_particle.py's stem."""
+    d = os.path.join(keep, "particles")
+    res = {}
+    for f in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+        m = re.search(r"-body(\d+)-m(\d+)\.rec$", f)
+        if m:
+            res[(int(m.group(2)), int(m.group(1)))] = os.path.join(d, f)
+    return res
+
+
+def replay_view(path):
+    """A replay's record as two of them are compared here: its sample lines,
+    its trailer's counters, flags and calls, and the dt file it names."""
+    with open(path) as f:
+        lines = f.read().splitlines()
+    tail = next((l for l in lines if l.startswith("# steps_done=")), "# ")
+    kvs = dict(t.partition("=")[::2] for t in tail[2:].split())
+    dtf = re.search(r" dt_file=(.*)$", next((l for l in lines if l.startswith("# program=")), ""))
+    return ([l for l in lines if l.startswith("sample ")],
+            {c: kvs.get(c) for c in TRAILER + ("flags_seen", "calls", "divsqrt_calls")}, dtf.group(1) if dtf else None)
+
+
+def plant_dt(tok):
+    """A hex float with its mantissa's last hex digit changed (XOR 1), a
+    fraction digit made first where it has none."""
+    mant, _, exp = tok.partition("p")
+    if "." not in mant:
+        mant += ".0"
+    return mant[:-1] + "%x" % (int(mant[-1], 16) ^ 1) + "p" + exp
+
+
+def body_lines(lines):
+    """The indices of a producer's file's lines that are not comments."""
+    return [i for i, l in enumerate(lines) if l.strip() and not l.startswith("#")]
+
+
+def edit_file(path, fn):
+    with open(path) as f:
+        lines = f.read().splitlines()
+    got = fn(lines)
+    with open(path, "w", newline="\n") as f:
+        f.write("\n".join(lines) + "\n")
+    return got
+
+
+def case7(clean, fmts, waves, scratch, cft, progs, quick, record, drive, run, verdict, trailers, member_lines):
+    """CASE 7, the producer's own attempts records and schedules (ROUND5.md,
+    P3): the head of this file says what each part holds."""
+    print("check_compare_run: case 7 - the producer's own attempts records and schedules (ROUND5.md, P3)")
+    fmts = [f for f in fmts if f in clean]
+    if "fp64" not in fmts:
+        verdict(False, "case 7: case 1's binary64 record, to take a producer's files beside")
+        return
+    empty = os.path.join(scratch, "producer_none")
+    shutil.rmtree(empty, ignore_errors=True)
+    os.makedirs(empty)
+
+    def member_run(problem, fmt, steps, sample, k, extra=()):
+        return run([cft, "--format", fmt, "--problem", problem, "--dt", DT0, "--epsilon", "1e-9", "--steps", str(steps),
+                    "--sample", str(sample), "--max-iter", "60", "--member", str(k), "--quiet"] + list(extra))
+
+    def produce(pdir, problem, fmt, steps, sample, text, how=()):
+        """ias15_cft as the producer: each member run alone (`how`: its
+        arithmetic and engine, if not the defaults), writing its own attempts
+        record and schedule into pdir by the driver's names. Returns the
+        members whose run is not the record's member, line for line and
+        counter for counter, so whose files would not be the record's run's."""
+        shutil.rmtree(pdir, ignore_errors=True)
+        os.makedirs(pdir)
+        off = []
+        for k in range(E):
+            att, sch = pf(pdir, k)
+            rc, out, _ = member_run(problem, fmt, steps, sample, k,
+                                    list(how) + ["--attempts-out", att, "--record-iters", sch])
+            ms, mt = parse_samples(out) if rc == 0 else ([], {})
+            es, et = parse_samples(text, k)
+            if rc != 0 or not ms or ms != es or any(mt.get(c) != et.get(c) for c in TRAILER):
+                off.append(k)
+        return off
+
+    def pf_drive(rec, fmt, pdir, keep=None, problem=None):
+        extra = ["--producer-files", pdir, "--particle-strata", str(E)]
+        if keep:
+            shutil.rmtree(keep, ignore_errors=True)
+            extra += ["--keep", keep]
+        return drive(rec, fmt, extra=extra, problem=problem)
+
+    def mp_closest(rec_path, k, j):
+        """Particle j of member k: its least distance to the primary and to the
+        moon over the samples, and at which sample, in mpmath from
+        tools/oracle.py's parse of the record."""
+        _, _, smps, _ = oracle_parse(rec_path, system=k)
+        res = []
+        for i in (0, 1):
+            dists = [mpmath.sqrt(sum((F2m(s["state"][6 * j + c]) - F2m(s["state"][6 * i + c])) ** 2 for c in range(3)))
+                     for s in smps]
+            best = min(dists)
+            res.append((best, dists.index(best)))
+        return res
+
+    def refused(label, rec, pdir, k, what, want, exact=True, problem=None):
+        """A copy of the producer's files whose member k's file is another
+        run's: REFUSED by its key, naming the member, the file and the key
+        fields that differ; then the copy is deleted."""
+        rc, out = pf_drive(rec, "fp64", pdir, problem=problem)
+        m = PF_REFUSED.search(out)
+        fields = m.group(4).split(", ") if m else []
+        ok = (rc == 2 and m is not None and int(m.group(1)) == k and m.group(2) == what and
+              same_path(m.group(3), pf(pdir, k)[0 if what == "attempts record" else 1]) and
+              (fields == want if exact else set(want) <= set(fields)) and "IDENTICAL" not in out)
+        shutil.rmtree(pdir, ignore_errors=True)
+        verdict(ok, "%s: REFUSED by its run key before anything is compared, naming member %d's %s and the key fields "
+                "that differ, %s (rc %d); the copy deleted%s"
+                % (label, k, what, ", ".join(fields) or "none", rc,
+                   "" if ok else ": " + (re.findall(r"^RESULT: .*$", out, re.M) or [out[-400:]])[-1][:500]))
+
+    def fails_of(p, k):
+        return [d for x, d in sorted(p.items()) if x[0] == k]
+
+    # ------------------------------------------------ gates 1 and 2, each format
+    pdirs, alone_of = {}, {}
+    for fmt in fmts:
+        c = clean[fmt]
+        smp, text, rec = c["smp"], c["text"], c["rec"]
+        # " and " in the name, the word the driver's lines put between the
+        # pair's two paths: every reading of those lines here must hold
+        pdir = os.path.join(scratch, "producer %s and its pairs" % fmt)
+        pdirs[fmt] = pdir
+        off = produce(pdir, waves, fmt, c["steps"], c["sample"], text)
+        verdict(not off, "%s: ias15_cft as the producer, each of the %d members run alone with --attempts-out and "
+                "--record-iters, writing %s and %s (the driver's names): each run's lines and counters are the record's "
+                "member's, so the files are the record's run's%s"
+                % (fmt, E, PRODUCER_FILES[0][1], PRODUCER_FILES[1][1], "; NOT for members %s" % off if off else ""))
+        keep_a, keep_b = (os.path.join(scratch, "producer_keep_%s_%s" % (t, fmt)) for t in ("own", "rerun"))
+        rca, outa = pf_drive(rec, fmt, pdir, keep_a)
+        rcb, outb = pf_drive(rec, fmt, empty, keep_b)
+        alone = [k for k in range(E) if k not in smp["members"]]
+        alone_of[fmt] = alone
+        ma, pa, mb, pb, lb = pf_members(outa), pf_particles(outa), pf_members(outb), pf_particles(outb), member_lines(outb)
+        n = 2 * E
+        # from the producer's own files
+        not_rerun = sorted(int(m.group(1)) for m in PF_ALONE.finditer(outa))
+        bad = ["member %d: %s" % (k, ma[k]["text"][:200] if k in ma else "no line") for k in range(E)
+               if k not in ma or not names_pair(ma[k], pf(pdir, k)) or ma[k]["rerun"] != (k in smp["members"])]
+        bad += ["member %d body %d: %s" % (x + (d["text"][:200],)) for x, d in sorted(pa.items())
+                if d["verdict"] != "IDENTICAL" or d["source"] != "producer" or not names_pair(d, pf(pdir, x[0]))]
+        summary = ("\nparticles: %d sampled in %d member(s), each replayed alone and held to the record's own lines: %d "
+                   "from the producer's own attempts records and schedules, in %d member(s), %d of them not rerun; 0 "
+                   "from this tree's reruns', where the producer's pair is not there; %d identical\n"
+                   % (n, E, n, E, len(alone), n))
+        keyed = "\nparticles: %d producer's pair(s), each keyed to its member's run: " % E
+        verdict(rca == 0 and "\nRESULT: PASS: " in outa and not bad and len(pa) == n and not_rerun == alone and alone
+                and summary in outa and keyed in outa and limit_once(outa),
+                "%s: from the producer's own files, in a directory named %r: PASS (rc %d); all %d members' particles "
+                "sampled (--particle-strata %d), each pair held to its member's run by its key and matched whole, %d "
+                "particles replayed from the producer's own attempts records and schedules, all IDENTICAL to the "
+                "record; members %s NOT RERUN, the rest rerun; beside the plan, once, word for word, the limit: '%s'%s"
+                % (fmt, os.path.basename(pdir), rca, E, E, len(pa), not_rerun, PRODUCER_LIMIT,
+                   ": " + "; ".join(bad[:3]) if bad else ""))
+        # an absent pair: today's rerun, said by name
+        badb = ["member %d: %s" % (k, mb[k]["text"][:200] if k in mb else "no line") for k in range(E)
+                if k not in mb or not mb[k]["rerun"] or mb[k]["producer"] or
+                ("the producer's pair is not there (no %s and no %s)" % pf(empty, k)) not in mb[k]["text"]]
+        badb += ["member %d body %d: %s" % (x + (d["text"][:200],)) for x, d in sorted(pb.items())
+                 if d["verdict"] != "IDENTICAL" or d["source"] != "rerun"]
+        verdict(rcb == 0 and "\nRESULT: PASS: " in outb and not badb and len(pb) == n and limit_once(outb) and
+                sorted(lb) == list(range(E)) and all(v[0] == "IDENTICAL" for v in lb.values()),
+                "%s: with no producer's pair (an empty directory), each member falls back to today's rerun, naming both "
+                "files that are not there: PASS (rc %d), all %d members rerun and IDENTICAL, %d particles replayed from "
+                "the reruns' files, IDENTICAL%s" % (fmt, rcb, len(lb), len(pb), ": " + "; ".join(badb[:3]) if badb else ""))
+        # GATE 1: the same particles, replay record against replay record
+        ra, rb = replays(keep_a), replays(keep_b)
+        diffs, own, theirs, ntok = [], 0, 0, 0
+        for x in sorted(pa):
+            if x not in pb or (pa[x]["name"], pa[x]["why"]) != (pb[x]["name"], pb[x]["why"]):
+                diffs.append("member %d body %d: not picked alike in the two runs" % x)
+                continue
+            if x not in ra or x not in rb:
+                diffs.append("member %d body %d: no replay record kept" % x)
+                continue
+            (sa, ca, da), (sb, cb, db) = replay_view(ra[x]), replay_view(rb[x])
+            if not sa or sa != sb:
+                diffs.append("member %d body %d: %s" % (x + ("its sample lines differ" if sa else "no sample line",)))
+            elif ca != cb:
+                diffs.append("member %d body %d: counters %s and %s" % (x + (ca, cb)))
+            ntok += sum(len(l.split()) for l in sa)
+            own += same_path(da, pf(pdir, x[0])[0])
+            theirs += db is not None and same_path(os.path.dirname(db), keep_b)
+        first = [k for k in c["first"] if any(x[0] == k for x in pa)]
+        verdict(not diffs and len(pa) == n and own == n and theirs == n and first,
+                "%s: GATE 1, the same particles: each of the %d, picked alike in both runs, replayed from the producer's "
+                "own files is IDENTICAL to the same particle replayed from a rerun's - every sample line, %d tokens, and "
+                "the trailer's counters, flags and calls; each replay's record names the attempts record it ran from, "
+                "the producer's in %d of %d and the rerun's in %d of %d; members %s rejected their first attempt, the "
+                "rejection that leaves state, and their particles are among them%s"
+                % (fmt, len(pa), ntok, own, n, theirs, n, first, ": " + "; ".join(diffs[:3]) if diffs else ""))
+        # GATE 2: the physics beside each particle
+        tr = trailers(text)
+        g2, worst, nclose = [], mpmath.mpf(0), 0
+        for (k, j), d in sorted(pa.items()):
+            if any(d["counters"].get(cn) != tr[k].get(cn) for cn in TRAILER):
+                g2.append("member %d body %d: counters %s, its trailer's %s" % (k, j, d["counters"], tr[k]))
+            if len(d["closest"]) != 2:
+                g2.append("member %d body %d: closest approach %r" % (k, j, d["closest"]))
+                continue
+            for (nm, val, at), (best, at_mp) in zip(d["closest"], mp_closest(rec, k, j)):
+                nclose += 1
+                worst = max(worst, abs(mpmath.mpf(val) - best) / best)
+                if at != at_mp:
+                    g2.append("member %d body %d: closest to %s at sample %d, by mpmath at %d" % (k, j, nm, at, at_mp))
+        for m in PF_ALONE.finditer(outa):
+            k = int(m.group(1))
+            if any(dict(zip(SAID, m.groups()[1:])).get(cn) != tr[k].get(cn) for cn in TRAILER):
+                g2.append("member %d, not rerun: its trailer line says %s" % (k, m.groups()[1:]))
+
+        def span(key):
+            vals = sorted({d["counters"].get(key) for d in pa.values()}, key=lambda v: float(v or "nan"))
+            return vals[0] if len(vals) == 1 else "%s to %s" % (vals[0], vals[-1])
+        verdict(not g2 and nclose == 2 * n and worst < 1e-6,
+                "%s: GATE 2, the physics beside each: every particle's replay counters are its member's trailer (steps "
+                "%s, rejected %s, mean passes %s, max passes %s, cap hits %s), and so is each not-rerun member's trailer "
+                "line; its %d closest approaches, each to the primary and the moon at the samples, agree with this "
+                "gate's mpmath from tools/oracle.py's parse to %s relative, at the samples they name%s"
+                % (fmt, span("steps_done"), span("steps_rejected"), span("mean_pc_iterations"),
+                   span("max_pc_iterations"), span("iterations_max_exceeded"), nclose, mpmath.nstr(worst, 3),
+                   ": " + "; ".join(g2[:3]) if g2 else ""))
+
+    # ----------------------- GATE 1b: a producer whose exit test is not this tree's
+    # Gate 1 compares ias15_cft with itself, so the producer's files are a
+    # rerun's to the byte and a driver that read a rerun's schedule instead
+    # would pass it. Here the producer's first attempt took other passes:
+    # two fewer in a member that is not rerun (it moves bits), one fewer in
+    # one that is (it moves no bit at the samples, only trailer counters -
+    # which ones is derived and printed below: V3, 2026-11-16, found the max
+    # moving with the mean where this once said "only the mean passes"),
+    # each member's record lines that schedule's replay. The producer's
+    # files must hold its particles to its record, and a rerun's must not.
+    c = clean["fp64"]
+    smp, text = c["smp"], c["text"]
+    alone = alone_of.get("fp64", [])
+    u = alone[0] if alone else None
+    m = next((k for k in smp["picks"] if k not in smp["rejected"]), None)
+    if u is None or m is None:
+        verdict(False, "GATE 1b: a member that is not rerun (%s) and a stratum's pick that rejected nothing (%s)" % (u, m))
+    else:
+        disc = os.path.join(scratch, "producer_disc")
+        shutil.rmtree(disc, ignore_errors=True)
+        shutil.copytree(pdirs["fp64"], disc)
+        rows = text.splitlines()
+        moved = {}
+        for k, delta in ((u, -2), (m, -1)):
+            att, sch = pf(disc, k)
+
+            def fewer(lines, delta=delta):
+                i = body_lines(lines)[0]
+                was = int(lines[i])
+                lines[i] = str(was + delta)
+                return was, was + delta
+            was, now = edit_file(sch, fewer)
+            rc, out, err = member_run(waves, "fp64", c["steps"], c["sample"], k,
+                                      ["--replay-iters", sch, "--attempts-out", att])
+            ms, mt = parse_samples(out) if rc == 0 else ([], {})
+            es, et = parse_samples(text, k)
+            # what the change moves in the trailer, read here, counter by counter
+            counters = ", ".join("%s %s where this tree's is %s" % (cn, mt.get(cn), et.get(cn)) for cn in TRAILER
+                                 if mt.get(cn) != et.get(cn)) or "no counter"
+            moved[k] = (was, now, rc, sum(1 for a, b in zip(es, ms) if a != b), len(es), counters)
+            mine = iter([l for l in out.splitlines() if l.startswith("sample ")])
+            rows = ["system %d %s" % (k, next(mine)) if l.startswith("system %d sample " % k) else
+                    "# system %d %s" % (k, " ".join("%s=%s" % (cn, mt.get(cn)) for cn in (
+                        "steps_done", "iterations_max_exceeded", "steps_rejected", "mean_pc_iterations",
+                        "max_pc_iterations"))) if l.startswith("# system %d steps_done=" % k) else l for l in rows]
+        tot = next(i for i, l in enumerate(rows) if l.startswith("# steps_done="))
+        for cn in ("steps_rejected", "iterations_max_exceeded"):
+            n_all = sum(int(re.search(r"\b%s=(\d+)" % cn, l).group(1)) for l in rows if re.match(r"# system \d+ steps_done=", l))
+            rows[tot] = re.sub(r"\b%s=\d+" % cn, "%s=%d" % (cn, n_all), rows[tot])
+        discrec = os.path.join(scratch, "producer_disc.rec")
+        with open(discrec, "w", newline="\n") as f:
+            f.write("\n".join(rows) + "\n")
+        (wu, nu, rcu, du, lu, cu), (wm, nm, rcm, dm, lm, cm) = moved[u], moved[m]
+        verdict(rcu == 0 and rcm == 0 and du > 0 and (dm > 0 or cm != "no counter"),
+                "GATE 1b, not against itself: the producer: member %d's first attempt took %d passes where this tree's "
+                "takes %d, and its record lines are that schedule's replay, %d of %d of them not this tree's (and %s); "
+                "member %d's took %d where this tree's takes %d, which moves %d of %d lines and %s"
+                % (u, nu, wu, du, lu, cu, m, nm, wm, dm, lm, cm))
+        rc1, out1 = pf_drive(discrec, "fp64", disc)
+        rc2, out2 = pf_drive(discrec, "fp64", empty)
+        p1, p2, l1, l2 = pf_particles(out1), pf_particles(out2), member_lines(out1), member_lines(out2)
+        alone1 = [int(x.group(1)) for x in PF_ALONE.finditer(out1)]
+        ok1 = (rc1 == 1 and u in alone1 and u not in l1 and l1.get(m, ("",))[0] == "FAIL" and len(p1) == 2 * E and
+               all(v[0] == "IDENTICAL" for k, v in l1.items() if k != m) and limit_once(out1) and
+               all(d["verdict"] == "IDENTICAL" and d["source"] == "producer" for d in p1.values()))
+        verdict(ok1, "GATE 1b, from the producer's own files: member %d, NOT RERUN, holds - both its particles IDENTICAL to "
+                "the producer's record, whose lines are not this tree's: the limit, measured, and printed beside the "
+                "plan word for word (the producer's passes taken as given); member %d FAILs on its rerun (%s), while "
+                "both its particles, replayed against the producer's schedule, are IDENTICAL; every other member and "
+                "particle IDENTICAL (rc %d)" % (u, m, l1.get(m, ("", "not reported"))[1][:110], rc1))
+        bad2 = ["member %d body %d %s" % (x + (d["verdict"],)) for x, d in sorted(p2.items())
+                if (d["verdict"] == "FAIL") != (x[0] in (u, m)) or d["source"] != "rerun"]
+        why2 = ["member %d: %s" % (k, fails_of(p2, k)[0]["what"][:90]) for k in (u, m) if fails_of(p2, k)]
+        verdict(rc2 == 1 and l2.get(u, ("",))[0] == "FAIL" and l2.get(m, ("",))[0] == "FAIL" and len(p2) == 2 * E
+                and not bad2 and limit_once(out2),
+                "GATE 1b, the same record replayed from this tree's reruns instead (no producer's pair): members %d and %d "
+                "FAIL, and all 4 of their particles FAIL (%s): so the replays above read the producer's own schedule, "
+                "and the same-particles gate cannot pass against itself (rc %d)%s"
+                % (u, m, "; ".join(why2), rc2, ": " + "; ".join(bad2[:3]) if bad2 else ""))
+        shutil.rmtree(disc, ignore_errors=True)
+
+    # ------------------------------- half a pair: the fallback names the file
+    alone = alone_of.get("fp64", [])
+    if alone:
+        u = alone[0]
+        half = os.path.join(scratch, "producer_half")
+        shutil.rmtree(half, ignore_errors=True)
+        shutil.copytree(pdirs["fp64"], half)
+        os.remove(pf(half, u)[1])
+        rch, outh = pf_drive(c["rec"], "fp64", half)
+        mh, ph, lh = pf_members(outh), pf_particles(outh), member_lines(outh)
+        n = 2 * E
+        summary = ("\nparticles: %d sampled in %d member(s), each replayed alone and held to the record's own lines: %d "
+                   "from the producer's own attempts records and schedules, in %d member(s), %d of them not rerun; 2 "
+                   "from this tree's reruns', where the producer's pair is not there; %d identical\n"
+                   % (n, E, n - 2, E - 1, len(alone) - 1, n))
+        verdict(rch == 0 and "\nRESULT: PASS: " in outh and u in mh and mh[u]["rerun"] and limit_once(outh) and
+                ("the producer's pair is not there (no %s): its particles fall back to today's rerun" % pf(half, u)[1])
+                in mh[u]["text"] and lh.get(u, ("",))[0] == "IDENTICAL" and summary in outh and
+                all(d["verdict"] == "IDENTICAL" and d["source"] == ("rerun" if x[0] == u else "producer")
+                    for x, d in ph.items()) and len(ph) == n,
+                "fp64, member %d's schedule taken away, its attempts record left: it falls back to today's rerun, "
+                "naming the schedule alone as not there; its lines rerun, IDENTICAL, and its 2 particles from the "
+                "rerun's files, the other %d from the producer's, all IDENTICAL: PASS (rc %d)" % (u, n - 2, rch))
+        shutil.rmtree(half, ignore_errors=True)
+
+    # ------------- one system's records: a --member k run's, and a single problem
+    k1 = alone[0] if alone else 0
+    rc, t1, _ = member_run(waves, "fp64", c["steps"], c["sample"], k1)
+    rec1 = os.path.join(scratch, "producer_member%d.rec" % k1)
+    with open(rec1, "w", newline="\n") as f:
+        f.write(t1)
+    rc1, out1 = pf_drive(rec1, "fp64", pdirs["fp64"])
+    m1, p1 = pf_members(out1), pf_particles(out1)
+    verdict(rc == 0 and rc1 == 0 and "\nRESULT: PASS: " in out1 and sorted(m1) == [k1] and m1[k1]["rerun"] and
+            names_pair(m1[k1], pf(pdirs["fp64"], k1)) and len(p1) == 2 and limit_once(out1) and
+            all(d["verdict"] == "IDENTICAL" and d["source"] == "producer" for d in p1.values()),
+            "fp64, a --member %d record of the waves, one system: its pair is member %d's, %s; it is rerun as the "
+            "record's one system, and its 2 particles replayed from the producer's files, IDENTICAL: PASS (rc %d)"
+            % (k1, k1, " and ".join(os.path.basename(x) for x in pf(pdirs["fp64"], k1)), rc1))
+    # a single problem, no system lines, with an active line: its run has no
+    # --member, so its key says member=-1, and its pair is member0's (P2,
+    # 2026-11-16: `--member 0` is refused on such a file)
+    with open(waves) as f:
+        wl = f.read().splitlines()
+    one = os.path.join(scratch, "cr_single.txt")
+    s0 = wl.index("system w0")
+    with open(one, "w", newline="\n") as f:
+        f.write("\n".join(["# check_compare_run: system w0 of the waves, as a single problem", "name cr_single",
+                           "G " + float.hex(1.0)] + wl[s0 + 1:s0 + 3 + NTP] + ["active 2"]) + "\n")
+    ps = os.path.join(scratch, "producer_single")
+    shutil.rmtree(ps, ignore_errors=True)
+    os.makedirs(ps)
+    att, sch = pf(ps, 0)
+    rc, ts, _ = run([cft, "--format", "fp64", "--problem", one, "--dt", DT0, "--epsilon", "1e-9", "--steps",
+                     str(c["steps"]), "--sample", str(c["sample"]), "--max-iter", "60", "--quiet",
+                     "--attempts-out", att, "--record-iters", sch])
+    recs = os.path.join(scratch, "producer_single.rec")
+    with open(recs, "w", newline="\n") as f:
+        f.write(ts)
+    keys = []
+    for path in (att, sch):
+        with open(path) as f:
+            keys.append(f.read().splitlines()[1] if rc == 0 else "")
+    rcs, outs = pf_drive(recs, "fp64", ps, problem=one)
+    p1 = pf_particles(outs)
+    verdict(rc == 0 and rcs == 0 and "\nRESULT: PASS: " in outs and all(" member=-1 " in k for k in keys) and
+            len(p1) == 2 and limit_once(outs) and
+            all(d["verdict"] == "IDENTICAL" and d["source"] == "producer" for d in p1.values()),
+            "fp64, a single problem with no system lines and `active 2` (the waves' w0): its run has no --member, so "
+            "both its files say member=-1 in their run key, and its pair is %s; PASS, its 2 particles replayed from "
+            "them, IDENTICAL (rc %d)" % (" and ".join(os.path.basename(x) for x in (att, sch)), rcs))
+    shutil.rmtree(ps, ignore_errors=True)
+    kep = os.path.join(root, "data", "problems", "kepler.txt")
+    rck, tk, _ = run([cft, "--format", "fp64", "--problem", kep, "--dt", "0.05", "--epsilon", "1e-9", "--steps", "20",
+                      "--sample", "10", "--max-iter", "60", "--quiet"])
+    reck = os.path.join(scratch, "producer_kepler.rec")
+    with open(reck, "w", newline="\n") as f:
+        f.write(tk)
+    rck2, outk = drive(reck, "fp64", extra=["--producer-files", empty], problem=kep)
+    verdict(rck == 0 and rck2 == 0 and "\nRESULT: PASS: " in outk and
+            ("particles: the producer's files in %s are not read: the record has no `# active` line, so it has no test "
+             "particle" % empty) in outk and "member 0 (kepler): IDENTICAL: " in outk and limit_absent(outk),
+            "fp64, kepler, a single problem with every body active: the producer's files are not read, and it says so, "
+            "printing no limit of files it never read; its one system IDENTICAL: PASS (rc %d)" % rck2)
+
+    # ------------------- a record another producer wrote, naming its own engine
+    # P2's kernel writes this tree's record format under its own program and
+    # engine: its files are keyed to the engine the caller reruns it on
+    # (--rerun-engine), which this tree has. Case 1's record rewritten so.
+    other = re.sub(r"^# program=cft impl=\S+ (format=\S+) backend=\S+ ", r"# program=wave impl=hip-7.16 \1 backend=hip:0 ",
+                   text, count=1, flags=re.M)
+    other = re.sub(r"^(# program=wave .*?) engine=loop ", r"\1 engine=wave ", other, count=1, flags=re.M)
+    orec = os.path.join(scratch, "producer_other.rec")
+    with open(orec, "w", newline="\n") as f:
+        f.write(other)
+    rco, outo = drive(orec, "fp64", extra=["--producer-files", pdirs["fp64"], "--particle-strata", str(E),
+                                           "--rerun-engine", "loop"])
+    po = pf_particles(outo)
+    keyed = "\nparticles: %d producer's pair(s), each keyed to its member's run: its run key, both files', is the one " \
+            "this tree's ias15_cft --run-key gives the member's arguments, at engine=loop\n" % E
+    verdict(other.count(" engine=wave ") == 1 and "program=wave impl=hip-7.16 format=fp64 backend=hip:0" in other and
+            rco == 0 and "\nRESULT: PASS: " in outo and keyed in outo and len(po) == 2 * E and limit_once(outo) and
+            "record: written by program=wave impl=hip-7.16 backend=hip:0" in outo and
+            all(d["verdict"] == "IDENTICAL" and d["source"] == "producer" for d in po.values()),
+            "fp64, the record rewritten as another producer's (program=wave impl=hip-7.16 backend=hip:0 engine=wave), "
+            "held with --rerun-engine loop: its files keyed at engine=loop, the engine it is rerun on; PASS (rc %d), %d "
+            "particles from the producer's own files, all IDENTICAL" % (rco, len(po)))
+    rco, outo = drive(orec, "fp64", extra=["--producer-files", pdirs["fp64"], "--particle-strata", str(E)])
+    verdict(rco == 2 and "RESULT: REFUSED: the record ran engine=wave, which this tree does not have, so its producer's "
+            "files are keyed to the engine its rerun takes, and no --rerun-engine names one" in outo and
+            "IDENTICAL" not in outo,
+            "fp64, the same with no --rerun-engine: REFUSED, naming the engine its files' key cannot name (rc %d)" % rco)
+    # The FMA form's program-engine record, rerun on the loop engine: its
+    # producer's files are keyed to the engine it ran, program, and its
+    # particles are replayed there, while its members are rerun on loop. In
+    # every tier, short in --quick: only this case tells the record's engine
+    # from --rerun-engine's, and a driver keying the files to the second
+    # (V3's mutant Mj) passed every case --quick ran (V3, 2026-11-16).
+    steps, sample = (4, 2) if quick else (20, 10)
+    how = ["--arith", "fma", "--engine", "program", "--programs", progs]
+    recp, textp = record("producer_fma_program.rec", "fp64", steps, sample, arith="fma", engine="program")
+    pp = os.path.join(scratch, "producer_fma_program")
+    offp = produce(pp, waves, "fp64", steps, sample, textp, how) if recp else list(range(E))
+    rcp, outp = drive(recp, "fp64", "fma", extra=["--producer-files", pp, "--particle-strata", str(E),
+                                                  "--rerun-engine", "loop"]) if recp else (-1, "")
+    ppp = pf_particles(outp)
+    keyed = "\nparticles: %d producer's pair(s), each keyed to its member's run: its run key, both files', is the " \
+            "one this tree's ias15_cft --run-key gives the member's arguments, at engine=program\n" % E
+    verdict(not offp and rcp == 0 and "\nRESULT: PASS: " in outp and keyed in outp and len(ppp) == 2 * E and
+            "rerun: on the loop engine, where the record ran program (--rerun-engine)" in outp and limit_once(outp) and
+            all(d["verdict"] == "IDENTICAL" and d["source"] == "producer" for d in ppp.values()),
+            "fp64, the FMA form's program-engine record (%d steps) with --rerun-engine loop: its members rerun on the "
+            "loop engine, its producer's files keyed at engine=program, the engine it ran, and its %d particles "
+            "replayed there, all IDENTICAL: PASS (rc %d)%s"
+            % (steps, len(ppp), rcp, "" if rcp == 0 else ": " + (re.findall(r"^RESULT: .*$", outp, re.M) or [""])[-1][:300]))
+    shutil.rmtree(pp, ignore_errors=True)
+
+    # ---------------------------------- the waves in their primary's zonal field
+    zl = "0 %s %s %s" % (float.hex(0.25), float.hex(2.0 ** -6), float.hex(-2.0 ** -10))
+    wz = write_waves(os.path.join(scratch, "cr_waves_z.txt"), name="cr_waves_z", zonal=zl)
+    recz, textz = record("waves_z_fp64.rec", "fp64", c["steps"], c["sample"], problem=wz)
+    pz = os.path.join(scratch, "producer_z")
+    if recz is None:
+        verdict(False, "fp64: the zonal waves' record")
+    else:
+        offz = produce(pz, wz, "fp64", c["steps"], c["sample"], textz)
+        rcz, outz = pf_drive(recz, "fp64", pz, problem=wz)
+        pzp = pf_particles(outz)
+        zrec = re.search(r"^# zonal .*$", textz, re.M)
+        verdict(not offz and rcz == 0 and "\nRESULT: PASS: " in outz and len(pzp) == 2 * E and zrec is not None and
+                limit_once(outz) and
+                all(d["verdict"] == "IDENTICAL" and d["source"] == "producer" and d["zonal"] for d in pzp.values()),
+                "fp64, the waves with `zonal %s`, the primary's J2 and J4: from the producer's own files, PASS (rc %d), "
+                "%d particles replayed alone with the member's 2 massive bodies and its zonal line, all IDENTICAL; the "
+                "record says '%s'" % (zl, rcz, len(pzp), zrec.group(0)[:90] if zrec else "no # zonal line"))
+
+    # --------------------------------------------- the controls on the files
+    print("check_compare_run: case 7's controls, each on a copy of the producer's files, which must FAIL or be "
+          "refused by name, and is then deleted")
+    for fmt in fmts:
+        c = clean[fmt]
+        smp, rec = c["smp"], c["rec"]
+        alone = alone_of[fmt]
+        first = c["first"]
+        pool = alone + [k for k in smp["picks"] if k not in smp["rejected"] and k not in alone]
+        # q1: one attempt's dt, a member a line, the first attempt included;
+        # and the other column, a rejected first attempt recorded as accepted
+        plants = []
+        if first:
+            plants.append((first[0], "the first attempt's dt, a rejection before any accepted step", "dt", "first"))
+        for (what, col, where), k in zip((("the first attempt's dt, accepted", "dt", "first"),
+                                          ("a middle accepted attempt's dt", "dt", "middle"),
+                                          ("the last line's dt, the step after its last attempt", "dt", "next")),
+                                         [k for k in pool if k not in first]):
+            plants.append((k, what, col, where))
+        if len(first) > 1:
+            plants.append((first[1], "the outcome of its first attempt, a rejection, made an acceptance", "outcome",
+                           "first"))
+        q1 = os.path.join(scratch, "producer_q1_%s" % fmt)
+        shutil.rmtree(q1, ignore_errors=True)
+        shutil.copytree(pdirs[fmt], q1)
+        said = {}
+        for k, what, col, where in plants:
+            def change(lines, col=col, where=where):
+                body = body_lines(lines)
+                tried = body[:-1]
+                i = {"first": tried[0], "next": body[-1]}.get(where)
+                if i is None:
+                    acc = [i for i in tried if lines[i].split()[1] == "a"]
+                    i = acc[len(acc) // 2]
+                dt, outcome = lines[i].split()
+                lines[i] = "%s %s" % ((plant_dt(dt), outcome) if col == "dt" else (dt, "a" if outcome == "r" else "r"))
+                return i + 1, dt + " " + outcome, lines[i]
+            said[k] = edit_file(pf(q1, k)[0], change)
+        rc, out = pf_drive(rec, fmt, q1)
+        p, l = pf_particles(out), member_lines(out)
+        caught, missed = [], []
+        for k, what, col, where in plants:
+            got = fails_of(p, k)
+            if len(got) == 2 and all(d["verdict"] == "FAIL" and ("record line " in d["what"] or "did not run" in d["what"])
+                                     for d in got):
+                caught.append("member %d, %s (line %d, '%s' made '%s'): %s" % ((k, what) + said[k] + (got[0]["what"][:100],)))
+            else:
+                missed.append("member %d, %s: %s" % (k, what, [d["verdict"] + " " + d["what"][:80] for d in got]))
+        calm = [x for x, d in p.items() if x[0] not in said and d["verdict"] != "IDENTICAL"]
+        shutil.rmtree(q1, ignore_errors=True)
+        verdict(rc == 1 and len(plants) >= 4 and not missed and not calm and l and limit_once(out) and
+                all(v[0] == "IDENTICAL" for v in l.values()),
+                "%s: q1, one change planted in the attempts record, a member a line, %d lines: each FAILs both its "
+                "member's particles by name, every other particle and every rerun member IDENTICAL; the copy deleted "
+                "(rc %d): %s%s" % (fmt, len(plants), rc, "; ".join(caught),
+                                   "; NOT: " + "; ".join(missed + ["member %d body %d not IDENTICAL" % x for x in calm])
+                                   if missed or calm else ""))
+        # q2: one pass count, a member a line, in members rerun and not
+        plants = []
+        for (what, where, delta), k in zip((("the first attempt's passes, two fewer", "first", -2),
+                                            ("a middle attempt's passes, one more", "middle", 1)), alone):
+            plants.append((k, what, where, delta))
+        mm = next((k for k in pool if k not in alone), None)
+        if mm is not None:
+            plants.append((mm, "the first attempt's passes, one fewer, in a member rerun", "first", -1))
+        # and a rejected attempt's passes: a rejection before any accepted
+        # step leaves its corrected b behind, so its passes reach the state
+        # (V3, 2026-11-16: with no plant here, a driver reading a rerun's
+        # schedule for rejecting members alone passed q2, its mutant Mf2)
+        if first:
+            plants.append((first[0], "its rejected first attempt's passes, two fewer, in a member rerun", "first", -2))
+        q2 = os.path.join(scratch, "producer_q2_%s" % fmt)
+        q2keep = os.path.join(scratch, "producer_q2_keep_%s" % fmt)
+        shutil.rmtree(q2, ignore_errors=True)
+        shutil.copytree(pdirs[fmt], q2)
+        said = {}
+        for k, what, where, delta in plants:
+            def change(lines, where=where, delta=delta):
+                body = body_lines(lines)
+                i = body[0] if where == "first" else body[len(body) // 2]
+                was = lines[i]
+                lines[i] = str(int(was) + delta)
+                return i + 1, was, lines[i]
+            said[k] = edit_file(pf(q2, k)[1], change)
+        rc, out = pf_drive(rec, fmt, q2, keep=q2keep)
+        p, l = pf_particles(out), member_lines(out)
+        # what each plant moves, derived: its member's replays against gate
+        # 1's unplanted ones of the same particles (tokens), and its replay's
+        # counters against the record's trailer (V3: "only the mean passes"
+        # was said of plants that moved the max too). Printed as measured:
+        # the gate asserts only that each plant FAILs its particles and moves
+        # something, never which things at which format.
+        gate1 = os.path.join(scratch, "producer_keep_own_%s" % fmt)
+        rq, ra, tr = replays(q2keep), replays(gate1), trailers(c["text"])
+
+        def moves(k):
+            """(tokens, counters, what is missing): a replay this run or gate 1
+            kept for one of member k's sampled particles, if one is not there,
+            is a FAIL by name, never a count of -1 (V3, 2026-11-18)."""
+            js = sorted(x for x in p if x[0] == k)
+            lost = ["no replay of member %d body %d kept by %s" % (x + (by,)) for x in js
+                    for by, kept in (("this run", rq), ("gate 1, in %s" % gate1, ra)) if x not in kept]
+            if len(js) != 2 or lost:
+                return None, None, "what the plant moves cannot be read: %s" % (
+                    "; ".join(lost) if lost else "%d sampled particles, not 2" % len(js))
+            ntok = max(sum(1 for a, b in zip(" ".join(replay_view(rq[x])[0]).split(),
+                                             " ".join(replay_view(ra[x])[0]).split()) if a != b) for x in js)
+            cq = replay_view(rq[js[0]])[1]
+            return ntok, [cn for cn in TRAILER if cq.get(cn) != tr[k].get(cn)], None
+        caught, missed = [], []
+        for k, what, where, delta in plants:
+            got = fails_of(p, k)
+            ntok, moved, lost = moves(k)
+            if lost:
+                missed.append("member %d, %s: %s" % (k, what, lost))
+            elif len(got) == 2 and all(d["verdict"] == "FAIL" and ("record line " in d["what"] or "trailer " in d["what"])
+                                       for d in got) and (ntok > 0 or moved):
+                caught.append("member %d, %s (line %d, %s made %s), which moves, as measured here, %d tokens of its "
+                              "replays and %s: %s" % ((k, what) + said[k] + (ntok, ", ".join(moved) or "no counter",
+                                                                               got[0]["what"][:100])))
+            else:
+                missed.append("member %d, %s: %s" % (k, what, [d["verdict"] + " " + d["what"][:80] for d in got]))
+        calm = [x for x, d in p.items() if x[0] not in said and d["verdict"] != "IDENTICAL"]
+        shutil.rmtree(q2, ignore_errors=True)
+        shutil.rmtree(q2keep, ignore_errors=True)
+        verdict(rc == 1 and len(plants) == 4 and not missed and not calm and l and limit_once(out) and
+                all(v[0] == "IDENTICAL" for v in l.values()),
+                "%s: q2, one pass count planted in the schedule, a member a line, %d lines: each FAILs both its member's "
+                "particles by name, while that member's own rerun, where it has one, is IDENTICAL; every other particle "
+                "IDENTICAL; the copy deleted (rc %d): %s%s" % (fmt, len(plants), rc, "; ".join(caught),
+                                                              "; NOT: " + "; ".join(missed) if missed else ""))
+
+    # q3 to q7, refused by the key or the form, at binary64
+    c = clean["fp64"]
+    u, v = (alone_of["fp64"] + [None, None])[:2]
+    if u is None or v is None:
+        verdict(False, "q3 to q7: two members that are not rerun, to plant in (%s)" % alone_of["fp64"])
+        return
+
+    def copy(tag, src=None):
+        d = os.path.join(scratch, "producer_%s" % tag)
+        shutil.rmtree(d, ignore_errors=True)
+        shutil.copytree(src or pdirs["fp64"], d)
+        return d
+    d = copy("q3s")
+    shutil.copyfile(pf(d, v)[1], pf(d, u)[1])
+    refused("q3, member %d's schedule taken from member %d, another wave of the same ring" % (u, v), c["rec"], d, u,
+            "corrector schedule", ["member", "state"])
+    d = copy("q3a")
+    shutil.copyfile(pf(d, v)[0], pf(d, u)[0])
+    refused("q3, member %d's attempts record taken from member %d" % (u, v), c["rec"], d, u, "attempts record",
+            ["member", "state"])
+    d = copy("q5")
+    member_run(waves, "fp128", c["steps"], c["sample"], u, ["--record-iters", pf(d, u)[1]])
+    refused("q5, member %d's schedule recorded at binary128" % u, c["rec"], d, u, "corrector schedule", ["format"],
+            exact=False)
+    wa = write_waves(os.path.join(scratch, "cr_waves_active3.txt"), active=3)
+    d = copy("q6")
+    member_run(wa, "fp64", c["steps"], c["sample"], u, ["--record-iters", pf(d, u)[1]])
+    refused("q6, member %d's schedule recorded under `active 3`, the problem otherwise the same" % u, c["rec"], d, u,
+            "corrector schedule", ["active"])
+    if recz is not None:
+        wz2 = write_waves(os.path.join(scratch, "cr_waves_z2.txt"), name="cr_waves_z", zonal="0 %s %s %s" % (
+            float.hex(0.25), float.hex(2.0 ** -6 * (1 + 2.0 ** -4)), float.hex(-2.0 ** -10)))
+        d = copy("q4", pz)
+        member_run(wz2, "fp64", c["steps"], c["sample"], u, ["--record-iters", pf(d, u)[1]])
+        refused("q4, member %d's schedule recorded with the zonal line's J2 another, the problem otherwise the same"
+                % u, recz, d, u, "corrector schedule", ["zonal"], problem=wz)
+    d = copy("q7")
+    shutil.copyfile(pf(d, u)[0], pf(d, u)[1])
+    rc, out = pf_drive(c["rec"], "fp64", d)
+    shutil.rmtree(d, ignore_errors=True)
+    want = "RESULT: REFUSED: member %d's corrector schedule %s is not one: its first line is '# cft-rebound attempts v1'" \
+           % (u, pf(d, u)[1])
+    verdict(rc == 2 and want in out and "IDENTICAL" not in out,
+            "q7, member %d's attempts record given as its schedule: REFUSED by its form, naming the file and its first "
+            "line (rc %d); the copy deleted" % (u, rc))
+    shutil.rmtree(pz, ignore_errors=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--build", default=os.path.join(root, "build"))
     ap.add_argument("--quick", action="store_true", help="binary64, and short binary128 and FMA records")
+    ap.add_argument("--driver", default=os.path.join(here, "compare_run.py"),
+                    help="hold this copy of tools/compare_run.py instead (a mutant of it, to show the gate fails)")
     args = ap.parse_args()
     exe = ".exe" if os.name == "nt" else ""
     cft = os.path.join(args.build, "ias15_cft" + exe)
     ref = os.path.join(args.build, "ias15_ref" + exe)
     progs = os.path.join(root, "programs", "out")
     py = sys.executable
-    driver = os.path.join(here, "compare_run.py")
+    driver = os.path.abspath(args.driver)
+    if driver != os.path.join(here, "compare_run.py"):
+        print("check_compare_run: holding %s, not this tree's tools/compare_run.py" % driver)
     scratch = os.path.join(args.build, "check_compare_run")
     os.makedirs(scratch, exist_ok=True)
     allok = True
@@ -353,9 +1223,9 @@ def main():
 
     waves = write_waves(os.path.join(scratch, "cr_waves.txt"))
 
-    def record(name, fmt, steps, sample, arith="rebound", engine="loop"):
+    def record(name, fmt, steps, sample, arith="rebound", engine="loop", problem=None):
         path = os.path.join(scratch, name)
-        cmd = [cft, "--format", fmt, "--problem", waves, "--dt", DT0, "--epsilon", "1e-9", "--steps", str(steps),
+        cmd = [cft, "--format", fmt, "--problem", problem or waves, "--dt", DT0, "--epsilon", "1e-9", "--steps", str(steps),
                "--sample", str(sample), "--max-iter", "60", "--arith", arith, "--engine", engine, "--quiet"]
         if engine == "program":
             cmd += ["--programs", progs]
@@ -492,6 +1362,10 @@ def main():
                 "IDENTICAL to the record%s" % (label, nwant, ": " + "; ".join(pbad[:3]) if pbad else ""))
         verdict(out.count("\n" + SAMPLE_LIMIT + "\n") == 1 and out.find(SAMPLE_LIMIT) > out.find("\nsample: seed "),
                 "%s: beside the sample, its limit, exactly: '%s'" % (label, SAMPLE_LIMIT))
+        # The default path, where particles are sampled from this tree's
+        # reruns, prints no limit of a producer's files (V3, 2026-11-18)
+        verdict(limit_absent(out), "%s: without --producer-files, no line of the limit of a producer's files is "
+                "printed, in any wording" % label)
         if fdiff:
             diffs = {int(m.group(1)): m for m in re.finditer(
                 r"^  member (\d+): format difference: (\S+) against (\S+) on the same (\d+) accepted steps .*?"
@@ -530,6 +1404,7 @@ def main():
     text64 = None
     rec64 = None
     out64 = None
+    clean = {}                   # fmt -> case 1's record there, for case 7
     for fmt, steps, sample, fdiff in fmt_cases:
         print("check_compare_run: case 1 at %s - the driver on an ensemble of %d waves, %d steps%s" % (
             fmt, E, steps, ", with --format-diff " + fdiff if fdiff else ""))
@@ -542,6 +1417,8 @@ def main():
         if smp is None:
             allok = False
             continue
+        clean[fmt] = {"rec": rec, "text": text, "steps": steps, "sample": sample, "smp": smp, "first": first,
+                      "later": later}
         if fmt == "fp64":
             smp64, text64, rec64, out64 = smp, text, rec, out
             # One member of each kind replayed from its own dt file at its own
@@ -641,10 +1518,10 @@ def main():
             lines[k6][1].endswith(want) and "one system of N=%d bodies, member %d of its problem" % (2 + NTP, k6) in out
             and "  member %d: closest approach AT THE SAMPLES (3 of them" % k6 in out and
             "\nparticles: 2 sampled in 1 member(s), " in out and "held to the record's own lines: 2 identical\n" in out
-            and len([m for m in PICK.finditer(out) if m.group(5) == "IDENTICAL"]) == 2,
+            and len([m for m in PICK.finditer(out) if m.group(5) == "IDENTICAL"]) == 2 and limit_absent(out),
             "a --member %d record of the waves, held as one system: PASS, member %d IDENTICAL with its trailer's "
-            "counters (%s), its closest approaches, and its two particles replayed alone, IDENTICAL (rc %d)"
-            % (k6, k6, want, rc))
+            "counters (%s), its closest approaches, and its two particles replayed alone, IDENTICAL; and, without "
+            "--producer-files, no line of the limit of a producer's files (rc %d)" % (k6, k6, want, rc))
     rck, tk, _ = run([cft, "--format", "fp64", "--problem", kep, "--dt", "0.05", "--epsilon", "1e-9", "--steps", "20",
                       "--sample", "10", "--max-iter", "60", "--quiet"])
     reck = os.path.join(scratch, "kepler.rec")
@@ -654,9 +1531,9 @@ def main():
     lines = member_lines(out)
     verdict(rck == 0 and rc == 0 and "\nRESULT: PASS: " in out and sorted(lines) == [0] and
             lines[0][0] == "IDENTICAL" and "member 0 (kepler): IDENTICAL: 3 samples" in out and
-            "  member 0: no test particles (no `# active` line: every body is active)" in out,
-            "a single problem's record (kepler, every body active): PASS, IDENTICAL, and no test particles said (rc %d)"
-            % rc)
+            "  member 0: no test particles (no `# active` line: every body is active)" in out and limit_absent(out),
+            "a single problem's record (kepler, every body active): PASS, IDENTICAL, and no test particles said; and, "
+            "without --producer-files, no line of the limit of a producer's files (rc %d)" % rc)
 
     if not args.quick:
         print("check_compare_run: case 6 - the FMA form on the program engine, as recorded and on the loop engine")
@@ -672,6 +1549,10 @@ def main():
                         % (label, len(lines)))
         else:
             allok = False
+
+    # ---------------------------------------------------------------- case 7
+    case7(clean, [f for f, *_ in fmt_cases], waves, scratch, cft, progs, args.quick, record, drive, run, verdict,
+          trailers, member_lines)
 
     # ---------------------------------------------------------- the controls
     print("check_compare_run: the negative controls, each of which must FAIL or be refused, by name")
