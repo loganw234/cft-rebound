@@ -161,10 +161,15 @@
 #     nothing;
 #   - the run key holds the files to the arguments the record names. A
 #     producer that keys its files with --run-key on those arguments passes
-#     it whatever it ran with, so whether it ran with them - its epsilon,
-#     pc_tol_shift and max_iter, which decide its steps and passes, and the
-#     settings no record carries (LIMITS, below) - is held only in a member
-#     that is rerun.
+#     it whatever it ran with, so its epsilon, pc_tol_shift and max_iter,
+#     which decide its steps and passes, and the settings no record carries
+#     (LIMITS, below), are held only in a member that is rerun - and there
+#     only through what they move in its lines. V3 measured it (2026-11-18),
+#     and P3 again: member 4 of tools/check_compare_run.py's waves produced
+#     at pc_tol_shift 2, its record's header rewritten to name the
+#     defaults, is IDENTICAL to this tree's rerun, and at epsilon 1e-8 it
+#     FAILs (at t, sample 1). V3 also found pc_tol_shift 8 and max_iter 12
+#     IDENTICAL, and max_iter 6, with two cap hits, FAILing.
 # Without P3's tools in the tree the driver prints
 #     particles: not sampled (no particle replay in this tree)
 # and with them present but not callable (an extract() that will not
@@ -257,8 +262,9 @@ SAMPLE_LIMIT = ("sample: it trusts the trailers it is testing: a member whose tr
 PRODUCER_LIMIT = ("particles: the limit of the producer's own files: each replay takes the producer's dts, outcomes "
                   "and passes as given, so only a member that is rerun holds its decisions; a NOT RERUN member's "
                   "particles that are not sampled are held by nothing; and the run key holds the files to the "
-                  "arguments the record names, so whether the producer ran with them - its epsilon, pc_tol_shift "
-                  "and max_iter, and the settings no record carries - is held only in a member that is rerun")
+                  "arguments the record names, not to those the producer ran with, so its epsilon, pc_tol_shift and "
+                  "max_iter, and the settings no record carries, are held only in a member that is rerun, and there "
+                  "only through what they move in its lines")
 
 
 class Refused(Exception):
