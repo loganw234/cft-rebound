@@ -29,6 +29,10 @@
 #   make gate-cache-report
 #                         what the cache currently holds, and whether
 #                         each stamp came from a full run or a quick one
+#   make HIP=1 check-gpu  on a GPU host only: the record-making legs on
+#                         hip:0, held to the software backend process by
+#                         process (tools/check_gpu.py). Refuses by name
+#                         where there is no hip:0, and is in no tier
 #   make archive          the Simulationarchive gate programs
 #   make check-archive    just those gates (seconds)
 #   make dropin           the drop-in library and its gate
@@ -809,6 +813,29 @@ check-light: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_ring_seams --mode quick $(IN_RSEAMS) -- $(PYTHON) tools/check_ring_seams.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_reversal --mode quick $(IN_REVERSAL) -- $(PYTHON) tools/check_reversal.py --build $(B) --quick
 	@$(PYTHON) tools/gate_cache.py --report --cache-dir $(B)/.gate-cache
+
+# This tree on a GPU as it is (ROUND5.md, P1; ROADMAP's GPU half, step 2).
+# A GPU host's target, made with HIP=1, and in none of the three tiers
+# above: on a host with no hip:0, the desktop among them, it refuses by
+# name. tools/check_gpu.py runs the witness's own controls, the routes on
+# the device and the GPU seam test, then the record-making legs in their
+# quick forms, their commands read from check-quick's recipe above
+# (check_dropin from check-light's), with CFT_REBOUND_ARTIFACT=$(GPU_ARTIFACT);
+# every process a leg starts goes through its witness, which holds the
+# device line and the software backend's record from the same arguments.
+# Not through the gate cache: a GPU run is its own evidence, and a cached
+# pass would carry no device line. GPU_LEGS names a subset (and then the
+# controls, routes and seam do not run), GPU_SKIP leaves legs out,
+# and GPU_EXPECT is text the device line must contain or nothing runs (in
+# WSL cft-gpu, "RTX 5060 Ti": hip:0 must never be the 4070 there).
+GPU_ARTIFACT ?= hip:0
+GPU_LEGS     ?=
+GPU_SKIP     ?=
+GPU_EXPECT   ?=
+.PHONY: check-gpu
+check-gpu: check-pins all programs
+	$(PYTHON) tools/check_gpu.py --build $(B) --artifact $(GPU_ARTIFACT) --hip '$(HIP)' --expect '$(GPU_EXPECT)' \
+	    $(if $(GPU_LEGS),--legs $(GPU_LEGS)) $(if $(GPU_SKIP),--skip $(GPU_SKIP))
 
 # The worked round trip, built in the tree and run against the
 # programs here rather than an installed copy.
