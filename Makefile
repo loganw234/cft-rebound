@@ -600,7 +600,9 @@ programs: $(ASM)
 #                         libcft for its reference
 #   make HIP=1 wave       the kernel: build/wave (the twin too, --device
 #                         host), build/wave_corpus_gpu, and the GPU's
-#                         contraction control build/wave_contract. hipcc
+#                         contraction control build/wave_contract; and the
+#                         host's build/wave_corpus, whose corpus the GPU
+#                         build's is held to, digest for digest. hipcc
 #                         for an AMD GPU (HIP_ARCH, gfx1102 by default), or
 #                         HIP's NVIDIA layer with HIP_PLATFORM=nvidia
 #                         (HIP_ARCH 120 by default)
@@ -667,7 +669,7 @@ ifeq ($(HIP),1)
     WAVE_NOCONTRACT := -ffp-contract=off
     WAVE_CONTRACT   := -ffp-contract=fast
   endif
-wave: $(B)/wave $(B)/wave_corpus_gpu $(B)/wave_unchecked $(B)/wave_contract
+wave: $(B)/wave $(B)/wave_corpus_gpu $(B)/wave_unchecked $(B)/wave_contract $(B)/wave_corpus$(EXE)
 
 $(B)/wave_gpu.o: src/wave/wave_main.cpp $(WAVE_DEPS)
 	@mkdir -p $(B)

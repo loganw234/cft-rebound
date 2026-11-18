@@ -384,6 +384,7 @@ def main():
     unchecked = os.path.join(B, ("wave_unchecked" if gpu else "wave_host_unchecked") + EXE)
     contract = os.path.join(B, ("wave_contract" if gpu else "wave_host_contract") + EXE)
     corpus = os.path.abspath(args.corpus or os.path.join(B, ("wave_corpus_gpu" if gpu else "wave_corpus") + EXE))
+    host_corpus = os.path.join(B, "wave_corpus" + EXE)      # on a GPU, the corpus is held to this build's (g++'s)
     cft = os.path.join(B, "ias15_cft" + EXE)
     dev = ["--device", "gpu"] if gpu else []
     work = os.path.abspath(args.keep or os.path.join(B, "wave", str(os.getpid())))
@@ -391,7 +392,7 @@ def main():
         shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work, exist_ok=True)
     print("check_wave: the wave kernel on the %s, held to this tree's port" % ("GPU" if gpu else "host (the twin)"))
-    for p in (wave, unchecked, contract, corpus, cft):
+    for p in (wave, unchecked, contract, corpus, cft) + ((host_corpus,) if gpu else ()):
         if not os.path.isfile(p):
             raise SystemExit("check_wave: %s is not built (make wave-host%s)" % (p, "; make HIP=1 wave" if gpu else ""))
         print("  %s, built %s" % (p, built(p)))
@@ -412,9 +413,10 @@ def main():
 
     # 1. gate 4 ------------------------------------------------------------
     print("1. gate 4: the arithmetic against libcft's software binary64")
-    rc, out, err = run([corpus] + dev + ["--n", "4000" if args.quick else "20000"])
+    ncorpus = "4000" if args.quick else "20000"
+    rc, out, err = run([corpus] + dev + ["--n", ncorpus])
     for l in out.splitlines():
-        if l.startswith(("device:", "wave_corpus:", "text:", "RESULT")) or re.match(r"^\S+ +\d+ cases", l):
+        if l.startswith(("device:", "wave_corpus:", "corpus:", "text:", "RESULT")) or re.match(r"^\S+ +\d+ cases", l):
             print("    " + l)
     mism = [l for l in out.splitlines() if l.startswith("MISMATCH")]
     for l in mism[:50]:
@@ -427,6 +429,17 @@ def main():
             "every result's bits and every flag of %d operations are libcft's (rc %d, %d mismatches)%s"
             % (sum(int(n) for n in re.findall(r"^\S+ +(\d+) cases", out, re.M)), rc, len(mism),
                "" if not gpu else ", on %s" % (cdev[8:].split(" (")[0] if cdev else "NO DEVICE LINE")))
+    if gpu:
+        # the same corpus as the host build's: one seed drew another corpus
+        # under clang than under g++ until the draws were sequenced (MEASURED
+        # on the RX 7600, src/wave/wave_corpus.cpp, CASE2), so the GPU
+        # build's digest is held to the host build's, made by the host's g++
+        dig = re.findall(r"^corpus: .* digest ([0-9a-f]{16})", out, re.M)
+        hrc, hout, herr = run([host_corpus, "--n", ncorpus, "--digest-only"])
+        hdig = re.findall(r"^corpus: .* digest ([0-9a-f]{16})", hout, re.M)
+        verdict(hrc == 0 and len(dig) == 1 and dig == hdig,
+                "the GPU build's corpus is the host build's, operand for operand: digest %s, and %s from %s"
+                % (dig[0] if dig else "NONE", hdig[0] if hdig else "NONE (rc %d)" % hrc, os.path.basename(host_corpus)))
 
     # 2. the constants ------------------------------------------------------
     print("2. the constants")

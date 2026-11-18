@@ -20,7 +20,8 @@
  * and wave_from_hex() against cft_from_hex_char, and every decimal literal
  * the step uses against cft_from_decimal_char.
  *
- * The corpus is fixed by its seed: random bit patterns of every class;
+ * The corpus is fixed by its seed and n, on every compiler (CASE2, below),
+ * and its operands' digest is printed: random bit patterns of every class;
  * random operands of like magnitude (cancellation) and of moderate
  * magnitude; ties - sums exactly halfway between two binary64 values,
  * where round-to-even and the clock's ties-toward-zero part, and products
@@ -32,6 +33,7 @@
  * Every mismatch is printed by name, and any one fails the gate:
  *
  *   wave_corpus [--device host|gpu] [--seed S] [--n N] [--quiet]
+ *   wave_corpus [--seed S] [--n N] --digest-only    (the corpus's digest alone)
  */
 #include "wave_arith.h"
 #include "wave_io.h"
@@ -149,6 +151,19 @@ static std::vector<double> specials(){
 
 static void add_case(std::vector<Case> &c, double a, double b, double d = 0.0){ c.push_back(Case{ a, b, d }); }
 
+/* Operands drawn in a fixed order. C++ leaves the order a function's
+ * arguments are evaluated in to the compiler: g++ evaluates add_case(c,
+ * R.any(), R.any()) last argument first, clang first argument first, so
+ * one seed drew one corpus under g++ (the desktop's MinGW, and the RTX
+ * 5060 Ti's build, whose host compiler is g++) and another under clang
+ * (the RX 7600's hipcc) - MEASURED: their counts of subnormal results
+ * differed in six of the seven operations. Each operand is now drawn in
+ * a declaration of its own, last first, which C++ sequences: every
+ * compiler draws g++'s corpus, and the digest printed beside the results
+ * shows it. */
+#define CASE2(A, B)     do { const double b_ = (B), a_ = (A); add_case(c, a_, b_); } while (0)
+#define CASE3(A, B, C3) do { const double c_ = (C3), b_ = (B), a_ = (A); add_case(c, a_, b_, c_); } while (0)
+
 /* a random binary64 x with an odd last bit and |x| in binade e, and a b
  * that puts x + b exactly halfway between x and a neighbour */
 static void ties_add(Rng &R, std::vector<Case> &c, int n){
@@ -189,36 +204,36 @@ static std::vector<Case> corpus(int op, Rng &R, int n){
     for (int i = 0; i < n; i++){
         switch (op){
         case OP_ADD: case OP_SUB: case OP_AUG: {
-            add_case(c, R.any(), R.any());
-            add_case(c, R.normal(-30, 30), R.normal(-30, 30));
+            CASE2(R.any(), R.any());
+            CASE2(R.normal(-30, 30), R.normal(-30, 30));
             const double a = R.normal(-1022, 1023);
             add_case(c, a, w_neg(a) * (1.0 + R.unit() * 0x1p-20));                  /* cancellation */
-            add_case(c, R.sub(), R.sub());
-            add_case(c, R.sub(), R.normal(-1022, -1000));
-            add_case(c, R.normal(1015, 1023), R.normal(1015, 1023));                /* near overflow */
-            add_case(c, R.normal(-1022, 1023), R.normal(-1022, 1023));
+            CASE2(R.sub(), R.sub());
+            CASE2(R.sub(), R.normal(-1022, -1000));
+            CASE2(R.normal(1015, 1023), R.normal(1015, 1023));                /* near overflow */
+            CASE2(R.normal(-1022, 1023), R.normal(-1022, 1023));
             break; }
         case OP_MUL: {
-            add_case(c, R.any(), R.any());
-            add_case(c, R.normal(-30, 30), R.normal(-30, 30));
-            add_case(c, R.normal(-600, -400), R.normal(-700, -500));                /* subnormal products */
-            add_case(c, R.normal(-560, -500), R.normal(-560, -500));
+            CASE2(R.any(), R.any());
+            CASE2(R.normal(-30, 30), R.normal(-30, 30));
+            CASE2(R.normal(-600, -400), R.normal(-700, -500));                /* subnormal products */
+            CASE2(R.normal(-560, -500), R.normal(-560, -500));
             const double t = 1.0 + R.unit();                                        /* products about 2^-1022 */
             add_case(c, ldexp(t, -511), ldexp(1.0 / t, -511));
-            add_case(c, ldexp(1.0, R.range(-1074, -1000)), (double)(R.next() % (1u << 20)) * 0x1p-40);   /* exact tiny */
-            add_case(c, R.sub(), R.normal(-60, 60));
-            add_case(c, R.normal(500, 530), R.normal(490, 530));                    /* near overflow */
+            CASE2(ldexp(1.0, R.range(-1074, -1000)), (double)(R.next() % (1u << 20)) * 0x1p-40);   /* exact tiny */
+            CASE2(R.sub(), R.normal(-60, 60));
+            CASE2(R.normal(500, 530), R.normal(490, 530));                    /* near overflow */
             break; }
         case OP_DIV: {
-            add_case(c, R.any(), R.any());
-            add_case(c, R.normal(-30, 30), R.normal(-30, 30));
-            add_case(c, R.normal(-1000, -900), R.normal(100, 200));                 /* subnormal quotients */
+            CASE2(R.any(), R.any());
+            CASE2(R.normal(-30, 30), R.normal(-30, 30));
+            CASE2(R.normal(-1000, -900), R.normal(100, 200));                 /* subnormal quotients */
             const double t = 1.0 + R.unit();
             add_case(c, ldexp(t, -1022), t * (1.0 + R.unit() * 0x1p-40));           /* about 2^-1022 */
-            add_case(c, ldexp((double)(R.next() % (1u << 20)), -1074), ldexp(1.0, R.range(0, 30)));   /* exact tiny */
-            add_case(c, R.sub(), R.normal(-20, 20));
-            add_case(c, R.normal(1000, 1023), R.normal(-100, -1));                  /* overflow */
-            add_case(c, R.normal(-30, 30), R.next() & 1 ? 0.0 : -0.0);              /* by zero */
+            CASE2(ldexp((double)(R.next() % (1u << 20)), -1074), ldexp(1.0, R.range(0, 30)));   /* exact tiny */
+            CASE2(R.sub(), R.normal(-20, 20));
+            CASE2(R.normal(1000, 1023), R.normal(-100, -1));                  /* overflow */
+            CASE2(R.normal(-30, 30), R.next() & 1 ? 0.0 : -0.0);              /* by zero */
             break; }
         case OP_SQRT: {
             add_case(c, R.any(), 0.0);
@@ -229,15 +244,15 @@ static std::vector<Case> corpus(int op, Rng &R, int n){
             add_case(c, w_neg(w_abs(R.normal(-30, 30))), 0.0);
             break; }
         case OP_FMA: {
-            add_case(c, R.any(), R.any(), R.any());
-            add_case(c, R.normal(-30, 30), R.normal(-30, 30), R.normal(-60, 60));
+            CASE3(R.any(), R.any(), R.any());
+            CASE3(R.normal(-30, 30), R.normal(-30, 30), R.normal(-60, 60));
             const double a = R.normal(-500, -470), b = R.normal(-500, -470);
             const double p = a * b;                                                 /* about 2^-1000..2^-940 */
             add_case(c, a, b, w_neg(p));                                            /* the product's error: tiny */
             add_case(c, a, b, w_neg(p) + R.sub());
-            add_case(c, R.normal(-560, -500), R.normal(-560, -500), R.sub());
-            add_case(c, R.normal(-540, -530), R.normal(-540, -530), R.normal(-1022, -1000));
-            add_case(c, R.normal(500, 530), R.normal(490, 530), R.normal(1000, 1023));
+            CASE3(R.normal(-560, -500), R.normal(-560, -500), R.sub());
+            CASE3(R.normal(-540, -530), R.normal(-540, -530), R.normal(-1022, -1000));
+            CASE3(R.normal(500, 530), R.normal(490, 530), R.normal(1000, 1023));
             const double x = R.normal(-60, 60), y = R.normal(-60, 60);
             add_case(c, x, y, w_neg(x * y));                                        /* exact cancellations */
             break; }
@@ -278,6 +293,14 @@ static std::vector<Case> corpus(int op, Rng &R, int n){
         add_case(c, 0x1p1023, 0x1.fffffffffffffp1022); add_case(c, M, M);
     }
     return c;
+}
+
+/* FNV-1a over a case's operands' bits, a, b, c */
+static void digest_case(uint64_t &d, const Case &k){
+    for (double v : { k.a, k.b, k.c }){
+        uint64_t u = d2u(v);
+        for (int j = 0; j < 8; j++){ d ^= (u & 0xff); d *= 0x100000001b3ull; u >>= 8; }
+    }
 }
 
 /* ---- comparison ------------------------------------------------------------ */
@@ -323,10 +346,17 @@ static int text_checks(Rng &R, int n){
         "0x000000000000000000001p+0", "0x1.23456789abcdef0123456789p+100", "-0x0p+0", "0x0.0p+0", "-0x1.8p-1074" };
     for (int i = 0; i < n; i++){
         char b[96];
-        snprintf(b, sizeof b, "%s0x%llx.%llxp%d", R.next() & 1 ? "-" : "", (unsigned long long)(R.next() >> R.range(0, 63)),
-                 (unsigned long long)R.next(), R.range(-1200, 1100));
+        /* drawn last first, as g++ evaluated these arguments (CASE2, above) */
+        const int ex = R.range(-1200, 1100);
+        const unsigned long long lo = R.next();
+        const unsigned long long hi = R.next() >> R.range(0, 63);
+        const char *sg = R.next() & 1 ? "-" : "";
+        snprintf(b, sizeof b, "%s0x%llx.%llxp%d", sg, hi, lo, ex);
         seq.push_back(b);
     }
+    uint64_t tdig = 0xcbf29ce484222325ull;                           /* FNV-1a over the values' bits and the sequences */
+    for (double x : vals){ uint64_t u = d2u(x); for (int j = 0; j < 8; j++){ tdig ^= (u & 0xff); tdig *= 0x100000001b3ull; u >>= 8; } }
+    for (const std::string &s : seq){ for (unsigned char ch : s){ tdig ^= ch; tdig *= 0x100000001b3ull; } tdig ^= 0; tdig *= 0x100000001b3ull; }
     for (const std::string &s : seq){
         double mine = 0, ref = 0; size_t bi = 0; uint32_t fl = 0;
         const char *in[1] = { s.c_str() };
@@ -356,20 +386,37 @@ static int text_checks(Rng &R, int n){
         if (d2u(s) != d2u(ref)){ printf("MISMATCH strtod %s: libcft %016llx, strtod %016llx\n", l.text, (unsigned long long)d2u(ref), (unsigned long long)d2u(s)); bad++; }
     }
     printf("text: %llu values to hex against cft_to_hex_char, %llu sequences from hex against cft_from_hex_char, "
-           "%llu decimal literals (and strtod) against cft_from_decimal_char: %d mismatches\n", nfmt, nparse, nlit, bad);
+           "%llu decimal literals (and strtod) against cft_from_decimal_char: %d mismatches; the inputs' FNV-1a digest %016llx\n",
+           nfmt, nparse, nlit, bad, (unsigned long long)tdig);
     return bad;
 }
 
 int main(int argc, char **argv){
     const char *device = "host";
     uint64_t seed = 20261116;
-    int n = 20000;
+    int n = 20000, digest_only = 0;
     for (int i = 1; i < argc; i++){
         if (!strcmp(argv[i], "--device") && i + 1 < argc) device = argv[++i];
         else if (!strcmp(argv[i], "--seed") && i + 1 < argc) seed = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--n") && i + 1 < argc) n = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--quiet")) quiet_mode = 1;
+        else if (!strcmp(argv[i], "--digest-only")) digest_only = 1;
         else { fprintf(stderr, "wave_corpus: unknown argument %s\n", argv[i]); return 2; }
+    }
+    if (digest_only){
+        /* the corpus drawn and digested, nothing evaluated: what another
+         * build's corpus is held to (tools/check_wave.py --device gpu) */
+        uint64_t digest = 0xcbf29ce484222325ull;
+        unsigned long long total = 0;
+        for (int op = 0; op < NOPS; op++){
+            Rng Ro; Ro.s = seed * 1000003ull + (uint64_t)op;
+            const std::vector<Case> cs = corpus(op, Ro, n);
+            for (const Case &k : cs) digest_case(digest, k);
+            total += cs.size();
+        }
+        printf("corpus: the operands of all %llu cases have FNV-1a digest %016llx (one seed and n, one digest, on every host)\n",
+               total, (unsigned long long)digest);
+        return 0;
     }
     const int gpu = !strcmp(device, "gpu");
 #ifndef WAVE_HIP
@@ -399,9 +446,11 @@ int main(int argc, char **argv){
            "seed %llu, n %d\n", gpu ? "GPU" : "host CPU", (unsigned long long)seed, n);
     Rng R; R.s = seed;
     unsigned long long total = 0, bad = 0;
+    uint64_t digest = 0xcbf29ce484222325ull;
     for (int op = 0; op < NOPS; op++){
         Rng Ro; Ro.s = seed * 1000003ull + (uint64_t)op;
         const std::vector<Case> cs = corpus(op, Ro, n);
+        for (const Case &k : cs) digest_case(digest, k);
         std::vector<Res> got;
 #ifdef WAVE_HIP
         if (gpu) eval_gpu(op, cs, got); else
@@ -427,6 +476,8 @@ int main(int argc, char **argv){
                op == OP_AUG ? (std::string("; ") + std::to_string(ties) + " ties where round-to-even and the clock's ties-toward-zero differ").c_str() : "",
                nn);
     }
+    printf("corpus: the operands of all %llu cases have FNV-1a digest %016llx (one seed and n, one digest, on every host)\n",
+           total, (unsigned long long)digest);
     int tbad = 0;
     if (!gpu) tbad = text_checks(R, n / 4);
     printf("RESULT: %s: %llu cases, %llu mismatches%s\n", bad || tbad ? "FAIL" : "PASS", total, bad,
