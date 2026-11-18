@@ -135,23 +135,36 @@
 #     schedule recorded from another run;
 #   - each sampled particle is replayed against the producer's own
 #     attempts record and schedule, with no rerun of its member;
-#   - a member's own lines are still held as without the files: rerun here
-#     where the member sample holds it, and by the record alone where it
-#     does not (and by its particles' replays, which hold every massive
-#     body and the exact-time pair). The driver says which, and why;
+#   - a member's own lines are still held as without the files where the
+#     member sample holds it: rerun here. Where it does not, it is NOT
+#     RERUN, and nothing holds it but its particles' replays: they hold its
+#     massive bodies, its sampled particles, each sample's head fields and
+#     exact-time pair, and its trailer's counters, and its other particles
+#     are held by nothing. The driver says which, and why;
 #   - a member whose pair is not both in DIR falls back to today's rerun,
 #     which then holds its lines too and writes the files its particles
 #     replay from; the driver names the file that is not there.
-# What the replay cannot hold, stated: it takes the producer's decisions
-# as given - each attempt's dt and outcome, and its passes - and holds the
-# arithmetic of each attempt for the particle, every massive body and the
-# exact-time pair. The decisions are held only where the member is rerun,
-# by this tree's own step control and exit test: a producer whose exit test
-# took another pass, its record that schedule's replay, passes in a member
-# that is not rerun and FAILs in one that is (tools/check_compare_run.py
-# measures both). And a rejected attempt after an accepted step moves no
-# state bit (docs/VALIDATION.md entry 49): its dt shows only as the dt_next
-# of a sample line printed just before it.
+# THE LIMIT, printed once beside the plan (PRODUCER_LIMIT, below) and held
+# verbatim by tools/check_compare_run.py, since a source comment reaches no
+# reader of the output (V3, 2026-11-16: the output said a NOT RERUN member
+# was held, and a producer whose exit test stopped two passes early PASSED):
+#   - the replay takes the producer's decisions as given - each attempt's dt
+#     and outcome, and its passes - and holds the arithmetic of each attempt.
+#     The decisions are held only where a member is rerun, by this tree's
+#     own step control and exit test: a producer whose exit test took other
+#     passes, its record that schedule's replay, passes in a member that is
+#     not rerun and FAILs in one that is (tools/check_compare_run.py, GATE
+#     1b). A rejected attempt after an accepted step moves no state bit
+#     (docs/VALIDATION.md entry 49): its dt shows only as the dt_next of a
+#     sample line printed just before it;
+#   - the particles of a NOT RERUN member that are not sampled are held by
+#     nothing;
+#   - the run key holds the files to the arguments the record names. A
+#     producer that keys its files with --run-key on those arguments passes
+#     it whatever it ran with, so whether it ran with them - its epsilon,
+#     pc_tol_shift and max_iter, which decide its steps and passes, and the
+#     settings no record carries (LIMITS, below) - is held only in a member
+#     that is rerun.
 # Without P3's tools in the tree the driver prints
 #     particles: not sampled (no particle replay in this tree)
 # and with them present but not callable (an extract() that will not
@@ -238,6 +251,14 @@ FORMAT_DIFF_SCOPE = "the difference shows the narrower format's round-off on the
 # chosen from the trailers under test.
 SAMPLE_LIMIT = ("sample: it trusts the trailers it is testing: a member whose trailer under-reports its rejections "
                 "leaves the sample, and an unsampled member's lines are never rerun")
+# What the producer's own files cannot hold, printed once beside the plan
+# under --producer-files (V3, 2026-11-16, D1: only this file's head said
+# so). THE LIMIT, in the head, is the long form.
+PRODUCER_LIMIT = ("particles: the limit of the producer's own files: each replay takes the producer's dts, outcomes "
+                  "and passes as given, so only a member that is rerun holds its decisions; a NOT RERUN member's "
+                  "particles that are not sampled are held by nothing; and the run key holds the files to the "
+                  "arguments the record names, so whether the producer ran with them - its epsilon, pc_tol_shift "
+                  "and max_iter, and the settings no record carries - is held only in a member that is rerun")
 
 
 class Refused(Exception):
@@ -1188,10 +1209,12 @@ def producer_plan(rec, args, sample, ranges, picks, rej, state, bad):
                     ["its trailer shows %d rejected step(s)" % rec_rejected(rec, s)] * (s in rej)))
         else:
             lo, hi = next((lo, hi) for lo, hi in ranges if lo <= s < hi)
+            # not "the record alone": a member not rerun is held by its
+            # particles' replays and no more (V3's D1, 2026-11-16)
             how = "its lines held by %s: the member sample does not hold it (stratum %d-%d gives member %d, and its " \
                   "trailer shows no rejected step)%s" % (
-                      "a rerun here" if lost else "the record alone, not rerun", lo, hi - 1, picks[ranges.index((lo, hi))],
-                      ", and its particles need one" if lost else "")
+                      "a rerun here" if lost else "its particles' replays alone, NOT RERUN", lo, hi - 1,
+                      picks[ranges.index((lo, hi))], ", and its particles need one" if lost else "")
         if lost:
             fallback.append(s)
             src = "the producer's pair is not there (no %s): its particles fall back to today's rerun, which writes " \
@@ -1200,6 +1223,7 @@ def producer_plan(rec, args, sample, ranges, picks, rej, state, bad):
             producer[s] = (att, sched)
             src = "its particles from the producer's own %s and %s" % (att, sched)
         print("  member %d: %s; %s" % (k, how, src))
+    print(PRODUCER_LIMIT)
     return producer, members, fallback
 
 
@@ -1347,17 +1371,18 @@ def compare_run(args):
                 print("  member %d: format difference: %s%s" % (k, "" if fok else "FAIL: ", fmsg))
                 if not fok:
                     failed.add(s)
-        # the members sampled for their particles alone: not rerun, their
-        # lines held by the record and by those particles' replays, which
-        # hold every massive body and the exact-time pair
+        # the members sampled for their particles alone: not rerun, and held
+        # by nothing but those particles' replays (THE LIMIT, in the head)
         for s in alone:
             name, k = rec.name_of(s, prob), rec.label_of(s)
             names = [n for n, _ in rec.bodies[s]]
             rt = rec.trailer[s][2]
-            print("member %d (%s): NOT RERUN: its lines are held by the record alone, and by its particles' replays from "
-                  "the producer's own files; its trailer: steps %s, rejected %s, mean passes %s, max passes %s, cap "
-                  "hits %s" % (k, name, rt.get("steps_done"), rt.get("steps_rejected"), rt.get("mean_pc_iterations"),
-                               rt.get("max_pc_iterations"), rt.get("iterations_max_exceeded")))
+            print("member %d (%s): NOT RERUN: held only by its particles' replays from the producer's own files - its "
+                  "massive bodies, its sampled particles, each sample's head fields and exact-time pair, and its "
+                  "trailer's counters - and its other particles by nothing, within the limit printed above; its "
+                  "trailer: steps %s, rejected %s, mean passes %s, max passes %s, cap hits %s"
+                  % (k, name, rt.get("steps_done"), rt.get("steps_rejected"), rt.get("mean_pc_iterations"),
+                     rt.get("max_pc_iterations"), rt.get("iterations_max_exceeded")))
             best = closest_block(rec, k, names, got[s])
             if want_particles:
                 info.append((s, k, names, got[s], best, producer[s][0], producer[s][1], "producer", key_engine, False))
@@ -1380,8 +1405,8 @@ def compare_run(args):
         return 1
     print("RESULT: PASS: %d sampled member(s) of %d, every one identical to this tree's rerun, its counters beside it%s%s"
           % (same, rec.E, "; every sampled particle's replay identical to the record" if info else "",
-             "; and %d member(s) not rerun, each held by the record and its particles' replays from the producer's own "
-             "files" % len(alone) if alone else ""))
+             "; and %d member(s) not rerun, held only by their particles' replays from the producer's own files, "
+             "within the limit printed above" % len(alone) if alone else ""))
     return 0
 
 
