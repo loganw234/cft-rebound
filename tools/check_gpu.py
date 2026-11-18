@@ -96,14 +96,24 @@
 #    of the last body, t, dt_next, and the exact-time pair's t_lo, which the
 #    host's augmented sum makes) on the wave's first and last sampled lines.
 #    Each must FAIL the planted wave naming that line and column, while the
-#    other wave stays IDENTICAL, its particles too. So a compare_run.py that
-#    never compares one of the two members FAILs the seam on that member's
-#    plants (V1 measured the gap while every plant was in wave 0: a copy
-#    that never compared member 1 passed). The record's columns are read
-#    here from its own `# columns:` line, apart from compare_run.py's
-#    reader. That is REBOUND's order; the same is done once more in the FMA
-#    form (--arith fma), the form P2's kernel is held in, with one plant in
-#    each wave.
+#    other wave stays IDENTICAL, its particles too. The planted wave's
+#    sampled particles are held as well, by what each one's replay carries:
+#    the schedule (t, dt_next, dt_last, E, the exact-time pair), the wave's
+#    massive bodies (its first ones, tools/extract_particle.py) and the
+#    particle's own body, the bodies and their count read from
+#    compare_run.py's own particle lines. A particle whose replay carries the
+#    planted column must FAIL naming that line and column (x of body 1, a
+#    massive body; t, dt_next, t_lo); one whose replay does not must stay
+#    IDENTICAL (vz of the last body, a test particle, unless it is the one
+#    sampled). So a compare_run.py that never compares one of the two
+#    members, or never compares a member's particles, FAILs the seam on
+#    those plants (V1 measured both gaps: a copy that never compared member
+#    1 passed while every plant was in wave 0, and one whose
+#    particle_compare() never compared passed while no plant asked anything
+#    of its own wave's particles). The record's columns are read here from
+#    its own `# columns:` line, apart from compare_run.py's reader. That is
+#    REBOUND's order; the same is done once more in the FMA form (--arith
+#    fma), the form P2's kernel is held in, with one plant in each wave.
 #
 # 4. THE LEGS, each in its quick form as the Makefile's check-quick runs it
 #    (check_dropin as check-light runs it, --light), the commands read from
@@ -1029,16 +1039,36 @@ def seam_form(shadow, work, art, probe_line, unpublished, env_dev, env_sw, real,
         with open(os.path.join(work, "compare_run.%s.%s.log" % (arith, tag)), "w") as f:
             f.write(out + err)
         mem = {int(m.group(1)): m.group(2) for m in re.finditer(r"^member (\d+) \(\S+\): (IDENTICAL|FAIL): ", out, re.M)}
-        parts = re.findall(r"^  member (\d+): particle .*?held to the record: (IDENTICAL|FAIL)", out, re.M)
+        # each sampled particle, from compare_run.py's own line for it: (its
+        # wave, its body, how many massive bodies its replay carries, IDENTICAL
+        # or FAIL, the line); a line that says neither (a replay refused or
+        # not run) is a FAIL
+        parts = []
+        for m in re.finditer(r"^  member (\d+): particle .*? \(body (\d+), [^)]*\): (.*)$", out, re.M):
+            nact = re.search(r"replayed alone with the member's (\d+) massive bodies", m.group(3))
+            said = re.search(r"held to the record: (IDENTICAL|FAIL)", m.group(3))
+            parts.append((int(m.group(1)), int(m.group(2)), int(nact.group(1)) if nact else None,
+                          said.group(1) if said else "FAIL", m.group(0).strip()))
         return rc, out, err, mem, parts
 
+    def listed(parts):
+        return ", ".join("%d:%d %s" % (p[0], p[1], p[3]) for p in parts) or "none"
+
+    def told(line):
+        # what compare_run.py said of a particle, from its head: the line's
+        # tail is its closest approaches
+        m = re.search(r"held to the record: (.*)", line)
+        what = m.group(1) if m else line
+        return what if len(what) <= 240 else what[:240] + "..."
+
     rc, out, err, mem, parts = drive(recpath, "clean")
-    verdict(rc == 0 and mem == {0: "IDENTICAL", 1: "IDENTICAL"} and parts and all(p[1] == "IDENTICAL" for p in parts)
-            and "\nRESULT: PASS: " in out and "backend=%s" % art in out,
+    same = bool(parts) and all(p[3] == "IDENTICAL" for p in parts)
+    verdict(rc == 0 and mem == {0: "IDENTICAL", 1: "IDENTICAL"} and same and "\nRESULT: PASS: " in out
+            and "backend=%s" % art in out,
             "compare_run.py --arith %s, no artifact, on the %s record: %s; %d particle(s) replayed alone with the zonal "
-            "line, %s (rc %d)" % (arith, art, ", ".join("member %d %s" % kv for kv in sorted(mem.items())) or "no member",
-                                 len(parts), "all IDENTICAL" if parts and all(p[1] == "IDENTICAL" for p in parts)
-                                 else "NOT all identical", rc),
+            "line, %s (wave:body %s; rc %d)"
+            % (arith, art, ", ".join("member %d %s" % kv for kv in sorted(mem.items())) or "no member", len(parts),
+               "all IDENTICAL" if same else "NOT all identical", listed(parts), rc),
             [] if rc == 0 else [short(out + err, 400)])
     rows = rec_text.splitlines()
     n = int(re.search(r"\bN=(\d+)", rec_text).group(1))
@@ -1066,16 +1096,31 @@ def seam_form(shadow, work, art, probe_line, unpublished, env_dev, env_sw, real,
             with open(bad, "w", newline="\n") as f:
                 f.write("\n".join(rows[:i] + [" ".join(toks)] + rows[i + 1:]) + "\n")
             rc, out, err, mem, parts = drive(bad, "planted-" + slug)
-            named = re.search(r"^member %d \(\S+\): FAIL: first differing line: record line %d \(system %d sample \d+, "
-                              r"step \d+\): %s(?: \([^)]*\))?: record " % (w, i + 1, w, re.escape(label)), out, re.M)
-            others = [v for m, v in parts if m == str(o)]
-            ok = (rc == 1 and mem.get(w) == "FAIL" and mem.get(o) == "IDENTICAL" and named is not None and others
-                  and all(v == "IDENTICAL" for v in others))
+            where = r"record line %d \(system %d sample \d+, step \d+\): %s(?: \([^)]*\))?: record " % (
+                i + 1, w, re.escape(label))
+            named = re.search(r"^member %d \(\S+\): FAIL: first differing line: %s" % (w, where), out, re.M)
+            others = [p for p in parts if p[0] == o]
+            mine = [p for p in parts if p[0] == w]
+            # a particle's replay carries the schedule (t, dt_next, dt_last, E,
+            # the exact-time pair), the wave's massive bodies (its first ones,
+            # tools/extract_particle.py; as many as compare_run.py's line says)
+            # and the particle's own body; so it holds the plant when the plant
+            # is in the schedule (body None) or in a body it carries
+            holds = [p for p in mine if body is None or (p[2] is not None and (body < p[2] or body == p[1]))]
+            right = [p for p in mine if (re.search(r"held to the record: FAIL: " + where, p[4]) if p in holds
+                                         else p[3] == "IDENTICAL")]
+            ok = (rc == 1 and mem.get(w) == "FAIL" and mem.get(o) == "IDENTICAL" and named is not None and mine
+                  and len(right) == len(mine) and others and all(p[3] == "IDENTICAL" for p in others))
             verdict(ok, "the plant, arith=%s: one hex digit of %s on wave %d's record line %d (%s to %s): wave %d "
-                        "FAILs naming that line and column, and wave %d stays IDENTICAL, its %d particle(s) too (rc %d; "
-                        "particles %s)" % (arith, label, w, i + 1, old, toks[t], w, o, len(others), rc,
-                                           ", ".join("%s %s" % p for p in parts) or "none"),
-                    [] if ok else [short(l, 400) for l in out.splitlines() if l.startswith(("member 0 ", "member 1 "))])
+                        "FAILs naming that line and column, and so do those of its %d sampled particle(s) whose replay "
+                        "carries that column, %d here (a replay carries the schedule, the wave's %s massive bodies and "
+                        "the particle's own body), the rest IDENTICAL: %d of %d as they must be; wave %d stays "
+                        "IDENTICAL, its %d particle(s) too (rc %d; particles, wave:body, %s)"
+                    % (arith, label, w, i + 1, old, toks[t], w, len(mine), len(holds),
+                       "/".join(sorted({str(p[2]) for p in mine})) or "no", len(right), len(mine), o, len(others), rc,
+                       listed(parts)),
+                    [] if ok else [short(l, 400) for l in out.splitlines() if l.startswith(("member 0 ", "member 1 "))]
+                    + ["wave %d's particle, body %d: %s" % (p[0], p[1], told(p[4])) for p in mine if p not in right])
 
 
 # ---------------------------------------------------------------- 4. the legs
