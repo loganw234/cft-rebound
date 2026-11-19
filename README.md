@@ -775,8 +775,9 @@ cap is reachable and that 1025 is refused.
 and `HIP_ARCH` pass through to libcft's Makefile, and the link takes the
 GPU runtime: libamdhip64 on ROCm, the CUDA runtime under HIP's NVIDIA
 layer. `HIP=1` with `XRT=1` is refused: one libcft holds a card or a
-GPU, never both. The Makefile reads `HIP` only where `OS` is not
-`Windows_NT`. Round 5 built with `make HIP=1 PYTHON=python3 all
+GPU, never both. The build reads `HIP` only where `OS` is not
+`Windows_NT`, and check-gpu passes it to tools/check_gpu.py on every OS
+(Makefile:837). Round 5 built with `make HIP=1 PYTHON=python3 all
 programs` for the RX 7600 under ROCm, and with `HIP_PLATFORM=nvidia
 HIP_ROOT=/opt/rocm-7.2.4 HIP_ARCH=120` added for the RTX 5060 Ti. Run
 `make clean` first: in a tree first built without HIP, `make HIP=1 all`
@@ -793,7 +794,10 @@ their quick forms, check_dropin in its `--light` one, with
 must print the device's `CFT_HIP_INFO` line, and its record and output
 files must be the software backend's from the same arguments, byte for
 byte but for the backend's name, the self-tests' banners, the timings
-and the routes the device does not publish.
+and the routes the device does not publish. A process refused by its
+own arguments before it opens a device, as the software backend refuses
+the same arguments, prints no device line: it is counted apart, and
+still as a device process (docs/VALIDATION.md entry 55).
 
 - `GPU_ARTIFACT`: the device, `hip:0` by default.
 - `GPU_EXPECT`: text the device line must contain, or nothing runs. On a
@@ -808,8 +812,8 @@ and the routes the device does not publish.
 Where strace is installed, each leg runs under it, and every exec of
 `ias15_cft` or `check_dropin` must be one the witness accounts for. On a
 host without it, WSL `cft-gpu` among them, nothing sees a process run
-past the witness. Entry 55 has each leg's measured time on each GPU, for
-booking a window.
+past the witness. Entry 55 has each leg's measured time on the RX 7600,
+for booking a window.
 
 ## What was found
 

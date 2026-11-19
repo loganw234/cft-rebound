@@ -199,21 +199,26 @@ each of `--particle-strata` ranges of member index (default:
   runs. A file of another wave, format, `active` line or `zonal` line is
   refused, naming the member, the file and every key field that differs;
   a file not of its form is refused by its first line.
-- **Each sampled particle's arithmetic, attempt by attempt,** with no
-  rerun of its member: every sample's head fields and exact-time pair,
-  the particle, every massive body and the trailer's counters, held to
-  the record's own lines. MEASURED with ias15_cft as the producer: the
-  same 18 particles from its files as from a rerun's, at every format,
-  1,512 tokens each time.
+- **The arithmetic that reaches each sampled particle's samples and
+  trailer,** with no rerun of its member: every sample's head fields and
+  exact-time pair, the particle, every massive body and the trailer's
+  counters, held to the record's own lines. Only sample lines and the
+  trailer are compared, and a rejected attempt after an accepted step
+  moves no state bit (VALIDATION entry 49): its dt shows only as the
+  dt_next of a sample line printed just before it. MEASURED with
+  ias15_cft as the producer: the same 18 particles from its files as
+  from a rerun's, at every format, 1,512 tokens each time.
 
 **What they do not.**
 - **The producer's decisions.** A replay takes each attempt's dt and
   outcome, and its passes, as given. Where a producer's exit test stopped
-  two passes early on a first attempt, the driver holds the member's
-  particles IDENTICAL and says PASS while the member is not rerun, and
-  FAILs it once it is (P3's GATE 1b, MEASURED). Decisions are held only
-  in a member that is rerun: one a stratum, and every member with a
-  rejected step.
+  two passes early on a first attempt, the driver holds that member, NOT
+  RERUN, both its particles IDENTICAL (P3's GATE 1b, MEASURED; that run
+  ends rc 1 because another member, rerun, FAILs). Where nothing else
+  differs the run says RESULT: PASS (V3, MEASURED on a three-wave ring).
+  The same member FAILs once it is rerun. Decisions are held only in a
+  member that is rerun: one a stratum, and every member with a rejected
+  step.
 - **A NOT RERUN member's unsampled particles,** which are held by
   nothing.
 - **The producer's settings.** The key holds the files to the arguments
@@ -257,18 +262,24 @@ since it fixes its own at 256 slots.
 
     make clean
     make HIP=1 [HIP_PLATFORM=nvidia HIP_ROOT=... HIP_ARCH=...] all programs
-    make HIP=1 [GPU_EXPECT=TEXT] [GPU_LEGS=a,b | GPU_SKIP=a,b] check-gpu
+    make HIP=1 [the same variables as the build] [GPU_EXPECT=TEXT] \
+         [GPU_LEGS=a,b | GPU_SKIP=a,b] check-gpu
 
 It is in none of the three tiers, does not use the gate cache, and
-refuses by name where there is no `hip:0`. It runs eleven legs, each in
-its quick form: check_records, check_equivalence, check_program_engine,
-check_ensemble, check_ring, check_replay, check_compare_run,
-check_zonal, check_reversal, check_corrector and check_dropin_light.
+refuses by name where there is no `hip:0`. It runs eleven legs, ten in
+their quick form and check_dropin in its `--light` form: check_records,
+check_equivalence, check_program_engine, check_ensemble, check_ring,
+check_replay, check_compare_run, check_zonal, check_reversal,
+check_corrector and check_dropin_light.
 
 **What it holds,** for every process a leg starts, whatever starts it:
 - **That it ran on the device.** Every process prints the probe's
-  `CFT_HIP_INFO` device line, or it is a stand-in and its leg FAILs. The
-  record's `backend=hip:0` only echoes the artifact string (entry 54).
+  `CFT_HIP_INFO` device line, or it is a stand-in and its leg FAILs. A
+  process refused by its own arguments before it opens a device, as the
+  software backend refuses the same arguments, is the exception: it is
+  counted apart (tools/check_gpu.py:565-570), and still as a device
+  process (:562). The record's `backend=hip:0` only echoes the artifact
+  string (entry 54).
 - **That its record is the software backend's.** The same arguments run
   again on the software backend, and stdout and every output file are
   compared byte for byte, with the header's `backend=` value, the
@@ -302,6 +313,12 @@ check_zonal, check_reversal, check_corrector and check_dropin_light.
   process opened it (V1).
 - **A bypass on the RTX 5060 Ti.** WSL cft-gpu has no strace.
 - **stderr,** where a difference is printed and never failed on.
+- **A refused process as other than a device process.** A process
+  refused by its own arguments counts as one, and its record among the
+  identical ones, so a leg whose processes were all refused passes the
+  driver's check that a process ran on the device; only the leg's own
+  verdict would fail it (V1; the second of the merge message's three
+  open notes).
 - **The legs it does not run.** gate_real's self-contained mode refuses
   `hip:0` on its identity check, and check_seams fails there on the
   forced routes the device does not publish. check_checkpoint passes on

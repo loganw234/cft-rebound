@@ -186,7 +186,10 @@ corrector self-tests, which name the backend they ran on.
   - check_records, check_equivalence, check_program_engine at binary64;
   - check_ensemble, check_ring, check_replay and check_compare_run;
   - check_zonal and check_reversal;
-  - check_corrector and check_dropin, through the registered integrator.
+  - check_corrector and check_dropin. check_dropin goes through the
+    registered integrator; check_corrector does only in its `--library`
+    step, and otherwise runs the standalone program (P1's report, item 3;
+    this line first said both went through it).
 
   A full `make check` is out of reach. On kepler the calls make a run 7
   to 30 times slower, and V0 measured `check_dropin --light` at 449 s in
@@ -305,9 +308,12 @@ must take them: not built."
     decisions.** A replay takes each attempt's dt and outcome, and its
     passes, as given. A producer whose first attempt took 5 passes where
     this tree's takes 7, so that 2 of its 3 sample lines are not this
-    tree's, gets RESULT: PASS where that member is not rerun, and FAILs
-    where it is (P3's GATE 1b; VALIDATION entry 57). The decisions are
-    held only in a member that is rerun.
+    tree's, has that member held, NOT RERUN, both its particles
+    IDENTICAL (P3's GATE 1b, whose run ends rc 1 because another member,
+    rerun, FAILs; VALIDATION entry 57). Where nothing else differs, the
+    run says RESULT: PASS (V3, on a three-wave ring, wave 0 at 2 passes
+    where this tree takes 4). The same member FAILs once it is rerun. The
+    decisions are held only in a member that is rerun.
 - **What it is held to:**
   - with ias15_cft as the producer, particles sampled from its own files
     are identical to those sampled through a rerun. This test cannot fail

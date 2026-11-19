@@ -6319,7 +6319,10 @@ the exact-time pair, `zip(rv[:-2], mv[:-2])`, which is what
 `check_equivalence.parse_record` does, passed the full gate, 63 ok. The
 shipped driver fails a planted t_hi digit, and the mutant passes it with
 rc 0. That pair comes from `vaugadd`, the path G1B is expected to refuse
-as AUGADD on hip:N.
+as AUGADD on hip:N. [Corrected in round 5: G1B does not refuse it.
+`vaugadd` is the API call `cft_augmented_add`, which at the pin runs on
+the host on every device, and every `hip:0` record holds the pair at the
+software backend's bits (entries 54 and 55).]
 
 `79bd206` adds a5: it reads the record's own `# columns:` line and plants
 one change in each of its 12 columns, one column a sampled member, over
@@ -7263,12 +7266,12 @@ subset) and `GPU_SKIP` (the legs left out). The driver has five parts:
   witnessed program must be one its witness accounts for.
 - **2, the routes,** at every format.
 - **3, the GPU seam** (ROUND4.md, "What the integrator keeps"), below.
-- **4, the legs,** eleven, each in its quick form, their commands read
-  from the Makefile's recipes and never retyped: check_records,
-  check_equivalence, check_program_engine, check_ensemble, check_ring,
-  check_replay, check_compare_run, check_zonal, check_reversal and
-  check_corrector as check-quick runs them, and check_dropin_light as
-  check-light runs it.
+- **4, the legs,** eleven, ten in their quick form and check_dropin in
+  its `--light` form, their commands read from the Makefile's recipes
+  and never retyped: check_records, check_equivalence,
+  check_program_engine, check_ensemble, check_ring, check_replay,
+  check_compare_run, check_zonal, check_reversal and check_corrector as
+  check-quick runs them, and check_dropin_light as check-light runs it.
 
 `--reach` runs legs it does not hold through the witness and reports
 which processes opened the device: a survey, never a verdict.
@@ -7595,10 +7598,11 @@ classes require, and both coverage verdicts passed. So check_gpu.py's
 patterns read the merged compare_run.py's lines.
 
 **The suite,** read from its log (int-check-fda3b40.log): 16:22:07 to
-19:48:06 on 2026-11-18, 3 h 26 min on a shared host, P2's suite beside
-it until 17:35; clean, build and check each rc 0; 25 legs; 1,504 lines
-beginning `  ok `; 17 leg RESULT lines, all PASS; no line beginning
-FAIL. Every leg has `4a8fe99`'s ok count (entry 57), check_compare_run
+19:48:06 on 2026-11-18, 3 h 26 min on a shared host, P2's check_wave
+runs and mutants beside it under B0171 until 17:35; clean, build and
+check each rc 0; 25 legs; 1,504 lines beginning `  ok `; 17 leg RESULT
+lines, all PASS; no line beginning FAIL. Every leg has `4a8fe99`'s ok
+count (entry 57), check_compare_run
 108; the build's 5 compiler warnings, as there; entry 45's six digests
 present. check-gpu is in no tier, so 25 legs equal to `4a8fe99`'s is
 what P1's diff should give.
@@ -7693,9 +7697,13 @@ each member's attempts record and corrector schedule:
   falls back to today's rerun, naming the file that is not.
 - **Each particle line** names the files it replayed from, and gives its
   replay's counters and its closest approach at the samples. Its prefix
-  and its `held to the record: IDENTICAL|FAIL` are as before, and V3
-  measured at each look that P1's, check_ring_seams' and P2's readers
-  capture what they did.
+  and its `held to the record: IDENTICAL|FAIL` are as before. V3's first
+  look ran P1's patterns and check_ring_seams part 3's on the new
+  output, and they captured what they had. Its second ran those and
+  P2's check_wave.py patterns on three cases at both commits, with the
+  same result. Its third checked by reading: the driver's printed text
+  had changed only in the limit's line, which holds neither IDENTICAL
+  nor FAIL, and check_wave.py:361-364 were unchanged.
 - **The limit,** printed once beside the plan under `--producer-files`,
   and on no other path, as the driver's `PRODUCER_LIMIT` states it:
 
@@ -7712,22 +7720,30 @@ each member's attempts record and corrector schedule:
 
 MEASURED by P3, and the round's finding against ROUND5.md's P3. Without
 a rerun, a replay takes the producer's decisions as given, each
-attempt's dt and outcome and its passes, and holds each attempt's
-arithmetic: every sample's head fields and exact-time pair, the
-particle, every massive body and the trailer's counters. Take a
-producer whose member 4 took 5 passes on its first attempt where this
+attempt's dt and outcome and its passes, and holds the arithmetic that
+reaches its samples and trailer: every sample's head fields and
+exact-time pair, the particle, every massive body and the trailer's
+counters. Only sample lines and the trailer are compared, and a rejected
+attempt after an accepted step moves no state bit (entry 49): its dt
+shows only as the dt_next of a sample line printed just before it. Take
+a producer whose member 4 took 5 passes on its first attempt where this
 tree takes 7, its record that schedule's replay, so that 2 of its 3
 sample lines are not this tree's. With that member NOT RERUN, the driver
-holds both its particles IDENTICAL and says PASS; the same member FAILs
-once it is rerun. So the decisions are held only where the driver
-reruns a member: one member a stratum, and every member with a rejected
-step.
+holds it, both its particles IDENTICAL. GATE 1b's run ends rc 1, since
+member 2, rerun, FAILs (check_compare_run.py:836); where nothing else
+differs, the run says RESULT: PASS, as V3 measured on a three-wave ring
+of make_ring.py's, wave 0 at 2 passes where this tree takes 4. The same
+member FAILs once it is rerun. So the decisions are held only where the
+driver reruns a member: one member a stratum, and every member with a
+rejected step.
 - **Pass counts barely move bits.** At `2922fa1`, one pass more or fewer
   moved no bit at the samples in 7 of 7 tries at binary64, and two fewer
-  moved none at binary128 or binary256. The trailer catches them:
-  mean_pc_iterations, and on a first attempt max_pc_iterations too (V3;
-  P3 had first written "only the mean"). Since `0bee543` the gate derives
-  what each plant moves and prints it.
+  on an accepted first attempt moved none at binary128 or binary256.
+  Two fewer on member 0's rejected first attempt, planted since
+  `0bee543`, moved 8 tokens at binary256 (q2, below). The trailer
+  catches them: mean_pc_iterations, and on a first attempt
+  max_pc_iterations too (V3; P3 had first written "only the mean").
+  Since `0bee543` the gate derives what each plant moves and prints it.
 - **The 3-decimal mean.** COMPUTED by P3: one pass is not certain to show
   in a member of more than about 1,000 attempts. COMPUTED by V3, from
   GPU-E2's 36.2 steps an orbit and docs/RING.md's Pan figures: a ring
@@ -7772,9 +7788,9 @@ tree's suite printed it, at every format case 1 runs:
   attempt, which moves no line and moves mean_pc_iterations, 3.275
   against 3.300, and max_pc_iterations, 7 against 8. From the producer's
   files member 4 holds, NOT RERUN, both particles IDENTICAL, and member 2
-  FAILs on its rerun, its particles IDENTICAL. Replayed from this tree's
-  reruns instead, members 4 and 2 FAIL and all 4 of their particles FAIL.
-  So the same-particles gate cannot pass against itself.
+  FAILs on its rerun, its particles IDENTICAL (rc 1). Replayed from this
+  tree's reruns instead, members 4 and 2 FAIL and all 4 of their
+  particles FAIL. So the same-particles gate cannot pass against itself.
 - **And:** the waves in their primary's zonal field, 18 particles
   replayed with the line; half a pair, the schedule alone named missing
   and that member falling back; a `--member 4` record; a single problem
@@ -7885,9 +7901,9 @@ conflict. `git diff --stat 5b1cac6 4a8fe99`: the two tools, +1247 and
 -58; `git diff e3f6a39 4a8fe99` is empty.
 
 **The suite,** read from its log (int-check-4a8fe99.log): 09:41:33 to
-12:16:29 on 2026-11-18, 2 h 35 min on a shared host, with P2's suite,
-V1's host side and a cft-debris notice beside it; clean, build and check
-each rc 0; 25 legs; 1,504 lines beginning `  ok `; 17 leg RESULT lines,
+12:16:29 on 2026-11-18, 2 h 35 min on a shared host, with V1's host
+side and a cft-debris notice beside it; clean, build and check each
+rc 0; 25 legs; 1,504 lines beginning `  ok `; 17 leg RESULT lines,
 all PASS; no line beginning FAIL. Against P0's suite on `d7b5047`
 (r5-check-d7b5047.log), every leg has the same ok count but
 check_compare_run, 67 to 108; the build has the same 5 compiler
