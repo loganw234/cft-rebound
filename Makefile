@@ -630,7 +630,19 @@ $(B)/normalabs_images.h: tools/embed_programs.py $(NORMALABS_SRC) $(ASM)
 GATE_CACHE  := $(PYTHON) tools/gate_cache.py --cache-dir $(B)/.gate-cache \
                --env CFT_REBOUND_ARTIFACT --env-prefix CFT_REBOUND_
 PROBLEMS    := $(wildcard data/problems/*)
-PROGRAMS    := $(wildcard programs/out/*.cftp)
+# The program images the legs run, named from their sources. `programs`
+# assembles each programs/*.cfta into programs/out/<name>.cftp, but only
+# after make has read this file, so a wildcard over programs/out alone
+# was empty in a fresh clone, and the legs that list the images
+# ($(IN_PROGS)) keyed on none of them (measured in round 5's first
+# suite). Named from the sources, the list is the same whether
+# programs/out exists yet or not. Whatever programs/out already holds is
+# listed too, as that wildcard listed it: check_gravity holds every
+# gravity image it finds there, so an image whose source has gone is part
+# of its verdict. A source that `programs` writes for the first time (a
+# program new in tools/gen_programs.py) is listed from the next make on.
+PROGRAMS    := $(sort $(patsubst programs/%.cfta,programs/out/%.cftp,$(wildcard programs/*.cfta)) \
+                      $(wildcard programs/out/*.cftp))
 RECORDS     := $(wildcard results/raw/*.rec)
 
 IN_DROPIN   := --input $(B)/check_dropin$(EXE)
