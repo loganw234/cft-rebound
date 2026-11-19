@@ -66,8 +66,12 @@
 #   5. One system's records: a --member 3 run of the waves, and kepler run
 #      as a single problem (every body active): each PASS, IDENTICAL.
 #   (full only) Case 1 at binary128 and binary256, the binary128 one with
-#      --format-diff fp256; and 6, the FMA form on the program engine, held
-#      as recorded and again with --rerun-engine loop.
+#      --format-diff fp256.
+#   6. The FMA form on the program engine, held as recorded and again with
+#      --rerun-engine loop: 20 steps, and 4 in --quick, whose one run with
+#      --rerun-engine and no --producer-files it is (round 5: with case 6 in
+#      full only, --quick made no such run, and a driver printing the limit
+#      of a producer's files only there passed it).
 #   7. A producer's own attempts records and schedules (ROUND5.md, P3), at
 #      every format case 1 runs. The producer is ias15_cft, each member run
 #      alone with --attempts-out and --record-iters, under the names the
@@ -87,10 +91,11 @@
 #      back to today's rerun, naming both its files. The limit is held as
 #      lines, not substrings (two adjacent copies share a newline, and a
 #      substring count saw them as one: V3, 2026-11-18): one line, after the
-#      plan's, and no other line in any wording, in every run of this case
-#      that reads a producer's files, twelve at binary64; and no line of it
-#      in any wording where no files are read: case 1 at each format, case
-#      5's two records, and kepler here.
+#      plan's, and no other line in any wording, however indented, in every
+#      run of this case that reads a producer's files, twelve at binary64;
+#      and no line of it in any wording where no files are read: kepler
+#      here, whose files are given and never read, and every run without
+#      --producer-files (THE LIMIT'S ABSENCE, below).
 #      GATE 1, the same particles: each particle, picked alike in the two
 #      runs, replayed from the producer's files is IDENTICAL to the same
 #      particle replayed from a rerun's - every sample line and the
@@ -215,6 +220,16 @@
 #   q6. a schedule recorded under `active 3`: REFUSED, naming active and no
 #      other field;
 #   q7. an attempts record given as the schedule: REFUSED by its form.
+#
+# THE LIMIT'S ABSENCE, the last verdict: no run of the driver without
+# --producer-files - each case's and each control's, and the copies' -
+# prints a line of the limit of a producer's files, in any wording, however
+# indented, on stdout or stderr. One verdict over all of them, which counts
+# them and those with --plan, with --rerun-engine, at binary128 or binary256
+# and in the FMA form, and fails without one of each of those four (V3,
+# round 5: held on some runs only, the absence passed a driver that printed
+# the line under --plan, in case 4's records or on a --rerun-engine run; and
+# read from a line's start, it passed a copy indented by two spaces).
 #
 # Every case runs a fixed seed and fixed bits, so the verdict is the same
 # on every run (tools/gate_cache.py). None of its step counts is scaled by
@@ -524,22 +539,34 @@ def pf_particles(out):
     return res
 
 
+def limit_lines(text):
+    """Every line that carries the opening words of the limit of a
+    producer's files, wherever they stand in it: at its start, indented, or
+    after anything else. A test of a line's start passed a copy indented by
+    two spaces (V3, round 5)."""
+    return [l for l in text.splitlines() if LIMIT_OPENS in l]
+
+
 def limit_once(out):
     """The limit of the producer's files printed as one line, word for word,
-    after the plan's line, and as no other line. Lines are counted, not
-    substrings: two adjacent copies share a newline, and a count of
-    "\\n" + line + "\\n" saw them as one (V3, 2026-11-18)."""
+    after the plan's line, and as no other line, however indented. Lines are
+    counted, not substrings: two adjacent copies share a newline, and a
+    count of "\\n" + line + "\\n" saw them as one (V3, 2026-11-18)."""
     lines = out.splitlines()
     plan = next((i for i, l in enumerate(lines) if l.startswith(PF_PLAN[1:])), None)
     return lines.count(PRODUCER_LIMIT) == 1 and plan is not None and lines.index(PRODUCER_LIMIT) > plan and \
-        sum(1 for l in lines if l.startswith(LIMIT_OPENS)) == 1
+        len(limit_lines(out)) == 1
 
 
 def limit_absent(out):
-    """No line of the limit of a producer's files, in any wording: a run
-    without --producer-files reads no producer's files (V3, 2026-11-18: the
-    line printed on the default path too passed every case)."""
-    return not any(l.startswith(LIMIT_OPENS) for l in out.splitlines())
+    """No line of the limit of a producer's files, in any wording, however
+    indented: a run without --producer-files reads no producer's files (V3,
+    2026-11-18: the line printed on the default path too passed every case).
+    main() holds this over every run of the driver without --producer-files,
+    stdout and stderr, in one verdict at the end (V3, round 5: held on some
+    runs only, it passed a driver that printed the line under --plan, in
+    case 4's records, or on a --rerun-engine run)."""
+    return not limit_lines(out)
 
 
 def replays(keep):
@@ -1237,10 +1264,21 @@ def main():
             f.write(out)
         return path, out
 
+    # Every run of the driver without --producer-files, and the lines of the
+    # limit of a producer's files it printed, from its whole stdout and
+    # stderr: the last verdict holds that there are none, over all of them.
+    unread = []
+
     def drive(rec, fmt, arith="rebound", extra=(), problem=None, via=None):
         cmd = [py, via or driver, rec, "--problem", problem or waves, "--format", fmt, "--arith", arith,
                "--exe", cft, "--programs", progs, "--strata", "3", "--seed", "1"] + list(extra)
         rc, out, err = run(cmd)
+        if "--producer-files" not in extra:
+            unread.append({"what": " ".join([os.path.basename(rec)] + [str(x) for x in extra] +
+                                            (["--problem", os.path.basename(problem)] if problem else []) +
+                                            (["through", via] if via else [])),
+                           "extra": list(extra), "fmt": fmt, "arith": arith, "via": via,
+                           "lines": limit_lines(out) + limit_lines(err)})
         if err.strip():
             out += "\n[stderr] " + err.strip()[-600:]
         return rc, out
@@ -1535,20 +1573,26 @@ def main():
             "a single problem's record (kepler, every body active): PASS, IDENTICAL, and no test particles said; and, "
             "without --producer-files, no line of the limit of a producer's files (rc %d)" % rc)
 
-    if not args.quick:
-        print("check_compare_run: case 6 - the FMA form on the program engine, as recorded and on the loop engine")
-        recprog, textp = record("waves_fma_program.rec", "fp64", 20, 10, arith="fma", engine="program")
-        if recprog:
-            for extra, label in (([], "the program engine"), (["--rerun-engine", "loop"], "the loop engine")):
-                rc, out = drive(recprog, "fp64", "fma", extra)
-                lines = member_lines(out)
-                verdict(rc == 0 and "\nRESULT: PASS: " in out and lines and
-                        all(v[0] == "IDENTICAL" for v in lines.values()) and
-                        (not extra or "rerun: on the loop engine, where the record ran program" in out),
-                        "the FMA form's program-engine record, rerun on %s: PASS, %d members IDENTICAL"
-                        % (label, len(lines)))
-        else:
-            allok = False
+    # ---------------------------------------------------------------- case 6
+    # In every tier, 4 steps in --quick: its second run is the one --quick
+    # makes with --rerun-engine and no --producer-files, so that the last
+    # verdict, the limit's absence, holds such a run in every tier (round 5:
+    # in full only, a driver printing the line only there passed --quick).
+    steps6, sample6 = (4, 2) if args.quick else (20, 10)
+    print("check_compare_run: case 6 - the FMA form on the program engine, as recorded and on the loop engine, %d steps"
+          % steps6)
+    recprog, textp = record("waves_fma_program.rec", "fp64", steps6, sample6, arith="fma", engine="program")
+    if recprog:
+        for extra, label in (([], "the program engine"), (["--rerun-engine", "loop"], "the loop engine")):
+            rc, out = drive(recprog, "fp64", "fma", extra)
+            lines = member_lines(out)
+            verdict(rc == 0 and "\nRESULT: PASS: " in out and lines and
+                    all(v[0] == "IDENTICAL" for v in lines.values()) and
+                    (not extra or "rerun: on the loop engine, where the record ran program" in out),
+                    "the FMA form's program-engine record (%d steps), rerun on %s: PASS, %d members IDENTICAL"
+                    % (steps6, label, len(lines)))
+    else:
+        allok = False
 
     # ---------------------------------------------------------------- case 7
     case7(clean, [f for f, *_ in fmt_cases], waves, scratch, cft, progs, args.quick, record, drive, run, verdict,
@@ -1938,6 +1982,29 @@ def main():
                     "i. the driver's copy beside a stand-in tools/%s: P3's replay cannot be called (%s), RESULT: FAIL "
                     "and rc %d, though member 0 is IDENTICAL" % (present[0], why, rc))
     shutil.rmtree(os.path.dirname(p3), ignore_errors=True)
+
+    # ------------------------------------------ the limit, where none is read
+    # Every run of the driver above without --producer-files - each case's,
+    # each control's, and the copies' - must print no line of the limit of a
+    # producer's files, in any wording, however indented, on stdout or
+    # stderr. One verdict over all of them, which says how many and how many
+    # of each kind V3 named (round 5): held on some runs only, the absence
+    # passed a driver that printed the line under --plan, in case 4's records
+    # or on a --rerun-engine run; read from a line's start, it passed an
+    # indented copy.
+    printed = [u for u in unread if u["lines"]]
+    kinds = (("with --plan", lambda u: "--plan" in u["extra"]),
+             ("with --rerun-engine", lambda u: "--rerun-engine" in u["extra"]),
+             ("at binary128 or binary256", lambda u: u["fmt"] != "fp64"),
+             ("in the FMA form", lambda u: u["arith"] == "fma"),
+             ("through a copy of the driver", lambda u: u["via"] is not None))
+    counts = [(name, sum(1 for u in unread if is_kind(u))) for name, is_kind in kinds]
+    verdict(unread and not printed and all(n for name, n in counts[:4]),
+            "the limit of a producer's files, where none is read: none of the %d runs of the driver without "
+            "--producer-files printed a line of it, in any wording, however indented, on stdout or stderr (%s)%s"
+            % (len(unread), ", ".join("%d %s" % (n, name) for name, n in counts),
+               "; printed by %d: %s" % (len(printed), "; ".join("%s: %r" % (u["what"], u["lines"][0][:72])
+                                                                for u in printed[:6])) if printed else ""))
 
     print("RESULT: %s" % ("PASS" if allok else "FAIL"))
     return 0 if allok else 1
