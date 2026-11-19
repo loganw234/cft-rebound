@@ -68,18 +68,22 @@
 #        which build it is;
 #      - THE PLANTS, in an ensemble record of the program under test (P: the
 #        ring, 3 waves, 12 steps; A itself in --quick), on the host or on the
-#        GPU as the run is: one value a plant, every column kind the record
-#        carries - the schedule (t, dt_next, dt_last, E, t_hi, t_lo), a
-#        massive body's x to vz, a sampled particle's own x to vz, the step
-#        field and the five trailer counters - in members 0, 1 and 2, on the
-#        first sampled line and on the last. Each plant must FAIL its own
-#        member naming its line and column; FAIL that member's sampled
+#        GPU as the run is: one value a plant, the classes read from the
+#        record (record_classes()) - from its `# columns:` line the schedule
+#        (t, dt_next, dt_last, E, t_hi, t_lo), a massive body's x to vz, a
+#        sampled particle's own x to vz and the step field, from its trailer
+#        the counters - every class in every member, a sample-line class on
+#        the member's first sampled line and on its last, the columns dealt
+#        out so that each is planted at least once. Each plant must FAIL its
+#        own member naming its line and column; FAIL that member's sampled
 #        particles whose replay carries the column (the schedule, the
 #        counters, the member's massive bodies, the particle's own body, as
 #        compare_run's own particle lines name them) and leave the others
 #        IDENTICAL; and every member it is not in must stay IDENTICAL, its
 #        particles too. A record copy holds up to one plant a member, and
-#        three of them leave one member unplanted;
+#        each member is left out of one copy of its own. One closing verdict
+#        holds the coverage, from the plants actually made: a class, line
+#        or column missing fails by name;
 #      - E's plants: a column on two lines of the one-system record;
 #      - the attempts comparison: a member's attempts record with one dt
 #        changed must not be the port's;
@@ -443,6 +447,7 @@ class Cols:
         line = next(l for l in text.splitlines() if l.startswith("# columns:"))
         words = line.split(":", 1)[1].split()
         self.lead = 3 if words[0] == "system" else 1        # "system s" before "sample"; the word "sample"
+        self.step_named = "step" in words
         step = words.index("step")
         self.head = words[step + 1:words.index("then")]
         self.body = words[words.index("body") + 1:words.index(";")]
@@ -465,64 +470,91 @@ def flip(tok):
     return mant[:-1] + "%x" % (int(mant[-1], 16) ^ 1) + tok[len(mant):]
 
 
-def plants(text, clean, quick):
-    """The plants' list for an ensemble record of three members, from its
-    clean compare_run (which particles each member's replays are): each
-    (member, kind, column, body, line selector). Kinds: value (a sample
-    line's value), step (its step field), counter (its trailer)."""
+def record_classes(text):
+    """The plant classes a record carries, read from the record itself: from
+    its `# columns:` line the schedule (the fields after the step, and the
+    exact-time pair), a massive body's per-body columns, a sampled
+    particle's own per-body columns and the step field; from its trailer the
+    counter class, by its own keys. Returns (the sample-line classes, each
+    (name, columns); the counter class (name, columns); the members; the
+    active count)."""
+    cols = Cols(text)
+    rows = text.splitlines()
+    trails = [l for l in rows if re.match(r"^# system \d+ steps_done=", l)]
+    counters = [kv.split("=", 1)[0] for kv in trails[0].split()[3:] if "=" in kv] if trails else []
+    m = re.search(r"^# active (\d+)", text, re.M)
+    classes = [("schedule", list(cols.head) + list(cols.pair)), ("massive", list(cols.body)),
+               ("particle", list(cols.body))]
+    if cols.step_named:
+        classes.append(("step", ["step"]))
+    return classes, ("counter", counters), len(trails), int(m.group(1)) if m else 0
+
+
+def plants(text, clean):
+    """The plants, derived from the record (record_classes()) and its clean
+    compare_run (which particles each member's replays are): in every
+    member, each sample-line class on its first sampled line and on its
+    last, in turn, and the counter class, the columns of each class dealt
+    out across the members so that each is planted at least once. Then the
+    copies: one plant a member a copy, and each member left out of one copy
+    of its own, in turn. Each plant is (member, class, column, body, line:
+    0 the first sampled line, -1 the last, None the trailer)."""
+    classes, (_, counters), E, nact = record_classes(text)
     parts = particle_lines(clean)
+
     def pbody(w, why):
-        got = [p[1] for p in parts if p[0] == w and why in p[4]]
-        return got[0] if got else None
-    seeded = {w: pbody(w, "by the seed") for w in range(3)}
-    near = {w: pbody(w, "its least closest approach") for w in range(3)}
-    # one plant a column kind; the first line (sample 1) or the last, in turn
-    plan = [("value", "t", None, 0), ("value", "dt_next", None, -1), ("value", "dt_last", None, 0),
-            ("value", "E", None, -1), ("value", "t_hi", None, 0), ("value", "t_lo", None, -1),
-            ("value", "x", 1, -1), ("value", "y", 2, 0), ("value", "z", 3, -1),
-            ("value", "vx", 4, 0), ("value", "vy", 5, -1), ("value", "vz", 6, 0),
-            ("value", "x", "seeded", 0), ("value", "y", "seeded", -1), ("value", "z", "seeded", 0),
-            ("value", "vx", "seeded", -1), ("value", "vy", "near", 0), ("value", "vz", "near", -1),
-            ("step", "step", None, -1), ("counter", "steps_rejected", None, None),
-            ("counter", "iterations_max_exceeded", None, None), ("counter", "mean_pc_iterations", None, None),
-            ("counter", "max_pc_iterations", None, None), ("counter", "steps_done", None, None)]
-    # copies: six with a plant in each of members 0, 1 and 2; three with two,
-    # leaving member 2, 0 and then 1 unplanted
-    layout = [(0, 1, 2)] * 6 + [(0, 1), (1, 2), (0, 2)]
-    copies, k = [], 0
-    for members in layout:
-        copy = []
-        for w in members:
-            kind, col, body, at = plan[k]
-            k += 1
-            if body in ("seeded", "near"):
-                b = (seeded if body == "seeded" else near)[w]
-                kind, body = ("missing", body) if b is None else (kind, b)
-            copy.append((w, kind, col, body, at))
-        copies.append(copy)
-    return copies, parts
+        got = [q[1] for q in parts if q[0] == w and why in q[4]]
+        return got[0] if got else "missing"
+    per = {}
+    for w in range(E):
+        mine = []
+        for cls, columns in classes:
+            n = max(2, -(-len(columns) // E))          # each member's share, first and last lines in turn
+            for j in range(n):
+                k = w * n + j
+                at = 0 if j % 2 == 0 else -1
+                body = None
+                if cls == "massive":
+                    body = k % max(1, nact)            # a massive body: one the replays carry
+                elif cls == "particle":
+                    body = pbody(w, "by the seed" if at == 0 else "its least closest approach")
+                mine.append((w, cls, columns[k % len(columns)], body, at))
+        n = max(1, -(-len(counters) // E)) if counters else 0
+        for j in range(n):
+            mine.append((w, "counter", counters[(w * n + j) % len(counters)], None, None))
+        per[w] = mine
+    C = max([len(v) for v in per.values()] + [0]) + 1
+    left = {C - E + w: w for w in range(E)}            # copy -> the member it leaves out
+    queues = {w: list(per[w]) for w in per}
+    copies = []
+    for k in range(C):
+        copies.append([queues[w].pop(0) for w in range(E) if left.get(k) != w and queues[w]])
+    return copies
 
 
 def hold_plants(work, tag, text, clean, prob, cft):
     """THE PLANTS (part 5): copies of an ensemble record of three members,
     one value planted a member a copy, each held to what compare_run must
-    say of it. Returns nothing; every plant is its own verdict."""
-    copies, _ = plants(text, clean, None)
+    say of it; then one coverage verdict, from the plants actually made,
+    against the classes the record carries."""
+    copies = plants(text, clean)
     rows = text.splitlines()
     cols = Cols(text)
     sampled = {w: [i for i, l in enumerate(rows) if l.startswith("system %d sample " % w)][1:] for w in range(3)}
     trail = {w: next(i for i, l in enumerate(rows) if l.startswith("# system %d steps_done=" % w)) for w in range(3)}
     total = next(i for i, l in enumerate(rows) if l.startswith("# steps_done="))
+    done = []                                           # (member, class, column, line) of every plant made
+    copy_members = []                                   # the members each copy planted, as made
     for n, copy in enumerate(copies, 1):
         mut = list(rows)
         made = []
-        for w, kind, col, body, at in copy:
-            if kind == "missing":
+        for w, cls, col, body, at in copy:
+            if body == "missing":
                 # the clean compare_run named no such particle of member w
                 verdict(False, "%s plant %d.%d: member %d, %s of its %s particle: compare_run's clean run replayed no "
-                        "such particle to plant in" % (tag, n, w, w, col, body))
+                        "such particle to plant in" % (tag, n, w, w, col, "seeded" if at == 0 else "nearest"))
                 continue
-            if kind == "value":
+            if cls in ("schedule", "massive", "particle"):
                 i = sampled[w][at]
                 toks = mut[i].split()
                 t = cols.token(col, body)
@@ -538,8 +570,8 @@ def hold_plants(work, tag, text, clean, prob, cft):
                 # a replay carries the schedule, the member's massive bodies
                 # (as many as compare_run's line says) and its own body
                 carries = (lambda q, body=body: body is None or (q[2] is not None and (body < q[2] or body == q[1])))
-                desc = "%s on line %d (%s to %s)" % (label, i + 1, old, new)
-            elif kind == "step":
+                desc = "%s, %s on line %d (%s to %s)" % (cls, label, i + 1, old, new)
+            elif cls == "step":
                 i = sampled[w][at]
                 toks = mut[i].split()
                 t = cols.step_tok
@@ -549,13 +581,13 @@ def hold_plants(work, tag, text, clean, prob, cft):
                 mreg = (r"^member %d \(\S+\): FAIL: incomplete in the record: .*line %d is sample \d+ at step %s, where "
                         r"its place makes it sample \d+ at step %s" % (w, i + 1, new, old))
                 preg, carries = None, None
-                desc = "the step field on line %d (%s to %s)" % (i + 1, old, new)
+                desc = "step, the step field on line %d (%s to %s)" % (i + 1, old, new)
             else:
                 i = trail[w]
                 toks = mut[i].split()
                 t = next(j for j, x in enumerate(toks) if x.startswith(col + "="))
                 old = toks[t].split("=", 1)[1]
-                new = (old[:-1] + str((int(old[-1]) + 1) % 10)) if col == "mean_pc_iterations" else str(int(old) + 1)
+                new = (old[:-1] + str((int(old[-1]) + 1) % 10)) if "." in old else str(int(old) + 1)
                 toks[t] = "%s=%s" % (col, new)
                 mut[i] = " ".join(toks)
                 if col == "steps_rejected":             # the record's total with it, as a producer's would be
@@ -573,9 +605,11 @@ def hold_plants(work, tag, text, clean, prob, cft):
                     preg = r"held to the record: FAIL: trailer %s is %s in the record, and %s in the replay" % (
                         col, re.escape(new), re.escape(old))
                     carries = lambda q: True
-                desc = "the trailer's %s on line %d (%s to %s%s)" % (col, i + 1, old, new,
-                                                                    ", the total with it" if col == "steps_rejected" else "")
-            made.append((w, kind, desc, mreg, preg, carries))
+                desc = "counter, the trailer's %s on line %d (%s to %s%s)" % (
+                    col, i + 1, old, new, ", the total with it" if col == "steps_rejected" else "")
+            made.append((w, cls, desc, mreg, preg, carries))
+            done.append((w, cls, col, at))
+        copy_members.append({m[0] for m in made})
         path = os.path.join(work, "%s_plants_%d.rec" % (tag, n))
         write(path, "\n".join(mut) + "\n")
         rc, out = compare(path, prob, cft, 3)
@@ -586,7 +620,7 @@ def hold_plants(work, tag, text, clean, prob, cft):
         # a member a copy leaves alone: IDENTICAL, its two particles too
         still = all(said.get(u) == "IDENTICAL" and len([q for q in parts if q[0] == u]) == 2 and
                     all(q[3] == "IDENTICAL" for q in parts if q[0] == u) for u in quiet)
-        for w, kind, desc, mreg, preg, carries in made:
+        for w, cls, desc, mreg, preg, carries in made:
             mine = [q for q in parts if q[0] == w]
             named = re.search(mreg, out, re.M) is not None
             if preg is None:
@@ -609,6 +643,32 @@ def hold_plants(work, tag, text, clean, prob, cft):
                 for l in out.splitlines():
                     if l.startswith(("member %d " % w, "  member %d: particle" % w, "RESULT")):
                         print("      " + l[:300])
+    # THE COVERAGE, from the plants made, against the classes the record
+    # carries, read again from the record: every class in every member - a
+    # sample-line class on the member's first sampled line and on its last -
+    # and every column of every class at least once; each gap by name
+    classes, counter, E, _ = record_classes(text)
+    gaps = []
+    for w in range(E):
+        for cls, _ in classes:
+            for at, which in ((0, "first"), (-1, "last")):
+                if not any(d[0] == w and d[1] == cls and d[3] == at for d in done):
+                    gaps.append("class %s not planted in member %d on its %s sampled line" % (cls, w, which))
+        if counter[1] and not any(d[0] == w and d[1] == "counter" for d in done):
+            gaps.append("class counter not planted in member %d" % w)
+    for cls, columns in classes + [counter]:
+        for col in columns:
+            if not any(d[1] == cls and d[2] == col for d in done):
+                gaps.append("column %s of class %s not planted in any member" % (col, cls))
+    left = sorted({u for u in range(E) if any(u not in got for got in copy_members)})
+    if left != list(range(E)):
+        gaps.append("member(s) %s never left out of a copy" % ", ".join(str(u) for u in range(E) if u not in left))
+    verdict(E == 3 and not gaps, "%s plants' coverage, from the %d plants made in %d copies: the record carries members "
+            "0 to %d and the classes %s; each class planted in each member, a sample-line class on the member's first "
+            "and last sampled lines, every column at least once, and each member left out of a copy%s" % (
+                tag, len(done), len(copy_members), E - 1,
+                "; ".join("%s (%s)" % (c, " ".join(cl)) for c, cl in classes + [counter]),
+                "" if not gaps else ": NOT SO: " + "; ".join(gaps)))
 
 
 # ---- the gate ---------------------------------------------------------------------
