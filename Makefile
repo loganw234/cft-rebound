@@ -630,7 +630,19 @@ $(B)/normalabs_images.h: tools/embed_programs.py $(NORMALABS_SRC) $(ASM)
 GATE_CACHE  := $(PYTHON) tools/gate_cache.py --cache-dir $(B)/.gate-cache \
                --env CFT_REBOUND_ARTIFACT --env-prefix CFT_REBOUND_
 PROBLEMS    := $(wildcard data/problems/*)
-PROGRAMS    := $(wildcard programs/out/*.cftp)
+# The program images the legs run, named from their sources. `programs`
+# assembles each programs/*.cfta into programs/out/<name>.cftp, but only
+# after make has read this file, so a wildcard over programs/out alone
+# was empty in a fresh clone, and the legs that list the images
+# ($(IN_PROGS)) keyed on none of them (measured in round 5's first
+# suite). Named from the sources, the list is the same whether
+# programs/out exists yet or not. Whatever programs/out already holds is
+# listed too, as that wildcard listed it: check_gravity holds every
+# gravity image it finds there, so an image whose source has gone is part
+# of its verdict. A source that `programs` writes for the first time (a
+# program new in tools/gen_programs.py) is listed from the next make on.
+PROGRAMS    := $(sort $(patsubst programs/%.cfta,programs/out/%.cftp,$(wildcard programs/*.cfta)) \
+                      $(wildcard programs/out/*.cftp))
 RECORDS     := $(wildcard results/raw/*.rec)
 
 IN_DROPIN   := --input $(B)/check_dropin$(EXE)
@@ -714,7 +726,7 @@ check-pins:
 	@bash tools/check_pins.sh
 
 check: check-pins all programs $(ARCHIVE_GATES)
-	$(GATE_CACHE) --leg constants --mode full --input tools/gen_constants.py -- $(PYTHON) tools/gen_constants.py --no-write
+	$(GATE_CACHE) --leg constants --mode full --input tools/gen_constants.py --input third_party/rebound/src/integrator_ias15.c -- $(PYTHON) tools/gen_constants.py --no-write
 	$(GATE_CACHE) --leg check_dropin --mode full $(IN_DROPIN) -- $(B)/check_dropin$(EXE)
 	$(GATE_CACHE) --leg check_dropin_wide --mode full $(IN_DROPIN) -- $(B)/check_dropin$(EXE) --wide
 	$(GATE_CACHE) --leg check_equivalence --mode full --input tools/check_equivalence.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_equivalence.py --build $(B)
@@ -725,12 +737,12 @@ check: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_gravity --mode full $(IN_GRAVITY) $(IN_DROPIN) -- $(PYTHON) tools/check_gravity.py --build $(B) --library
 	$(GATE_CACHE) --leg check_zonal --mode full $(IN_ZONAL) -- $(PYTHON) tools/check_zonal.py --build $(B)
 	$(GATE_CACHE) --leg check_scalar --mode full $(IN_SCALAR) -- $(PYTHON) tools/check_scalar.py --build $(B) --library
-	$(GATE_CACHE) --leg check_records --mode full --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B)
-	$(GATE_CACHE) --leg check_ensemble --mode full --input tools/check_ensemble.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_ensemble.py --build $(B)
+	$(GATE_CACHE) --leg check_records --mode full --input tools/check_records.py --input tools/check_equivalence.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B)
+	$(GATE_CACHE) --leg check_ensemble --mode full --input tools/check_ensemble.py --input tools/check_equivalence.py --input tools/make_ensemble.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) -- $(PYTHON) tools/check_ensemble.py --build $(B)
 	$(GATE_CACHE) --leg check_ring --mode full $(IN_RING) -- $(PYTHON) tools/check_ring.py --build $(B)
 	$(GATE_CACHE) --leg check_compare_run --mode full $(IN_COMPARE) -- $(PYTHON) tools/check_compare_run.py --build $(B)
 	$(GATE_CACHE) --leg check_archive --mode full --input tools/check_archive.py $(IN_ARCHIVE) -- $(PYTHON) tools/check_archive.py --build $(B)
-	$(GATE_CACHE) --leg check_bodycount --mode full --input tools/check_bodycount.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_bodycount.py --build $(B)
+	$(GATE_CACHE) --leg check_bodycount --mode full --input tools/check_bodycount.py --input tools/check_equivalence.py --input tools/make_nbody.py --input src/ias15_limits.h $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_bodycount.py --build $(B)
 	$(GATE_CACHE) --leg gate_real_fp64 --mode full $(IN_REAL) -- $(B)/gate_real$(EXE) --fp64
 	$(GATE_CACHE) --leg gate_real_fp128 --mode full $(IN_REAL) -- $(B)/gate_real$(EXE) --fp128
 	$(GATE_CACHE) --leg gate_real_fp256 --mode full $(IN_REAL) -- $(B)/gate_real$(EXE) --fp256
@@ -749,7 +761,7 @@ gate-cache-report:
 	@$(PYTHON) tools/gate_cache.py --report --cache-dir $(B)/.gate-cache
 
 check-quick: check-pins all programs $(ARCHIVE_GATES)
-	$(GATE_CACHE) --leg constants --mode quick --input tools/gen_constants.py -- $(PYTHON) tools/gen_constants.py --no-write
+	$(GATE_CACHE) --leg constants --mode quick --input tools/gen_constants.py --input third_party/rebound/src/integrator_ias15.c -- $(PYTHON) tools/gen_constants.py --no-write
 	$(GATE_CACHE) --leg check_dropin --mode quick $(IN_DROPIN) -- $(B)/check_dropin$(EXE)
 	$(GATE_CACHE) --leg check_dropin_wide --mode quick $(IN_DROPIN) -- $(B)/check_dropin$(EXE) --wide
 	$(GATE_CACHE) --leg check_equivalence --mode quick --input tools/check_equivalence.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_equivalence.py --build $(B) --quick
@@ -760,12 +772,12 @@ check-quick: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_gravity --mode quick $(IN_GRAVITY) $(IN_DROPIN) -- $(PYTHON) tools/check_gravity.py --build $(B) --quick --library
 	$(GATE_CACHE) --leg check_zonal --mode quick $(IN_ZONAL) -- $(PYTHON) tools/check_zonal.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_scalar --mode quick $(IN_SCALAR) -- $(PYTHON) tools/check_scalar.py --build $(B) --quick --library
-	$(GATE_CACHE) --leg check_records --mode quick --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B) --quick
-	$(GATE_CACHE) --leg check_ensemble --mode quick --input tools/check_ensemble.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_ensemble.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_records --mode quick --input tools/check_records.py --input tools/check_equivalence.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_ensemble --mode quick --input tools/check_ensemble.py --input tools/check_equivalence.py --input tools/make_ensemble.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) -- $(PYTHON) tools/check_ensemble.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_ring --mode quick $(IN_RING) -- $(PYTHON) tools/check_ring.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_compare_run --mode quick $(IN_COMPARE) -- $(PYTHON) tools/check_compare_run.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_archive --mode quick --input tools/check_archive.py $(IN_ARCHIVE) -- $(PYTHON) tools/check_archive.py --build $(B)
-	$(GATE_CACHE) --leg check_bodycount --mode quick --input tools/check_bodycount.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_bodycount.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_bodycount --mode quick --input tools/check_bodycount.py --input tools/check_equivalence.py --input tools/make_nbody.py --input src/ias15_limits.h $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_bodycount.py --build $(B) --quick
 	$(GATE_CACHE) --leg gate_real_fp64 --mode quick $(IN_REAL) -- $(B)/gate_real$(EXE) --fp64
 	$(GATE_CACHE) --leg gate_real_fp128 --mode quick $(IN_REAL) -- $(B)/gate_real$(EXE) --fp128
 	$(GATE_CACHE) --leg gate_real_fp256 --mode quick $(IN_REAL) -- $(B)/gate_real$(EXE) --fp256
@@ -787,7 +799,7 @@ check-quick: check-pins all programs $(ARCHIVE_GATES)
 # neither would ever skip.
 .PHONY: check-light
 check-light: check-pins all programs $(ARCHIVE_GATES)
-	$(GATE_CACHE) --leg constants --mode quick --input tools/gen_constants.py -- $(PYTHON) tools/gen_constants.py --no-write
+	$(GATE_CACHE) --leg constants --mode quick --input tools/gen_constants.py --input third_party/rebound/src/integrator_ias15.c -- $(PYTHON) tools/gen_constants.py --no-write
 	$(GATE_CACHE) --leg check_dropin_light --mode quick $(IN_DROPIN) -- $(B)/check_dropin$(EXE) --light
 	$(GATE_CACHE) --leg check_dropin_wide_light --mode quick $(IN_DROPIN) -- $(B)/check_dropin$(EXE) --wide --light
 	$(GATE_CACHE) --leg check_equivalence --mode quick --input tools/check_equivalence.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_equivalence.py --build $(B) --quick
@@ -798,12 +810,12 @@ check-light: check-pins all programs $(ARCHIVE_GATES)
 	$(GATE_CACHE) --leg check_gravity --mode quick $(IN_GRAVITY) $(IN_DROPIN) -- $(PYTHON) tools/check_gravity.py --build $(B) --quick --library
 	$(GATE_CACHE) --leg check_zonal --mode quick $(IN_ZONAL) -- $(PYTHON) tools/check_zonal.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_scalar --mode quick $(IN_SCALAR) -- $(PYTHON) tools/check_scalar.py --build $(B) --quick --library
-	$(GATE_CACHE) --leg check_records --mode quick --input tools/check_records.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B) --quick
-	$(GATE_CACHE) --leg check_ensemble --mode quick --input tools/check_ensemble.py $(IN_PROGRAM) $(IN_PROB) -- $(PYTHON) tools/check_ensemble.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_records --mode quick --input tools/check_records.py --input tools/check_equivalence.py $(IN_PROGRAM) $(IN_PROB) $(IN_RECS) -- $(PYTHON) tools/check_records.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_ensemble --mode quick --input tools/check_ensemble.py --input tools/check_equivalence.py --input tools/make_ensemble.py $(IN_PROGRAM) $(IN_PROB) $(IN_PROGS) -- $(PYTHON) tools/check_ensemble.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_ring --mode quick $(IN_RING) -- $(PYTHON) tools/check_ring.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_compare_run --mode quick $(IN_COMPARE) -- $(PYTHON) tools/check_compare_run.py --build $(B) --quick
 	$(GATE_CACHE) --leg check_archive --mode quick --input tools/check_archive.py $(IN_ARCHIVE) -- $(PYTHON) tools/check_archive.py --build $(B)
-	$(GATE_CACHE) --leg check_bodycount --mode quick --input tools/check_bodycount.py $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_bodycount.py --build $(B) --quick
+	$(GATE_CACHE) --leg check_bodycount --mode quick --input tools/check_bodycount.py --input tools/check_equivalence.py --input tools/make_nbody.py --input src/ias15_limits.h $(IN_PROGRAM) $(IN_REF) $(IN_PROB) -- $(PYTHON) tools/check_bodycount.py --build $(B) --quick
 	$(GATE_CACHE) --leg gate_real_fp64 --mode quick $(IN_REAL) -- $(B)/gate_real$(EXE) --fp64
 	$(GATE_CACHE) --leg gate_real_fp128 --mode quick $(IN_REAL) -- $(B)/gate_real$(EXE) --fp128
 	$(GATE_CACHE) --leg gate_real_fp256 --mode quick $(IN_REAL) -- $(B)/gate_real$(EXE) --fp256
