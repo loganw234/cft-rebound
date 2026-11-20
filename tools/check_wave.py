@@ -81,8 +81,11 @@
 #        compare_run's own particle lines name them) and leave the others
 #        IDENTICAL; and every member it is not in must stay IDENTICAL, its
 #        particles too. A record copy holds up to one plant a member, and
-#        each member is left out of one copy of its own; one copy more, last,
-#        plants the last massive body in every member. Each copy must hold
+#        each member is left out of one copy of its own; one copy more plants
+#        the last massive body in every member, and two more sample 0 in
+#        every member, a schedule column and then the step (compare_run's
+#        hold_initial() holds sample 0's bodies against the problem file, and
+#        a plant there refuses the whole run). Each copy must hold
 #        exactly its planned values, measured against the clean record value
 #        by value (measured_plants()) - by member, column, body and the
 #        sampled line the plan names, found apart from the planting - or it
@@ -94,7 +97,8 @@
 #        the particle class only on particles the clean compare_run replays,
 #        each on its own body, every massive body of the `# active` count
 #        and the `# body` lines at least once and the last in every member,
-#        every column at least once, and each member left out of a copy that
+#        sample 0 in every member (a schedule column and its step), every
+#        column at least once, and each member left out of a copy that
 #        planted another and held it IDENTICAL with its particles; a gap
 #        fails by name;
 #      - E's plants: a column on two lines of the one-system record;
@@ -513,9 +517,13 @@ def plants(text, clean):
     of its own, in turn. Then one copy more, after those and leaving them as
     they were: the last massive body in every member, its columns dealt
     from the last back and its lines first, last, first, so that a loop over
-    the massive bodies that stops one short is held too. Each plant is
-    (member, class, column, body, line: 0 the first sampled line, -1 the
-    last, None the trailer)."""
+    the massive bodies that stops one short is held too. Then two more, the
+    sample loops' first line: sample 0 in every member, a schedule column
+    (the line's first, the last before the bodies, the pair's last) and
+    then its step, so that a loop over the sample lines that starts one late
+    is held too. Each plant is (member, class, column, body, line: 0 the
+    first sampled line, -1 the last, "initial" sample 0, None the
+    trailer)."""
     classes, (_, counters), E, nact = record_classes(text)
     parts = particle_lines(clean)
 
@@ -552,6 +560,17 @@ def plants(text, clean):
     if nact and massive:
         copies.append([(w, "massive", massive[(len(massive) - 1 - w) % len(massive)], nact - 1,
                         0 if w % 2 == 0 else -1) for w in range(E)])
+    # sample 0, in every member: the sample loops' first line, which the
+    # plants above never touch. compare_run's hold_initial() holds its bodies
+    # against the problem file (a plant there refuses the whole run) and
+    # scan() its step's place; its schedule columns, which the member's and
+    # the particle's loops both compare, nothing else holds
+    schedule = dict(classes).get("schedule", [])
+    if schedule:
+        pick = [0, len(schedule) // 2, len(schedule) - 1]
+        copies.append([(w, "schedule", schedule[pick[w % 3]], None, "initial") for w in range(E)])
+    if "step" in dict(classes):
+        copies.append([(w, "step", "step", None, "initial") for w in range(E)])
     return copies
 
 
@@ -644,16 +663,23 @@ def hold_plants(work, tag, text, clean, prob, cft):
     rows = text.splitlines()
     cols = Cols(text)
     sampled = {w: [i for i, l in enumerate(rows) if l.startswith("system %d sample " % w)][1:] for w in range(3)}
+    initial = {w: next((i for i, l in enumerate(rows) if l.startswith("system %d sample 0 " % w)), None) for w in range(3)}
     trail = {w: next(i for i, l in enumerate(rows) if l.startswith("# system %d steps_done=" % w)) for w in range(3)}
     total = next(i for i, l in enumerate(rows) if l.startswith("# steps_done="))
     # each member's first and last sampled lines, by their sample indices
-    # (past the initial sample 0), read here apart from `sampled`: the line a
-    # plan names is held to these, not to the line the planting chose
+    # (past the initial sample 0), and its sample 0, read here apart from
+    # `sampled` and `initial`: the line a plan names is held to these, not
+    # to the line the planting chose
     own = own_columns(text)
     ends = {}
     for w, ks in own["samples"].items():
+        zero = 0 if 0 in ks else None
         ks = sorted(k for k in ks if k >= 1)
-        ends[w] = (ks[0], ks[-1]) if ks else (None, None)
+        ends[w] = (ks[0] if ks else None, ks[-1] if ks else None, zero)
+
+    def line_of(w, at):
+        """The sample index the plan's line names: first, last or sample 0."""
+        return ends.get(w, (None, None, None))[2 if at == "initial" else 0 if at == 0 else 1]
     measured = []                                       # (copy, member, where, column, body), measured
     left_out = set()                                    # members held IDENTICAL beside another member's plant
     for n, copy in enumerate(copies, 1):
@@ -665,8 +691,12 @@ def hold_plants(work, tag, text, clean, prob, cft):
                 verdict(False, "%s plant %d.%d: member %d, %s of its %s particle: compare_run's clean run replayed no "
                         "such particle to plant in" % (tag, n, w, w, col, "seeded" if at == 0 else "nearest"))
                 continue
+            if at == "initial" and initial.get(w) is None:
+                verdict(False, "%s plant %d.%d: member %d, %s on sample 0: the record has no sample 0 line of member %d "
+                        "to plant in" % (tag, n, w, w, col, w))
+                continue
             if cls in ("schedule", "massive", "particle"):
-                i = sampled[w][at]
+                i = initial[w] if at == "initial" else sampled[w][at]
                 toks = mut[i].split()
                 t = cols.token(col, body)
                 old, new = toks[t], flip(toks[t])
@@ -682,9 +712,9 @@ def hold_plants(work, tag, text, clean, prob, cft):
                 # (as many as compare_run's line says) and its own body
                 carries = (lambda q, body=body: body is None or (q[2] is not None and (body < q[2] or body == q[1])))
                 desc = "%s, %s on line %d (%s to %s)" % (cls, label, i + 1, old, new)
-                planned.append((w, ends.get(w, (None, None))[0 if at == 0 else 1], col, body))
+                planned.append((w, line_of(w, at), col, body))
             elif cls == "step":
-                i = sampled[w][at]
+                i = initial[w] if at == "initial" else sampled[w][at]
                 toks = mut[i].split()
                 t = cols.step_tok
                 old, new = toks[t], str(int(toks[t]) + 1)
@@ -694,7 +724,7 @@ def hold_plants(work, tag, text, clean, prob, cft):
                         r"its place makes it sample \d+ at step %s" % (w, i + 1, new, old))
                 preg, carries = None, None
                 desc = "step, the step field on line %d (%s to %s)" % (i + 1, old, new)
-                planned.append((w, ends.get(w, (None, None))[0 if at == 0 else 1], "step", None))
+                planned.append((w, line_of(w, at), "step", None))
             else:
                 i = trail[w]
                 toks = mut[i].split()
@@ -792,10 +822,11 @@ def coverage(tag, text, clean, measured, left_out):
     and on its last, found here and required to differ; the particle class
     only on a particle the clean compare_run replays, and each such particle
     planted on its own body - every massive body at least once and the last
-    in every member, every column at least once, and each member left out of
-    a copy that planted another member, held IDENTICAL with its particles
-    there. record_classes(), which the plan is dealt from, must agree. Each
-    gap by name."""
+    in every member, sample 0 in every member (a schedule column and its
+    step), every column at least once, and each member left out of a copy
+    that planted another member, held IDENTICAL with its particles there.
+    record_classes(), which the plan is dealt from, must agree. Each gap by
+    name."""
     own = own_columns(text)
     members = sorted(own["samples"])
     nact = own["active"]
@@ -905,6 +936,22 @@ def coverage(tag, text, clean, measured, left_out):
             gaps.append("the last massive body, %s, not planted in member %d" % (named(massive[-1], w), w))
         elif got:
             lastm[w] = got[0]
+    # sample 0, the sample loops' first line, in every member: a schedule
+    # column, which only those loops compare (compare_run's hold_initial()
+    # holds the line's bodies against the problem file), and its step, whose
+    # place only compare_run's scan() holds; a loop over the sample lines
+    # that starts one late is held only by a plant on sample 0
+    zero = {}                                           # member -> its sample-0 values planted
+    for w in members:
+        if 0 not in own["samples"][w]:
+            gaps.append("member %d has no sample 0 to plant" % w)
+            continue
+        got = [h for h in have if h[0] == w and h[2] == 0 and h[1] in ("schedule", "step")]
+        if not any(h[1] == "schedule" for h in got):
+            gaps.append("sample 0 of member %d: no schedule column planted on it" % w)
+        if own["step"] and not any(h[1] == "step" for h in got):
+            gaps.append("sample 0 of member %d: its step not planted" % w)
+        zero[w] = [h[3] for h in got]
     for w in members:
         if w not in left_out:
             gaps.append("member %d never left out of a copy that planted another member and held it IDENTICAL with "
@@ -914,8 +961,9 @@ def coverage(tag, text, clean, measured, left_out):
             "the classes %s; each class planted in each member, a sample-line class on the member's first and last "
             "sampled lines (%s), the particle class on the particles compare_run replays, each on its own body "
             "(%s), every massive body of the active count and the body lines at least once (%s), the last in every "
-            "member (%s), every column at least once, record_classes() agreeing, and each member left out of a copy "
-            "that planted another, held IDENTICAL with its particles (%s)%s" % (
+            "member (%s), sample 0 in every member, a schedule column and its step (%s), every column at least once, "
+            "record_classes() agreeing, and each member left out of a copy that planted another, held IDENTICAL with "
+            "its particles (%s)%s" % (
                 tag, len(measured), ", ".join(map(str, members)),
                 "; ".join("%s (%s)" % (c, " ".join(cl)) for c, cl in want + [("counter", counters)]),
                 ", ".join("member %d: samples %d and %d" % ((w,) + lines[w]) for w in sorted(lines)),
@@ -924,6 +972,7 @@ def coverage(tag, text, clean, measured, left_out):
                 " ".join(map(str, sorted({h[4] for h in have if h[1] == "massive"}))) or "none",
                 ", ".join("member %d: %s of body %s on sample %d" % (w, lastm[w][3], named(lastm[w][4], w), lastm[w][2])
                           for w in sorted(lastm)) or "none",
+                ", ".join("member %d: %s" % (w, " and ".join(zero[w]) or "nothing") for w in sorted(zero)) or "none",
                 ", ".join(map(str, sorted(left_out))) or "none",
                 "" if not gaps else ": NOT SO: " + "; ".join(gaps)))
 
