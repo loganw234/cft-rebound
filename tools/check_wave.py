@@ -81,19 +81,22 @@
 #        compare_run's own particle lines name them) and leave the others
 #        IDENTICAL; and every member it is not in must stay IDENTICAL, its
 #        particles too. A record copy holds up to one plant a member, and
-#        each member is left out of one copy of its own. Each copy must
-#        hold exactly its planned values, measured against the clean record
-#        value by value (measured_plants()) - by member, column, body and
-#        the sampled line the plan names, found apart from the planting - or
-#        it is refused by name. One closing verdict (coverage()) holds the
+#        each member is left out of one copy of its own; one copy more, last,
+#        plants the last massive body in every member. Each copy must hold
+#        exactly its planned values, measured against the clean record value
+#        by value (measured_plants()) - by member, column, body and the
+#        sampled line the plan names, found apart from the planting - or it
+#        is refused by name. One closing verdict (coverage()) holds the
 #        coverage from those measured values, against classes it reads from
 #        the record itself (own_columns(), COUNTERS), with record_classes()
 #        required to agree: every class in every member, on the member's
 #        first and last sampled lines (found there, and required to differ),
 #        the particle class only on particles the clean compare_run replays,
-#        each on its own body, every column at least once, and each member
-#        left out of a copy that planted another and held it IDENTICAL with
-#        its particles; a gap fails by name;
+#        each on its own body, every massive body of the `# active` count
+#        and the `# body` lines at least once and the last in every member,
+#        every column at least once, and each member left out of a copy that
+#        planted another and held it IDENTICAL with its particles; a gap
+#        fails by name;
 #      - E's plants: a column on two lines of the one-system record;
 #      - the attempts comparison: a member's attempts record with one dt
 #        changed must not be the port's;
@@ -507,8 +510,12 @@ def plants(text, clean):
     last, in turn, and the counter class, the columns of each class dealt
     out across the members so that each is planted at least once. Then the
     copies: one plant a member a copy, and each member left out of one copy
-    of its own, in turn. Each plant is (member, class, column, body, line:
-    0 the first sampled line, -1 the last, None the trailer)."""
+    of its own, in turn. Then one copy more, after those and leaving them as
+    they were: the last massive body in every member, its columns dealt
+    from the last back and its lines first, last, first, so that a loop over
+    the massive bodies that stops one short is held too. Each plant is
+    (member, class, column, body, line: 0 the first sampled line, -1 the
+    last, None the trailer)."""
     classes, (_, counters), E, nact = record_classes(text)
     parts = particle_lines(clean)
 
@@ -539,6 +546,12 @@ def plants(text, clean):
     copies = []
     for k in range(C):
         copies.append([queues[w].pop(0) for w in range(E) if left.get(k) != w and queues[w]])
+    # the last massive body, in every member: the dealing above reaches
+    # bodies 0 to 5 of a ring's seven and never the last
+    massive = dict(classes).get("massive", [])
+    if nact and massive:
+        copies.append([(w, "massive", massive[(len(massive) - 1 - w) % len(massive)], nact - 1,
+                        0 if w % 2 == 0 else -1) for w in range(E)])
     return copies
 
 
@@ -546,8 +559,9 @@ def own_columns(text):
     """The coverage verdict's own reading of a record, apart from Cols and
     record_classes(): the `# columns:` words (the step field, the fields
     after it, the per-body fields, the exact-time pair), the `# active`
-    count, each member's sampled lines' indices and each member's trailer
-    keys."""
+    count and its bodies a system, each member's body lines (index, name
+    and m, from the `# body` lines under its `# system` line), each
+    member's sampled lines' indices and each member's trailer keys."""
     rows = text.splitlines()
     words = next((l for l in rows if l.startswith("# columns:")), "# columns:").split(":", 1)[1].split()
     def between(a, b):
@@ -556,15 +570,21 @@ def own_columns(text):
     per = between("body", ";")
     pair = words[words.index("pair") + 1:] if "pair" in words else []
     act = re.search(r"^# active (\d+)", text, re.M)
-    samples, keys = {}, {}
+    of = re.search(r"^# active \d+ of (\d+) bodies", text, re.M)
+    samples, keys, bodies, cur = {}, {}, {}, None
     for l in rows:
         t = l.split()
         if t[:1] == ["system"] and len(t) > 4 and t[2] == "sample":
             samples.setdefault(int(t[1]), []).append(int(t[3]))
         elif t[:2] == ["#", "system"] and len(t) > 3 and t[3].startswith("steps_done="):
             keys[int(t[2])] = [kv.split("=", 1)[0] for kv in t[3:] if "=" in kv]
+        elif t[:2] == ["#", "system"] and len(t) > 2 and t[2].isdigit():
+            cur = int(t[2])                             # a member's header: its body lines follow
+        elif t[:2] == ["#", "body"] and len(t) > 5 and t[2].isdigit() and t[4] == "m=" and cur is not None:
+            bodies.setdefault(cur, []).append((int(t[2]), t[3], t[5]))
     return {"step": "step" in words, "scalars": scalars, "per": per, "pair": pair,
-            "active": int(act.group(1)) if act else None, "samples": samples, "keys": keys}
+            "active": int(act.group(1)) if act else None, "N": int(of.group(1)) if of else None,
+            "bodies": bodies, "samples": samples, "keys": keys}
 
 
 def measured_plants(clean, copy):
@@ -766,15 +786,16 @@ def coverage(tag, text, clean, measured, left_out):
     measurably hold (measured_plants(), each value as (copy, member, where,
     column, body)) and the members measurably left out, against classes
     read here apart from record_classes(): own_columns()' reading of the
-    `# columns:` words, of each member's trailer keys and of the `# active`
-    count, and COUNTERS. Every class in every member - a sample-line class
-    on the member's first sampled line and on its last, found here and
-    required to differ; the particle class only on a particle the clean
-    compare_run replays, and each such particle planted on its own body -
-    every column at least once, and each member left out of a copy that
-    planted another member, held IDENTICAL with its particles there.
-    record_classes(), which the plan is dealt from, must agree. Each gap by
-    name."""
+    `# columns:` words, of each member's trailer keys, of the `# active`
+    count and of each member's `# body` lines, and COUNTERS. Every class in
+    every member - a sample-line class on the member's first sampled line
+    and on its last, found here and required to differ; the particle class
+    only on a particle the clean compare_run replays, and each such particle
+    planted on its own body - every massive body at least once and the last
+    in every member, every column at least once, and each member left out of
+    a copy that planted another member, held IDENTICAL with its particles
+    there. record_classes(), which the plan is dealt from, must agree. Each
+    gap by name."""
     own = own_columns(text)
     members = sorted(own["samples"])
     nact = own["active"]
@@ -802,6 +823,33 @@ def coverage(tag, text, clean, measured, left_out):
         if sorted(own["keys"].get(w, [])) != sorted(counters):
             gaps.append("member %d's trailer keys are %s, where COUNTERS names %s (order aside)" % (
                 w, " ".join(own["keys"].get(w, [])) or "none", " ".join(counters)))
+    # the massive bodies, from the record's own lines: the `# active` count,
+    # and each member's `# body` lines, which must list its bodies a system
+    # in order, with m nonzero on exactly the bodies below the active count
+    massive = list(range(nact)) if nact else []
+    names = {}
+    if not massive:
+        gaps.append("no massive body: the record has no `# active` count")
+    for w in members:
+        bl = own["bodies"].get(w, [])
+        if own["N"] is None or [b[0] for b in bl] != list(range(own["N"])):
+            gaps.append("member %d's body lines are %d, not the %s bodies a system its `# active` line counts" % (
+                w, len(bl), own["N"]))
+            continue
+        try:
+            heavy = [b[0] for b in bl if float.fromhex(b[2]) != 0]
+        except ValueError:
+            heavy = None
+        if heavy != massive:
+            gaps.append("member %d's body lines give m to bodies %s, where the active count makes bodies %s massive" % (
+                w, " ".join(map(str, heavy)) if heavy is not None else "(an m that does not read)",
+                " ".join(map(str, massive)) or "none"))
+        names[w] = {b[0]: b[1] for b in bl}
+
+    def named(b, w=None):
+        """A body's index and its name from the body lines (member w's, or the first member's)."""
+        nm = names.get(w if w in names else min(names) if names else None, {}).get(b)
+        return "%d (%s)" % (b, nm) if nm else "%d" % b
 
     def kind(m):
         """A measured difference's class, read here: a per-body column is
@@ -844,6 +892,19 @@ def coverage(tag, text, clean, measured, left_out):
         for col in columns:
             if not any(h[1] == cls and h[3] == col for h in have):
                 gaps.append("column %s of class %s not planted in any member" % (col, cls))
+    # every massive body at least once, and the last in every member: a loop
+    # or slice over the massive bodies that stops one short is held only by
+    # a plant on the last one
+    for b in massive:
+        if not any(h[1] == "massive" and h[4] == b for h in have):
+            gaps.append("massive body %s not planted in any member" % named(b))
+    lastm = {}                                          # member -> where its last massive body is planted
+    for w in members:
+        got = [h for h in have if h[0] == w and h[1] == "massive" and massive and h[4] == massive[-1]]
+        if massive and not got:
+            gaps.append("the last massive body, %s, not planted in member %d" % (named(massive[-1], w), w))
+        elif got:
+            lastm[w] = got[0]
     for w in members:
         if w not in left_out:
             gaps.append("member %d never left out of a copy that planted another member and held it IDENTICAL with "
@@ -852,13 +913,17 @@ def coverage(tag, text, clean, measured, left_out):
             "%s plants' coverage, measured from the %d values the copies hold: the record carries members %s and "
             "the classes %s; each class planted in each member, a sample-line class on the member's first and last "
             "sampled lines (%s), the particle class on the particles compare_run replays, each on its own body "
-            "(%s), every column at least once, record_classes() agreeing, and each member left out of a copy that "
-            "planted another, held IDENTICAL with its particles (%s)%s" % (
+            "(%s), every massive body of the active count and the body lines at least once (%s), the last in every "
+            "member (%s), every column at least once, record_classes() agreeing, and each member left out of a copy "
+            "that planted another, held IDENTICAL with its particles (%s)%s" % (
                 tag, len(measured), ", ".join(map(str, members)),
                 "; ".join("%s (%s)" % (c, " ".join(cl)) for c, cl in want + [("counter", counters)]),
                 ", ".join("member %d: samples %d and %d" % ((w,) + lines[w]) for w in sorted(lines)),
                 ", ".join("member %d: bodies %s" % (w, " ".join(map(str, sorted(replayed[w]))))
                           for w in sorted(replayed)) or "none",
+                " ".join(map(str, sorted({h[4] for h in have if h[1] == "massive"}))) or "none",
+                ", ".join("member %d: %s of body %s on sample %d" % (w, lastm[w][3], named(lastm[w][4], w), lastm[w][2])
+                          for w in sorted(lastm)) or "none",
                 ", ".join(map(str, sorted(left_out))) or "none",
                 "" if not gaps else ": NOT SO: " + "; ".join(gaps)))
 
