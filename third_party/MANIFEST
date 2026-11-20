@@ -4,4 +4,4 @@
 # third_party/ is committed to this repository; the clones are
 # reproduced from this file.
 rebound   https://github.com/hannorein/rebound.git  bdfda4bda4c0a4b6b0c707afae5a86d3341cbc93
-cft-fp256 https://github.com/loganw234/cft-fp256.git eae74e3eddc67836d4b7c8922badd40e6e1bdb2f
+cft-fp256 https://github.com/loganw234/cft-fp256.git 96d99d84760e0e4381d7b15dad42a101c3ed1718

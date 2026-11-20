@@ -179,7 +179,7 @@ Nothing is vendored by hand.
 | upstream | commit | licence |
 |---|---|---|
 | REBOUND (hannorein/rebound) | bdfda4bd (5.1.1 + 6) | GPL-3.0-or-later |
-| cft-fp256 (loganw234/cft-fp256) | eae74e3 (libcft ABI 0.18; cft-fp256's main with G1B's HIP backend and G1C's gates, moved from 922c2ad on 2026-11-13 at Logan's word, docs/VALIDATION.md entry 53; from ca19fe3 to 922c2ad on 2026-10-30, entry 38), the commit third_party/MANIFEST pins; `make check-pins` refuses if this row and MANIFEST disagree | Apache-2.0 |
+| cft-fp256 (loganw234/cft-fp256) | 96d99d8 (libcft ABI 0.18; cft-fp256's main with GPU round 2's G2A to G2D and round 3's G3A, whose fixed tier hip:N runs only under CFT_HIP_TIER=fixed, moved from eae74e3 on 2026-11-20 at Logan's word, docs/VALIDATION.md entry 59; from 922c2ad to eae74e3 on 2026-11-13, entry 53; from ca19fe3 to 922c2ad on 2026-10-30, entry 38), the commit third_party/MANIFEST pins; `make check-pins` refuses if this row and MANIFEST disagree | Apache-2.0 |
 
 ## Layout
 
