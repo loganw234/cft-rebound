@@ -910,9 +910,9 @@ ROUND4.md's "After this round", in its order, with what the round added:
    every step and G1B refuses AUGADD, and the record's exact-time pair,
    which `compare_run` holds, comes from it. **Done** in round 5
    (entry 55): `make HIP=1 check-gpu`. The belief was measured false:
-   `vaugadd` is the API call `cft_augmented_add`, which runs on the host
-   at every step attempt, and every record the legs make on `hip:0` is
-   the software backend's (entries 54 and 55).
+   `vaugadd` is the API call `cft_augmented_add`, which at the pin runs
+   on the host at every step attempt, and every record the legs made on
+   `hip:0` was the software backend's (entries 54 and 55).
 3. **A divide and square root inside a kernel,** cft-fp256's work and the
    study's question 2 (decision 3), at binary64, binary128 and binary256,
    round to nearest, with the five flags and host `cft_div`'s and
@@ -996,8 +996,8 @@ what a GPU run is held to. Everything was measured at cft-fp256
   tier and check-gpu's second line.
 - **The driver takes a producer's own files** (entry 57), and prints
   what they do not hold.
-- **The gate cache keys on every file a leg runs, imports or reads**
-  (entry 58).
+- **The gate cache keys on every file a leg runs, imports or reads,**
+  PL's open notes aside (entry 58).
 
 **Round 5 is closed** when these records land. Entry 58 has every
 merge, GPU check and suite. The open notes stand in the merge messages

@@ -7694,8 +7694,9 @@ once as `__host__ __device__` functions over `double`:
 - **wave_gpu.inc:** one system a workgroup, one thread a body. Every
   phase ends in a barrier, thread 0 folds the energy, the reactions and
   the maxima serially, and no wave intrinsic is used (V2, READ). A sample
-  block is many short launches, so none meets the display driver's
-  watchdog (`7dec985`).
+  block is many short launches, so that none should meet the display
+  driver's watchdog; its reset at about two seconds is BELIEVED, never
+  met (`7dec985`).
 - **wave_main.cpp:** the port's problem file in, and this repository's
   record format out, naming its producer: `program=wave`, `engine=wave`,
   `backend=host` or `hip:<index>:<arch>`, and on a GPU a `# device` line.
@@ -7744,9 +7745,9 @@ check_wave's six parts, each asserted (READ, its head):
    under its `--run-key`, and on a GPU every record must also be the host
    twin's, line for line. Beside each go the steps, rejections, passes
    and cap hits, and for a ring the physics, asserted: each particle's
-   distance from Saturn within 1e-2 of what the field's absence would
-   move it, the angle swept within 1e-4 of n t, and the energy within
-   1e-13.
+   distance from Saturn moves by under 1e-2 of what the field's absence
+   would move it, the angle it sweeps is n t to 1e-4, relative, and the
+   energy holds to 1e-13 (check_wave.py's head; CIRC_BOUND).
 5. **The controls,** below.
 6. **The flags.** A problem made to raise each of INVALID, DIVBYZERO,
    OVERFLOW and UNDERFLOW stops the port and the program, rc 3, naming
@@ -8501,7 +8502,7 @@ four checks all held:
 the GPU check's software half and cft-fp256's M3S. Clean, build and
 check each rc 0; 25 legs; 1,505 lines beginning `  ok `; 17 leg RESULT
 lines, all PASS; no line beginning FAIL; 5 compiler warnings, as before.
-Every leg has `fda3b40`'s counts but check_compare_run, 108 to 109 (my
+Every leg has `fda3b40`'s counts but check_compare_run, 108 to 109 (D's
 count, and the lead's). With timings and temporary directories masked,
 the log differs from `fda3b40`'s in:
 - the commit line;
@@ -8570,7 +8571,12 @@ was f82c107b, the expected file's. It was committed as `7444157`.
   device line alone, and each of six wave controls found 2. A second
   cause hid behind the first: the script wanted the kernel's backend as
   `gpu`, and the kernel writes `hip:0:sm_120`. compare_run held the
-  kernel's record IDENTICAL, and the P2 x P3 part passed.
+  kernel's record IDENTICAL, and the P2 x P3 part passed. Before the
+  merge, the script had run only as a desktop dry run, the port twice
+  on the software backend with P2's host twin as the kernel: 22 ok, 0
+  FAIL (the lead's ledger, 2026-11-19 05:12; gpu/p1p2/dry2.log, headed
+  "DRY RUN on the host: nothing on a GPU"). This was its first run on a
+  GPU.
 
 **make check on `7444157` was stopped** at 01:21, in its sixth leg,
 check_door (int-check-7444157.log). Send-back 7 would change the merged
@@ -8600,10 +8606,10 @@ tree, so that run could not be the bar.
 - **The redo.** `git reset --keep 620c98b` on round5-int, `7444157` kept
   in the reflog and never pushed, and the merge redone on `3d8ab5b` with
   the same kit: the same three blocks, the same resolution and hand
-  edit, and the Makefile again f82c107b. P2's files are `3d8ab5b`'s and
-  every other path is `620c98b`'s. The merged tree differs from
-  `7444157`'s in tools/check_wave.py alone, +6 and -2. It was committed
-  as `61e45bc`.
+  edit, and the Makefile again f82c107b. P2's files are `3d8ab5b`'s, and
+  every other path but the Makefile is `620c98b`'s. The merged tree
+  differs from `7444157`'s in tools/check_wave.py alone, +6 and -2. It
+  was committed as `61e45bc`.
 
 ### The conflict, resolved by a script and checked against a Makefile built another way
 
@@ -8670,7 +8676,7 @@ fresh clone, 02:13:13 to 02:42:23):
 first 31 minutes. Clean, build and check each rc 0; 26 legs; 1,649
 lines beginning `  ok `; 18 leg RESULT lines, all PASS; no line
 beginning FAIL; 5 compiler warnings.
-- The 25 legs it shares with `620c98b` have that suite's counts (my
+- The 25 legs it shares with `620c98b` have that suite's counts (D's
   count, and the lead's).
 - check_wave, the 26th, after check_reversal, has 144 ok and RESULT:
   PASS. Its count rule holds on A at 5 lines of 390 and of 54.

@@ -346,7 +346,9 @@ source, built for the CPU.
            [--device host|gpu] [--wave PATH] [--twin PATH] [--corpus PATH]
 
 Every tier builds `wave-host` and runs check_wave on the twin;
-check-gpu's second line runs it on the kernel.
+check-gpu's second line runs it on the kernel, as `--device gpu --quick
+--expect '$(GPU_EXPECT)'` (Makefile:990 on main). The usage line above,
+the tool's own, does not show `--expect`.
 
 **What a kernel's record carries.** The port's record format, so the
 driver holds it unchanged:

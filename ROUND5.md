@@ -432,8 +432,8 @@ docs/VALIDATION.md, by entry.
   self-tests' first lines, which name the backend.
 - check_corrector goes through the registered integrator only in its
   `--library` step.
-- `check_dropin --light` took 62 and 66 min alone on the RTX 5060 Ti,
-  inside the plan's estimate of 1 to 3.5 hours.
+- `check_dropin --light` took 62 min alone on the RTX 5060 Ti, and 66
+  min there, inside the plan's estimate of 1 to 3.5 hours.
 - Of the legs outside P1's list, gate_real's self-contained mode refuses
   `hip:0` on its identity check, check_checkpoint passes there as it
   is, and check_seams fails only on the forced routes the device does

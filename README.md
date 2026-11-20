@@ -852,9 +852,12 @@ floor, dt files, a system of more bodies than it holds, and a non-finite
 input value.
 
 `tools/check_wave.py` is a leg in all three tiers, on the host twin, and
-every tier builds `wave-host` for it. It holds gate 4's arithmetic, the
-records, the attempts files, the plants and the controls
-(docs/RING.md; docs/VALIDATION.md entry 56). Its scratch is
+every tier builds `wave-host` for it. check-gpu runs it on the kernel as
+`--device gpu --quick --expect '$(GPU_EXPECT)'` (Makefile:990); the
+usage line above, the tool's own, does not show `--expect`, the text
+the GPU's device line must contain, or nothing runs. It holds gate 4's
+arithmetic, the records, the attempts files, the plants and the
+controls (docs/RING.md; docs/VALIDATION.md entry 56). Its scratch is
 `<build>/check_wave/<pid>`, removed after a pass, unless `--keep`. It is
 never `<build>/wave/`, where `make HIP=1 wave` puts the kernel.
 
