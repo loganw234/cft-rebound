@@ -124,7 +124,9 @@
 # (opened and described, nothing launched, no problem read); --expect, as
 # check_gpu.py takes it (empty: any), must be in that line, or nothing runs.
 #
-# Runs work in <build>/wave/<pid> unless --keep; a passing run removes it.
+# Runs work in <build>/check_wave/<pid> unless --keep (as check_gpu.py
+# works in <build>/check_gpu/<pid>); a passing run removes it. Never
+# <build>/wave/: `make HIP=1 wave` builds the kernel there, as a file.
 
 import argparse
 import math
@@ -1082,7 +1084,9 @@ def main():
     host_corpus = os.path.join(B, "wave_corpus" + EXE)      # on a GPU, the corpus is held to this build's (g++'s)
     cft = os.path.join(B, "ias15_cft" + EXE)
     dev = ["--device", "gpu"] if gpu else []
-    work = os.path.abspath(args.keep or os.path.join(B, "wave", str(os.getpid())))
+    # the default work directory: no build product's name (the `wave`
+    # target's build/wave is the kernel itself)
+    work = os.path.abspath(args.keep or os.path.join(B, "check_wave", str(os.getpid())))
     if not args.keep:
         shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work, exist_ok=True)
