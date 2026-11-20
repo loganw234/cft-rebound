@@ -51,7 +51,13 @@
 #      schedule (--attempts-dir), which must be the port's own for that
 #      member, line for line, under the port's --run-key. Every ring's
 #      particles are replayed, as many as compare_run's plan makes them (two
-#      a rerun member), counted here, not taken from its summary.
+#      a rerun member), counted here, not taken from its summary. Every
+#      compare_run run of the gate - these, the controls, P and every plant
+#      copy - is held to its counts (hold_counts()): each IDENTICAL member
+#      and particle line must report its record's own sample lines for that
+#      member, and that many lines of values at the line's width, both
+#      counted here from the record (390 a member line and 54 a particle's
+#      for the ring); a line without them FAILs by name.
 #      Beside each: steps, rejections, passes and cap hits from the
 #      record's trailers, and for a ring the physics the bits cannot show,
 #      asserted (ring_physics(), below): every particle started on its
@@ -396,12 +402,89 @@ def physics_verdict(ph, skip=()):
 
 # ---- compare_run ----------------------------------------------------------------
 def compare(record, problem, cft, E, keep=None):
+    """compare_run on a record, and THE COUNT RULE on what it says
+    (hold_counts()): every compare_run run of this gate comes through here."""
     cmd = [sys.executable, os.path.join(here, "compare_run.py"), record, "--problem", problem, "--format", "fp64",
            "--arith", "fma", "--exe", cft, "--rerun-engine", "loop", "--strata", str(max(1, E))]
     if keep:
         cmd += ["--keep", keep]
     rc, out, err = run(cmd)
+    hold_counts(record, out + err)
     return rc, out + err
+
+
+def record_counts(text):
+    """The count rule's own reading of a record, an ensemble or one system:
+    each system's sample lines and `# body` lines, counted here, and the
+    widths those make from the `# columns:` words (the scalars after the
+    step, the per-body fields, the exact-time pair) - a member's line over
+    its bodies, a particle's replay line over the `# active` count's
+    massive bodies and the particle. Returns (whether it is an ensemble,
+    {system: sample lines}, {system: a member line's width}, a particle
+    line's width or None)."""
+    rows = text.splitlines()
+    ens = rows[:1] == ["# cft-rebound ias15 ensemble record v1"]
+    words = next((l for l in rows if l.startswith("# columns:")), "# columns:").split(":", 1)[1].split()
+
+    def between(a, b):
+        return words[words.index(a) + 1:words.index(b)] if a in words and b in words else []
+    nsc, nper = len(between("step", "then")), len(between("body", ";"))
+    npair = len(words[words.index("pair") + 1:]) if "pair" in words else 0
+    act = re.search(r"^# active (\d+)", text, re.M)
+    samples, bodies, cur = {}, {}, None if ens else 0
+    for l in rows:
+        t = l.split()
+        if ens and t[:1] == ["system"] and len(t) > 2 and t[1].isdigit() and t[2] == "sample":
+            samples[int(t[1])] = samples.get(int(t[1]), 0) + 1
+        elif not ens and t[:1] == ["sample"]:
+            samples[0] = samples.get(0, 0) + 1
+        elif ens and t[:2] == ["#", "system"] and len(t) > 3 and t[2].isdigit() and not t[3].startswith("steps_done="):
+            cur = int(t[2])                             # a member's header: its body lines follow
+        elif t[:2] == ["#", "body"] and len(t) > 5 and t[2].isdigit() and t[4] == "m=" and cur is not None:
+            bodies[cur] = bodies.get(cur, 0) + 1
+    return (ens, samples, {s: nsc + n * nper + npair for s, n in bodies.items()},
+            nsc + (int(act.group(1)) + 1) * nper + npair if act else None)
+
+
+def hold_counts(record, out):
+    """THE COUNT RULE: every IDENTICAL member line and particle line of
+    compare_run's output must carry its counts, "N samples, M values" - N
+    the record's own sample lines for that member, M that many lines at the
+    line's width - both from the record (record_counts()), never from
+    compare_run's output. A line without them, or with others, FAILs by
+    name. A compare_run that compares fewer lines or values than it reports
+    IDENTICAL - a sample line skipped in the middle, a loop that stops after
+    four - is held here on every record, clean or planted."""
+    name = os.path.basename(record)
+    try:
+        text = open(record, encoding="utf-8", errors="replace").read()
+    except OSError as e:
+        return verdict(False, "compare_run's counts on %s: the record does not read: %s" % (name, e))
+    ens, samples, mwidth, pwidth = record_counts(text)
+    bad, held = [], {"member": [], "particle": []}
+    for l in out.splitlines():
+        m = re.match(r"^member (\d+) \(([^)]*)\): IDENTICAL(.*)$", l)
+        p = re.match(r"^  member (\d+): particle (\S+) \(body (\d+), [^)]*\): .*held to the record: IDENTICAL(.*)$", l)
+        if not (m or p):
+            continue
+        k = int((m or p).group(1))
+        s = k if ens else 0                             # a one-system record's member is its one system
+        who = "member %d" % k if m else "member %d's particle %s (body %s)" % (k, p.group(2), p.group(3))
+        c = re.match(r"^: (\d+) samples, (\d+) values", m.group(3) if m else p.group(4))
+        if not c:
+            bad.append("%s is IDENTICAL with no counts: %r" % (who, l.strip()[:200]))
+            continue
+        width = mwidth.get(s) if m else pwidth
+        want = (samples.get(s), samples.get(s) * width if samples.get(s) is not None and width else None)
+        got = (int(c.group(1)), int(c.group(2)))
+        held["member" if m else "particle"].append((want[0], width))
+        if got != want:
+            bad.append("%s says %d samples, %d values, where the record's %s sample lines of member %d at %s values a "
+                       "line make %s" % (who, got[0], got[1], want[0], k, width, want[1]))
+    shape = "; ".join("%d %s line(s) of %s" % (len(v), kind, ", ".join(
+        "%s lines x %s" % x for x in sorted(set(v), key=str))) for kind, v in held.items() if v) or "no IDENTICAL line"
+    return verdict(not bad, "compare_run's counts on %s: every IDENTICAL line carries its record's own sample lines "
+                   "and that many lines of values (%s)%s" % (name, shape, "" if not bad else ": NOT SO: " + "; ".join(bad)))
 
 
 def compare_summary(out):
