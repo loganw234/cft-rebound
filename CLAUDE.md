@@ -77,10 +77,14 @@ software backend can never satisfy a run against a card.
   in.** Round 4 sent gates back four times for that one shape: every
   control on a binary64 record, none on the exact-time pair, only x (the
   particle's and the primary's), only the last sample line. Each time a
-  copy comparing less passed the gate (entries 50, 51). Plant one change
-  a column, on more than one line, and run the mutant that skips each. A
-  mutation script that fails to apply its edit runs the clean copy as
-  the "mutant": make it refuse unless the edit lands exactly once.
+  copy comparing less passed the gate (entries 50, 51). Round 5 sent it
+  back nine more times: P1's seam three, check_wave six (entries 55,
+  56). Plants at both ends of every loop still let a skipped middle line
+  pass, until check_wave held compare_run's printed count of the values
+  it compared to the record's own. Plant one change a column, on more
+  than one line, and run the mutant that skips each. A mutation script
+  that fails to apply its edit runs the clean copy as the "mutant": make
+  it refuse unless the edit lands exactly once.
 - **A run with other arguments is not the gate's run.** Every GPU run of
   check_wave passed `--keep` outside build/, so check-gpu's own line
   first ran at the merge, and crashed: its default work directory was
