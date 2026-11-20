@@ -3,10 +3,12 @@
 
 # Round 5: the GPU half begins - this tree on a GPU as it is, then the wave kernel at the hardware's binary64
 
-**Status, 2026-11-16: P0 built and smoke-run on the RX 7600; the
-parcels not yet dispatched.**
-
-LEAD-FILL: the status line as the round closes, in place of the line above
+**Status, 2026-11-20: all four parcels are on main, and the round closes
+when these records land.** P3 landed at `4a8fe99` and P1 at `fda3b40` on
+2026-11-18, PL, the lead's own gate fixes, at `620c98b` on 2026-11-19,
+and P2 at `61e45bc` on 2026-11-20, each on its verifier's READY and a
+full make check (docs/VALIDATION.md entries 55 to 58; P0 is entry 54).
+The pin stays at cft-fp256 `eae74e3`; its move waits on Logan's word.
 
 Logan approved the round on 2026-11-16 ("the plan is also approved"),
 after its outline: the pin to G1C, this tree on `hip:0`, then P5 at
@@ -149,9 +151,12 @@ the earliest, and shares both GPUs.
   this repository and its two pins, carried over SSH. Nothing was
   fetched from the web, and check-pins passes there.
 - **Done:** the smoke above.
-- **To do:** VALIDATION entry 54, the round's ledger, and P0's full
-  `make check` on the desktop, where `HIP=0` changes nothing. The build
-  in WSL `cft-gpu` is P1's, in its first window there.
+- **Done:** VALIDATION entry 54, the round's ledger, and P0's full
+  `make check` on the desktop at `d7b5047`, where `HIP=0` changes
+  nothing: rc 0, 25 legs, 1,463 lines beginning `  ok `, 0 FAIL, 06:06
+  to 09:38 on 2026-11-16, on a shared host (r5-check-d7b5047.log). main
+  fast-forwarded to `5b1cac6` and was pushed that morning. P1 built the
+  tree in WSL `cft-gpu` (VALIDATION entry 55).
 - **Found, not fixed:**
   - GCC 13 on Ubuntu warns at src/ias15_cft.c:2155 that `vcopy`'s
     source is null. It does so only in the library object
@@ -196,8 +201,9 @@ corrector self-tests, which name the backend they ran on.
   software on nvidia-box, so roughly 1 to 3.5 hours on `hip:0`. Book
   such windows long, or hold a named subset. Measured: inside
   check_corrector's `--library` step, `check_dropin --light` took 62 min
-  alone on the RTX 5060 Ti (P1, at `20dad58`, 2026-11-16, its host the
-  shared desktop).
+  alone on the RTX 5060 Ti (P1, at `20dad58`, 2026-11-16) and 66 min
+  there (V1, at `ab75fbe`, 2026-11-18), each time with its host, the
+  desktop, shared.
 - **Prove the GPU ran.** A leg that quietly ran the software backend is
   a stand-in, and is a finding. Each run's `CFT_HIP_INFO` device line is
   required beside its verdict. The record's `backend=hip:0` only echoes
@@ -408,4 +414,83 @@ where this round's GPUs change them:
   AMD's time.
 - **The card:** nothing in this round needs it.
 
-LEAD-FILL: the closing section, "What the round found against this plan"
+## What the round found against this plan
+
+Each item was measured unless it says otherwise. Its record is in
+docs/VALIDATION.md, by entry.
+
+**Where it starts, and P1** (entries 54 and 55):
+- `cft_reduce` runs on the GPU, but this port's default path never calls
+  it.
+- The 256 scratch slots fit with no margin: gravity-fold256-fp128 uses
+  all of them.
+- The clock's augmented sum runs on the host at every step attempt,
+  rejected ones included, not at every step.
+- The trailer's CPU time is 1.5 to 2.0 times its wall time under ROCm,
+  and 1.02 to 1.03 under HIP's NVIDIA layer.
+- A whole-output comparison must also set aside the door and corrector
+  self-tests' first lines, which name the backend.
+- check_corrector goes through the registered integrator only in its
+  `--library` step.
+- `check_dropin --light` took 62 and 66 min alone on the RTX 5060 Ti,
+  inside the plan's estimate of 1 to 3.5 hours.
+- Of the legs outside P1's list, gate_real's self-contained mode refuses
+  `hip:0` on its identity check, check_checkpoint passes there as it
+  is, and check_seams fails only on the forced routes the device does
+  not publish. P1 first read gate_real's refusal as binding the other
+  two.
+- The GPU seam as worded, one difference planted and shown caught, was
+  not enough. P1's seam went back three times, each time for a copy of
+  compare_run that compared less and passed.
+
+**P2** (entry 56):
+- The clock is not TwoSum in binary64: libcft rounds an exact tie toward
+  zero.
+- The contraction control as worded cannot fail on the checked source.
+  The control that bites compiles the flag checks out.
+- The flags the port aborts on include INVALID, which the plan's list
+  leaves out.
+- Under nvcc, a bit-level negation or abs is an add, which quiets a
+  signaling NaN.
+- Gate 4's corpus depended on the compiler's order of argument draws.
+- MinGW's library fma and sqrt are not correctly rounded, and g++ calls
+  them at -O0.
+- GPU-E2's estimates priced libcft's software binary64, not the
+  hardware's, so they are not the kernel's.
+- The port computes a ring wave's test-test pairs and the kernel does
+  not, so two coincident test particles stop only the port.
+- check_wave went back six times for copies of compare_run, or of
+  check_wave, that did less and passed, and once for its work directory,
+  which was the kernel's own path (and entry 58).
+- The plan left the ladder's full sizes out of the round. P2's rate rows
+  ran GPU-E2's rungs over 10 orbits anyway, 527 waves on the RX 7600 and
+  1,755 on the 5060 Ti, one run each, with two members of each held
+  IDENTICAL by compare_run. The rungs were not compared with each other.
+
+**P3** (entry 57):
+- A producer's files hold its arithmetic, not its decisions; those are
+  held only in a member that is rerun.
+- The plan's first P3 test cannot fail by itself. GATE 1b, a producer
+  whose exit test is not this tree's, can.
+- A planted pass count is caught by the trailer's counters, not by the
+  bits.
+- "With no rerun of the member" never applies to a rejecting wave, which
+  stays in the member sample.
+- compare_run's output at first said a NOT RERUN member was held, and
+  passed a producer whose exit test stopped two passes early. The limit
+  is now printed, and held word for word.
+
+**The integration** (entry 58):
+- The gate cache's keys missed files that legs execute or read: the
+  program images in a fresh clone, check_ensemble's images, 6 inputs in 3
+  legs, and the constants leg's REBOUND file. PL closed them.
+- A GPU run with other arguments than the gate's is not the gate's run.
+  check_wave's own line in check-gpu first ran at the merge, and crashed
+  on its work directory; the lead's seam script first met a GPU record's
+  header there too.
+- cft-fp256's GPU round 2 landed during the round. Round 5 stayed on
+  `eae74e3` at Logan's word, and the pin moves only on that word, after
+  the close.
+
+**Not in this round, as planned:** binary128 and binary256 on a GPU, the
+ladder compared rung against rung, and the MI300X.

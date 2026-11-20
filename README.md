@@ -197,6 +197,9 @@ Nothing is vendored by hand.
     src/ias15_cft.c          the port: every floating-point operation is a cft.h call
     src/ias15_zonal.inc      J2 and J4 of one body in the run's own format, the
                              term a problem's `zonal` line names
+    src/wave/                the wave kernel: the port's step in the FMA form at
+                             the hardware's binary64, one source for the host
+                             twin and a GPU kernel (HIP), and gate 4's corpus
     src/ias15_engine.h       the same file as a library: the entry points the shim
                              drives (-DIAS15_CFT_LIBRARY, no main)
     src/ias15_constants.h    GENERATED: the Gauss-Radau constants at every format
@@ -260,6 +263,8 @@ Nothing is vendored by hand.
     tools/check_gpu.py             on a GPU host, in no tier (`make HIP=1 check-gpu`):
                                    the record-making legs on hip:0, every process
                                    held to the software backend's record
+    tools/check_wave.py            the gate: the wave kernel's records are the port's,
+                                   bit for bit, on the host twin or on a GPU
     tools/oracle.py          scores a record from its exact bits (mpmath)
     tools/compare_formats.py the round-off floor: one run at two formats, differenced
     tools/horizon.py         percentiles of an ensemble's error against time, and crossings
@@ -777,7 +782,7 @@ GPU runtime: libamdhip64 on ROCm, the CUDA runtime under HIP's NVIDIA
 layer. `HIP=1` with `XRT=1` is refused: one libcft holds a card or a
 GPU, never both. The build reads `HIP` only where `OS` is not
 `Windows_NT`, and check-gpu passes it to tools/check_gpu.py on every OS
-(Makefile:837). Round 5 built with `make HIP=1 PYTHON=python3 all
+(Makefile:988). Round 5 built with `make HIP=1 PYTHON=python3 all
 programs` for the RX 7600 under ROCm, and with `HIP_PLATFORM=nvidia
 HIP_ROOT=/opt/rocm-7.2.4 HIP_ARCH=120` added for the RTX 5060 Ti. Run
 `make clean` first: in a tree first built without HIP, `make HIP=1 all`
@@ -799,6 +804,11 @@ own arguments before it opens a device, as the software backend refuses
 the same arguments, prints no device line: it is counted apart, and
 still as a device process (docs/VALIDATION.md entry 55).
 
+Under `HIP=1`, check-gpu also builds `wave`, and once the legs pass, its
+second line runs the wave kernel's gate on the GPU,
+`tools/check_wave.py --device gpu --quick` with `GPU_EXPECT` (below).
+`GPU_LEGS` and `GPU_SKIP` do not reach that line.
+
 - `GPU_ARTIFACT`: the device, `hip:0` by default.
 - `GPU_EXPECT`: text the device line must contain, or nothing runs. On a
   host with two GPUs it names the one meant: in WSL `cft-gpu`, "RTX 5060
@@ -814,6 +824,39 @@ Where strace is installed, each leg runs under it, and every exec of
 host without it, WSL `cft-gpu` among them, nothing sees a process run
 past the witness. Entry 55 has each leg's measured time on the RX 7600,
 for booking a window.
+
+### The wave kernel
+
+    make wave-host                       # the host twin, its two contraction
+                                         # controls and gate 4's corpus
+    make HIP=1 [the HIP variables] wave  # the kernel, build/wave, with the
+                                         # GPU's controls and corpus
+    build/wave --problem FILE [--dt DT] [--epsilon EPS] [--steps N] [--sample K]
+               [--max-iter M] [--pc-tol-shift S] [--member K] [--no-flag-abort]
+               [--device host|gpu] [--quiet] [--attempts-dir DIR]
+               [--format fp64] [--arith fma] [--cs kahan]
+    python tools/check_wave.py [--build build] [--quick] [--keep DIR]
+           [--device host|gpu] [--wave PATH] [--twin PATH] [--corpus PATH]
+
+`src/wave/` is the port's step under `--arith fma` at binary64, in the
+hardware's own arithmetic, written once for the host and for a GPU. On a
+GPU it runs one system a workgroup, one thread a body. It reads the port's
+problem files and writes the port's record format, naming itself
+`program=wave`, so `tools/compare_run.py --rerun-engine loop` holds its
+records to `ias15_cft --arith fma --format fp64` bit for bit. With
+`--attempts-dir` it writes each member's attempts record and corrector
+schedule, which `compare_run --producer-files` takes. It refuses by name
+what the port has and it has not: any other format, REBOUND's form,
+`--cs augmented`, adaptive modes other than PRS23, softening, a step
+floor, dt files, a system of more bodies than it holds, and a non-finite
+input value.
+
+`tools/check_wave.py` is a leg in all three tiers, on the host twin, and
+every tier builds `wave-host` for it. It holds gate 4's arithmetic, the
+records, the attempts files, the plants and the controls
+(docs/RING.md; docs/VALIDATION.md entry 56). Its scratch is
+`<build>/check_wave/<pid>`, removed after a pass, unless `--keep`. It is
+never `<build>/wave/`, where `make HIP=1 wave` puts the kernel.
 
 ## What was found
 

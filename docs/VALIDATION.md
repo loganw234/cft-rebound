@@ -6321,8 +6321,8 @@ shipped driver fails a planted t_hi digit, and the mutant passes it with
 rc 0. That pair comes from `vaugadd`, the path G1B is expected to refuse
 as AUGADD on hip:N. [Corrected in round 5: G1B does not refuse it.
 `vaugadd` is the API call `cft_augmented_add`, which at the pin runs on
-the host on every device, and every `hip:0` record holds the pair at the
-software backend's bits (entries 54 and 55).]
+the host on every device, and every `hip:0` record measured holds the
+pair at the software backend's bits (entries 54 and 55).]
 
 `79bd206` adds a5: it reads the record's own `# columns:` line and plants
 one change in each of its 12 columns, one column a sampled member, over
@@ -7467,7 +7467,10 @@ device line: check_corrector's own refusal cases, `--trace-pc` or
 driver's: `ab75fbe` counts such a process apart, and V1's live runs at
 `ab75fbe` passed check_corrector on both GPUs, the two refusals the same
 two on each. ROUND5.md had check_corrector "through the registered
-integrator"; only its `--library` step is (P1).
+integrator"; only its `--library` step is (P1). That step runs
+`check_dropin --light` with the exit test forced on. It took 62 min alone
+on the RTX 5060 Ti (P1, at `20dad58`, 2026-11-16) and 66 min there (V1,
+at `ab75fbe`, 2026-11-18), each time with its host, the desktop, shared.
 
 **Which legs reach a GPU, beyond the eleven** (P1's `--reach` on the RX
 7600, and V1's on the RTX 5060 Ti):
@@ -7640,6 +7643,10 @@ The merge message's three open notes, and what the verifier found:
 - **gate_real's self-contained mode refuses `hip:0`** on its identity
   check; the fix is a tests/ change, not made. check_seams fails on
   `hip:0` on the routes the device does not publish.
+- **hw/gpu/costs.py's header** (lines 18-19) still gives V0's 1.5 to 2.0
+  as a GPU's ratio of CPU time to wall time, which is ROCm's (above). The
+  rows it prints carry the ratio measured beside each. A comment in
+  code, not changed.
 
 ### What this does not establish
 
@@ -7658,7 +7665,470 @@ The merge message's three open notes, and what the verifier found:
   05:41).
 - **The card, and the MI300X.**
 
-LEAD-FILL: entry 56, round 5's P2: the wave kernel at the hardware's binary64
+## 56. Round 5's P2: the wave kernel, the port's step at the hardware's binary64, its records the port's bit for bit on both GPUs; check_wave sent back seven times, four on V2's word, two on P2's own disclosures and one on the merge's GPU check
+
+**2026-11-16 to 2026-11-20.** The desktop, shared, for the host twin,
+check_wave's plants and mutants and P2's suites; the RX 7600 on
+nvidia-box (HIP 7.16 with AMD clang, gfx1102) and the RTX 5060 Ti in WSL
+`cft-gpu` (HIP 7.2.4 over nvcc 12.9, sm_120), each window booked in the
+TimeSheet. Pins as in entry 53. P2 branched from `5b1cac6`. Its commits
+are nine to `82b75b8`, then seven send-backs: `8f559c8`, `f3ef701`,
+`1e13456`, `ff7221a`, `2d062cd`, `9fa5956` and `3d8ab5b`. `61e45bc`
+merges `3d8ab5b` on `round5-int` at `620c98b`, after a first merge of
+`9fa5956`, `7444157`, failed its GPU check and never reached main
+(entry 58). main fast-forwarded `620c98b..61e45bc` and was pushed on
+2026-11-20.
+
+### What P2 is, in one paragraph
+
+`src/wave/` is the port's step under `--arith fma` at binary64, written
+once as `__host__ __device__` functions over `double`:
+- **wave_arith.h:** add, sub, mul, div, sqrt and fma, each checked for
+  the four flags the port aborts on, INVALID among them; the clock's
+  augmentedAddition, with libcft's ties toward zero; and on an x86-64
+  host, fma and sqrt through their intrinsics, so that every
+  optimisation level gives the same bits.
+- **wave_step.h:** the predictor and the corrector's passes, gravity with
+  the `active` split, J2 and J4 in the port's order, the step control,
+  the compensated sums and the energy.
+- **wave_gpu.inc:** one system a workgroup, one thread a body. Every
+  phase ends in a barrier, thread 0 folds the energy, the reactions and
+  the maxima serially, and no wave intrinsic is used (V2, READ). A sample
+  block is many short launches, so none meets the display driver's
+  watchdog (`7dec985`).
+- **wave_main.cpp:** the port's problem file in, and this repository's
+  record format out, naming its producer: `program=wave`, `engine=wave`,
+  `backend=host` or `hip:<index>:<arch>`, and on a GPU a `# device` line.
+  It writes each member's attempts record and corrector schedule under
+  the port's `--run-key` (`--attempts-dir`), and a flag stops its system
+  by name. It refuses by name what the port has and it has not: any
+  format but fp64, REBOUND's form, `--cs augmented`, adaptive modes other
+  than PRS23, softening, a step floor, dt files, a system of more bodies
+  than it holds, and a non-finite input value (READ, its head).
+- **wave_corpus.cpp:** gate 4's corpus program.
+
+`make wave-host` builds the host twin, its two contraction controls and
+gate 4's corpus, in every tier. `make HIP=1 wave` builds the kernel,
+`build/wave`, with the GPU's controls and corpus: hipcc for an AMD GPU,
+or HIP's NVIDIA layer. `tools/check_wave.py` holds the result: a leg in
+all three tiers on the twin, and check-gpu's second line on the GPU
+(entry 58).
+
+### The gate, and the controls that show it can fail
+
+check_wave's six parts, each asserted (READ, its head):
+1. **Gate 4, the arithmetic, measured** against libcft's software
+   binary64: add, sub, mul, div, sqrt, fma and augmentedAddition over
+   random operands, ties, subnormals and extremes, every result's bits
+   and the four flags. At n 20000, 1,064,352 cases: 0 mismatches on the
+   desktop, the RX 7600 and the RTX 5060 Ti, with one operand digest,
+   `3cd1af43b434860c`, on every build (V2). Among them are 152,735
+   augmentedAddition cases, 7,259 of them ties on which round-to-even and
+   the clock's ties toward zero differ (int-check-61e45bc.log).
+2. **The constants,** against the port's `--dump-constants`.
+3. **J2 and J4** at the port's own `--zonal-selftest` points: every
+   acceleration and both potentials are the port's bits.
+4. **The records,** through compare_run.py `--rerun-engine loop`, every
+   member sampled and its particles replayed:
+   - A, a ring of 3 waves with its zonal line;
+   - B, the same from a first step far too large, every wave rejecting
+     its first attempt;
+   - C, a particle aimed past Janus, rejecting after accepted steps;
+   - D, kepler_e099, zonal_saturn and kepler at fixed steps, with outer
+     and pythagorean in full;
+   - E, one wave run alone;
+   - F, A's ring with every test particle given a mass of 2^-20, which
+     must move no bit.
+
+   Each run's attempts records and schedules must be the port's own,
+   under its `--run-key`, and on a GPU every record must also be the host
+   twin's, line for line. Beside each go the steps, rejections, passes
+   and cap hits, and for a ring the physics, asserted: each particle's
+   distance from Saturn within 1e-2 of what the field's absence would
+   move it, the angle swept within 1e-4 of n t, and the energy within
+   1e-13.
+5. **The controls,** below.
+6. **The flags.** A problem made to raise each of INVALID, DIVBYZERO,
+   OVERFLOW and UNDERFLOW stops the port and the program, rc 3, naming
+   the flag. With `--no-flag-abort` both run on and report the same
+   flags.
+
+**The controls, each asserted to fail by name:**
+- **Gate 4 can fail** (V2, desktop, n 4000, every plant named by its
+  operation): a divide by a reciprocal, 3,400 mismatches; a square root
+  by a reciprocal, 4,729; product subnormals flushed, 8,250; subnormal
+  inputs to add read as zero, 8,156; augmentedAddition as TwoSum, 1,501;
+  fma as a multiply then an add, 12,981; underflow decided one exponent
+  early, 4,868 flags. On the RX 7600, the corpus built with
+  `-fdenormal-fp-math=preserve-sign` gives 65,602 mismatches of 228,352,
+  in all seven operations.
+- **Contraction.** Every shipped object is built with contraction off,
+  and `--fmad=false` under nvcc. The control that can fail compiles the
+  flag checks out: with contraction off that source passes compare_run,
+  and with a*b + c fused it FAILs. V2's counts of fused instructions:
+
+| compiler | shipped | the checked source, contraction on | the unchecked source, off, then on |
+|---|---|---|---|
+| MinGW g++ 16.1 | 10 vfmadd, all from `_mm_fmadd_sd` | 11, the extra one in the timer | 3, then 44 |
+| hipcc, gfx1102 | 632 v_fma_f64 | the same assembly, line for line | 403, then 597 |
+| nvcc, sm_120 | 1,169 DFMA | the same SASS, 56,840 lines | 848, then 1,084 |
+
+  So the flags reach every compiler. With the checks in, each product
+  feeds its check and none fuses: V2's belief about the mechanism, the
+  effect measured. One product-sum fused by hand, gravity's x
+  accumulation, FAILs compare_run in member 1 at its last sample (V2).
+- **The plants:** one value a plant, in 14 copies of an ensemble record
+  (below).
+- **The attempts comparison:** a member's attempts record with one dt
+  changed must not be the port's.
+- **The physics:** wave 0 of A's ring with its zonal line deleted has
+  sample lines that are the port's bit for bit, and physics_verdict()
+  must refuse it, on the distance and on the angle.
+
+**What the gate found.**
+- **The clock is not TwoSum.** libcft's augmentedAddition rounds an exact
+  tie toward zero. A twin whose clock is plain TwoSum fails the corpus,
+  and writes records unlike the port's in two of the three cases P2
+  tried (2026-11-16). ROUND5.md is corrected.
+- **The flags.** The port aborts on INVALID too, which ROUND5.md's list
+  of flags leaves out. The kernel checks all four (P2).
+- **nvcc quiets a signaling NaN in a sign flip.** At `bc9feb3`, gate 4 on
+  the 5060 Ti found 3 mismatches in 1,064,352 cases, every one a
+  subtract with a signaling NaN as b. nvcc compiles the bit-level
+  negation as `DADD R6, -RZ, -R2`, and the abs mask as an add too.
+  `81af26a` has the subtract's slow path read b itself, and no finite
+  value moves (P2).
+- **The corpus depended on the compiler.** C++ leaves the order of a
+  call's argument draws to the compiler: g++ draws the last first, clang
+  the first. So the RX 7600's first gate 4 ran another corpus, though
+  with 0 mismatches. At `82b75b8` every draw is in g++'s order, written
+  out, and the program prints an operand digest, which check_wave holds
+  GPU build against host build (P2).
+- **MinGW's library fma and sqrt are not correctly rounded, and g++
+  calls them at -O0.** Built so, the corpus found 20,461 of 178,342 fma
+  results and 14 of 100,051 square roots that are not libcft's:
+  sqrt(0x1.fffffffffffffp+1023) is 0x1p+512 there, against libcft's
+  0x1.fffffffffffffp+511 (P2). V2 measured the library fma differing
+  from vfmadd on 18,013 of 199,714 random finite triples. Every Makefile
+  build is -O2, and since `1741237` the twin takes both instructions
+  through their intrinsics at every level. BELIEVED (P2): REBOUND's own
+  C, ias15_ref, built at -O0 here would take the library's root.
+- **A transcribed bound.** P2's first full make check, at `7dec985`,
+  failed one verdict of check_wave's own: a 1 km physics bound, copied
+  from round 4's seam figure for another run. A particle that passed 679
+  km from Pandora moved 1.7622 km. `bc9feb3` derives the bounds above:
+  1.43e-3 at worst against 1e-2 for the distance, and 9e-6 against 1e-4
+  for the angle (P2, 2026-11-16).
+
+**On both GPUs** (MEASURED):
+- **The records.** On the RX 7600 at `82b75b8`, check_wave `--device gpu`
+  passes, 78 ok in full and 66 in `--quick`; on the RTX 5060 Ti at
+  `81af26a`, 77 and 65 (P2). V2 reran the commit of its first look: 78
+  ok in full on the RX 7600, 66 in `--quick` on the 5060 Ti. At
+  `8f559c8`, `--quick` passes, 91 ok, on the RX 7600 (P2) and on the 5060
+  Ti (V2). Every record is compare_run-IDENTICAL member by member, its
+  particles replayed, and line for line the host twin's.
+- **Across GPUs** (V2). P2's two 4,096-wave records of 362 steps, one
+  from each GPU, differ in 0 of 278,535 lines, with `backend=`, the
+  identity and device lines and the trailer's five timings set aside. A
+  digit planted in a copy shows as one line.
+- **Determinism** (V2). A 3-wave ring run twice and a 527-wave ring run
+  three times on the RX 7600, and a 2-wave ring run twice on the 5060
+  Ti, are identical but for their timings. A build with
+  `-mwavefrontsize64` gives the wave32 build's records.
+- **Three ways.** One ring wave from a first step of 1e5 s, through a
+  first-attempt rejection: the port on the CPU, the port on `hip:0` and
+  the kernel give the same lines and counters, on the 5060 Ti and on the
+  RX 7600 (P2; V2 again on the RX 7600).
+- **The kernel's frame** (P2): on gfx1102, 120 VGPRs, 144 bytes of
+  scratch a lane and 22,544 bytes of LDS a workgroup; on sm_120, 182
+  registers, a 112-byte stack and 23,568 bytes of shared memory.
+
+### What a system-step costs on each GPU
+
+P2's rates, MEASURED, one run a row, unranked within the noise:
+make_ring.py's ring (seed 1) with its zonal line, a first step of 600 s,
+epsilon 1e-9, one sample at the end. Two clocks, both from the record's
+trailer: the kernel's own timer around each launch through its
+synchronize, the first launch left out, and `wall_seconds`, the run
+loop with the record's writing. System-steps a second, the kernel clock
+then the wall clock:
+
+| waves | steps | RTX 5060 Ti, at `81af26a`, 2026-11-16, its host the shared desktop | RX 7600, at `82b75b8`, 2026-11-18, nvidia-box quiet |
+|---|---|---|---|
+| 1 | 24 | 857; 828 | 800; 774 |
+| 16 | 24 | 12,800; 12,000 | 11,636; 10,971 |
+| 128 | 24 | 53,895; 42,667 | 40,960; 33,758 |
+| 527 | 24 | not run | 49,600; 40,280 |
+| 1,755 | 24 | 63,529; 49,437 | not run |
+| 4,096 | 24 | 64,504; 48,473 | 54,222; 42,909 |
+| 527 | 362 | not run | 57,016; 56,028 |
+| 1,755 | 362 | 67,143; 65,883 | not run |
+| 4,096 | 362 | 68,595; 67,288 | 59,315; 58,255 |
+
+- **Beside GPU-E2.** Its estimates, which priced libcft's software
+  binary64, were 13 minutes for 3 x 10^4 particles over 10 orbits on the
+  RX 7600 and 14 minutes for 10^5 on the 5060 Ti: about 245 and 756
+  system-steps a second (COMPUTED by P2, as 527 x 362 / 780 s and 1,755
+  x 362 / 840 s). The kernel, in the hardware's binary64, ran those
+  rungs, 527 and 1,755 waves of 362 steps, 10 orbits at GPU-E's 36.2
+  steps an orbit, in 3.35 s and 9.46 s of kernel time, and 3.41 s and
+  9.64 s of wall time.
+- **The rungs' records held.** compare_run reran 2 members of each,
+  w00070 and w00301 of the 527 and w00301 and w01151 of the 1,755, with
+  their particles: IDENTICAL (P2).
+- **One row again** (V2): 527 waves of 24 steps on the RX 7600, three
+  runs, 0.257, 0.254 and 0.254 s by the kernel clock against P2's 0.255,
+  and 0.317, 0.313 and 0.314 s by the wall clock against 0.314.
+- **The physics beside the rates,** asserted on none of these runs: the
+  energy moved 3.5e-15 and 4.1e-15 of itself over the 5060 Ti's 1,755-
+  and 4,096-wave rungs, and 3.68e-15 over the RX 7600's 527. The two
+  GPUs' physics agree to every printed digit on 16 waves sampled every
+  10 steps, and on the 4,096-wave rung (P2).
+
+### The plants, and the verifier, six times
+
+**The plants as they landed, at `3d8ab5b`,** in an ensemble record of
+the program under test: P, the ring of 3 waves at 12 steps, or A itself
+in `--quick`. One value a plant, in 14 copies:
+- **copies 1 to 11** (send-backs 2 and 3): every class `record_classes()`
+  reads from the record, in every member. These are the schedule (t,
+  dt_next, dt_last, E, t_hi, t_lo), a massive body's x to vz, a sampled
+  particle's own x to vz, the step field, and the trailer's counters,
+  the sample-line classes each on the member's first and last sampled
+  lines. One plant a member a copy, and each member is left out of one
+  copy;
+- **copy 12** (send-back 4): the last massive body, 6 (janus), in every
+  member;
+- **copies 13 and 14** (send-back 5): sample 0 in every member, a
+  schedule column (t, E, t_lo), then the step.
+
+Each copy must hold exactly its planned values against the clean record
+(`measured_plants()`). Each plant must FAIL its own member, naming its
+line and column, and exactly those of the member's particles whose
+replay carries it, while every other member stays IDENTICAL. One closing
+verdict (`coverage()`), from its own parse of the record, names any
+class, member, body or line left unplanted. And every IDENTICAL member
+and particle line of every compare_run run must report the record's own
+count of that member's sample lines, and that many lines' worth of
+values (`hold_counts()`: 390 a member line and 54 a particle line for the
+ring).
+
+**On `82b75b8`: NOT READY** (V2, 2026-11-18). The kernel held: its bits
+on both GPUs, gate 4 and its plants, contraction, determinism, the
+Makefile, and the P2 x P3 and P1 x P2 seams, checked ahead. The planted
+controls did not. Every plant sat in case E, one wave run alone, on
+sample lines 1 and 2, so compare_run copies that compared less passed
+check_wave, 49 ok in `--quick` and 57 in full. They never compared:
+- ensemble member 0's lines, member 1's, member 1 at all, or member 2
+  (full);
+- any sample line past the third;
+- any particle;
+- ten of the columns;
+- the trailer's counters, or the step field.
+
+So did check_wave copies without their physics decision, attempts
+comparison or particle parse. With one digit planted in wave 1's last
+sample line, the tree's compare_run returns rc 1, and the never-member-1
+and first-three-lines copies rc 0. check_compare_run `--quick`, in every
+tier, fails the never-member-1 copy, 42 ok and 3 FAIL. Also:
+- nothing asserted that a particle was replayed, so 0 of 0 passed;
+- the physics control computed its own verdict;
+- the identity line was a literal;
+- the probe ran two kepler steps before it knew the device.
+
+**Send-back 1, `8f559c8`:**
+- the plants in the three-member ring record, 24 a run: every column
+  kind, members 0 to 2, first and last lines;
+- the particle count held to a plan, 6 for the ring;
+- the physics control reading physics_verdict();
+- one attempts comparison, with a one-dt control;
+- the identity line written from the build's defines;
+- a probe, `--device-info`, that launches nothing and refuses an
+  unexpected device before anything runs.
+
+The tree: 74 ok in `--quick` and 83 in full. All 27 of V2's mutants FAIL
+in both forms (P2).
+
+**On `8f559c8`: NOT READY** (V2, 2026-11-19). Four one-line edits passed
+check_wave `--quick`:
+
+| copy that | ok/FAIL | why it passed |
+|---|---|---|
+| compare_run checking the step in member 0 only | 74/0 | the step field was planted once, in member 0's last line |
+| compare_run never checking the step on sample 1 | 74/0 | the same |
+| check_wave never planting member 2 | 66/0 | the plan was 24 hand-written tuples |
+| check_wave planting no counter | 69/0 | the same |
+
+Everything else held: every mutant on the list FAILs both forms; the
+particle plan; physics_verdict on both criteria; the identity line in
+all three builds, on both hosts; and the probe. On the 5060 Ti,
+`--quick` passes, 91 ok, and `--expect "RX 7600"` is refused on the
+probe's line with an empty work directory. The step and steps_done turn
+out to be held by compare_run's completeness check alone: without it,
+check_wave FAILs 73/1 for each, and without the comparisons it passes
+74/0.
+
+**Send-back 2, `f3ef701`:** the classes read from the record
+(`record_classes()`), every class in every member on its first and last
+lines, 30 plants in 11 copies, each member left out of one copy, and a
+closing coverage verdict. The tree: 81/0 and 90/0. All 31 mutants FAIL
+in both forms: (i) 77/4, (ii) 78/3, (iii) 70/1 and (iv) 74/1 in
+`--quick` (P2).
+
+**On `f3ef701`: NOT READY** (V2). The coverage verdict read the plan,
+not the copies, and four one-line edits of check_wave passed:
+
+| check_wave that | --quick | full |
+|---|---|---|
+| drops the step class from record_classes() | 75/0 | 84/0 |
+| drops max_pc_iterations from the counter class | 81/0 | not run |
+| writes every last-line plant on sample 1 | 81/0 | 90/0 |
+| moves the left-out copies past the end, copy 11 empty | 81/0 | not run |
+
+With mutant (i) beside the first, it is still 75/0: send-back 1's gap,
+open again behind one line. Held: the tree, the four mutants, a plants()
+that skips the last line (80/1), and the left-out members (75/6, twice).
+
+**Send-back 3, `1e13456`:**
+- measured_plants();
+- coverage() from its own parse, with record_classes() required to
+  agree;
+- the first and last lines found there, and required to differ;
+- a member counted as left out only where measured;
+- the particle class only on replayed bodies (P2's addition).
+
+The tree: 92/0 and 101/0. V2's four FAIL by name in `--quick`: 83/1,
+91/1, 87/5 and 90/2.
+
+**Send-back 4, `ff7221a`,** from P2's own disclosure, ruled in scope by
+the lead before V2 looked. The massive class sat on bodies 0 to 5, never
+on 6, and cr_last_massive_short, whose massive slice stops one short,
+passed `1e13456` at 92/0. A twelfth copy plants body 6 in every member,
+and the coverage verdict requires every massive body, and the last in
+every member. The mutant FAILs, 93/3 and 102/3. The tree: 96/0 and
+105/0. The eleven copies are unchanged once the totals line's two
+timings are masked.
+
+**Send-back 5, `2d062cd`,** from P2's next disclosure, ruled likewise.
+Sample 0 was never planted, and cr_sample0_skipped, both loops starting
+one late, passed `ff7221a` at 96/0. P2 first swept every loop compare_run
+compares over, naming its two ends and what holds each (READ). The two
+open ends were at sample 0, and copies 13 and 14 with one coverage rule
+close them: the mutant, and each loop started late on its own, FAIL
+101/3 (110/3 in full). The tree: 104/0 and 113/0. Six other shapes were
+reported, not fixed. Four stand as open notes below; the totals sum
+proved held (V2, next), and the printed value count is send-back 6's.
+
+**On `2d062cd`: NOT READY** (V2), on one point. A compare_run that skips
+the middle sample line passed, 104/0 and 113/0, and one that stops after
+four lines passed full, 113/0. compare_run prints its counts, 1170 and
+162 values against the tree's 1560 and 216, and 1560 on A against 1950,
+and check_wave read neither. Everything else held:
+- V2's six third-look mutants FAIL by name;
+- the four loop-end mutants FAIL, 101/3;
+- 12 of V2's 13 mutants of the new code FAIL;
+- the copies are unchanged across the four commits.
+
+P2's READ that a totals sum stopping one short passes was wrong: it
+FAILs, 103/1 and 112/1, on record B.
+
+**Send-back 6, `9fa5956`,** the count rule:
+
+| run | --quick | full |
+|---|---|---|
+| the tree | 130/0 | 144/0 |
+| check_wave's member width one short | 118/12 | not run |
+| compare_run skipping the middle line | 116/14 | 126/18 |
+| compare_run stopping after four lines | 128/2 | 134/10 |
+
+`--quick` holds the four-line cap through records C, of 13 lines, and
+D1, of 5 (P2).
+
+**On `9fa5956`: READY** (V2, 2026-11-20):
+- both of V2's mutants FAIL in both forms, on count verdicts only;
+- three narrower ones FAIL: no counts printed (116/14), a middle line
+  skipped in the particle loop alone (118/12), and both loops cut to
+  four lines with 4 samples reported (128/2);
+- the particle width one short fails the tree (118/12);
+- three weakenings of the rule each still FAIL both mutants: the counts
+  taken from compare_run's output, the particle lines skipped, and the
+  plant copies skipped;
+- the 14 copies are unchanged.
+
+**Send-back 7, `3d8ab5b`,** after the first merge's GPU check (entry 58).
+check_wave's default work directory, `build/wave/<pid>`, was where `make
+HIP=1 wave` puts the kernel, as a file. It is now `build/check_wave/<pid>`.
+With a plain file at `build/wave`, `9fa5956` fails at `os.makedirs`
+(check_wave.py:1088) before running anything, and `3d8ab5b` passes,
+130/0 (P2). Every GPU run of check_wave by P2 and by V2 had passed
+`--keep` outside build/ (READ).
+
+**On `3d8ab5b`: READY** (V2, 2026-11-20). The same clash, on V2's own
+setup, fails `9fa5956` and passes `3d8ab5b`, 130/0, the file untouched.
+The tree passes `--quick` at 130/0 and full without `--keep` at 144/0,
+leaving no work directory behind. The copies are unchanged.
+
+The copies are always compared with the totals line's timings masked:
+it carries the run's measured throughput, which differs between any two
+runs (P2; V2 measured two runs of one commit differing there alone).
+
+### The suites
+
+- **P2's own full make check, at `82b75b8`:** 05:59:39 to 09:27:33 on
+  2026-11-18, 3 h 28 min on a shared host. rc 0, 26 legs, the 25 at P0's
+  suite's counts (`d7b5047`), and check_wave 57 ok, RESULT: PASS (P2; the
+  lead's leg-by-leg reading).
+- **At `7dec985`,** 11:55:25 to 15:51:55 on 2026-11-16: rc 2. 25 legs
+  passed, and check_wave failed its own transcribed bound (above).
+- The merge's GPU check and suite are entry 58's.
+
+### Stated limits, not closed
+
+The merge message's open notes:
+- **Test-test pairs.** The port computes and discards a ring wave's 1,596
+  test-test pairs, and the kernel never computes them, so two
+  coincident test particles stop the port with DIVBYZERO but not the
+  kernel.
+- **The unchecked control holds a different source from the shipped
+  one.** Its PASS shows that the checks move no bit in the arithmetic
+  the two builds share. It does not show that the shipped build's checks
+  would stop a fused a*b + c.
+- **GPU_LEGS and GPU_SKIP do not restrict check_wave's line.**
+- **A planted step or steps_done** is caught by compare_run's
+  completeness checks, hold_structure() and scan(), which mark the
+  member incomplete before any comparison. No plant reaches compare_run's
+  own comparisons of those fields, or of a line's (sample, step) pair.
+- **A plant compare_run refuses outright** (hold_initial(),
+  hold_problem(), hold_rerun()) has no verdict in check_wave that
+  expects a refusal.
+- **The particle-selection loops** (closest(), least()) compare nothing.
+  An off-by-one there replays a different particle, which check_wave
+  plants just as faithfully.
+- **No plant deletes a trailer key.** A trailer missing one still FAILs
+  the counter loops (READ).
+- **The sample-0 rule edited to look at sample 1 passes** (V2). That
+  edit weakens the rule; every edit that drops or moves a sample-0 plant
+  FAILs.
+- **The copies are compared with the totals line's timings masked.**
+
+And:
+- **The kernel opens device 0,** the first the GPU runtime shows it
+  (wave_gpu.inc, `hipSetDevice(0)`), whatever `GPU_ARTIFACT` names. Its
+  probe holds that device's line to `GPU_EXPECT` before anything runs
+  (the Makefile's check-gpu comment).
+- **Binary64 only.** Binary128 and binary256 in a kernel need a divide
+  and a square root inside it (ROUND5.md).
+
+### What this does not establish
+
+- **The ladder as ROADMAP's GPU half names it.** The rungs ran as rate
+  rows, one run each, with two members of each rerun. Their records were
+  not compared rung against rung; the comparison across GPUs was of the
+  4,096-wave records.
+- **Binary128 or binary256 on a GPU, the MI300X, or more than one GPU at
+  a time.**
+- **Any speed claim beyond the rows above.**
 
 ## 57. Round 5's P3: `tools/compare_run.py --producer-files` replays particles from a producer's own attempts records and schedules; they hold its arithmetic, not its decisions, and the driver now prints that; sent back twice
 
@@ -7933,4 +8403,311 @@ lines, has 34 ok, as at `d7b5047`.
   P2 x P3 seam, are entries 56 and 58.
 - **Anything on a GPU.**
 
-LEAD-FILL: entry 58, round 5's integration: the seams, PL, the merges and suites
+## 58. Round 5's integration: PL's gate-cache keys and limit check; P2's first merge, whose GPU check failed, and its redo; the GPU checks and the suites
+
+**2026-11-18 to 2026-11-20.** The lead's merges, one at a time, each on
+its verifier's READY and a full make check on the desktop, read from its
+log before main moved, and P1's, PL's and P2's also on a GPU check on
+the RTX 5060 Ti in WSL `cft-gpu`:
+- `4a8fe99`, P3 (entry 57), and `fda3b40`, P1 (entry 55), on 2026-11-18;
+- `620c98b`, PL, on 2026-11-19;
+- `61e45bc`, P2, on 2026-11-20, after a first merge, `7444157`, that never
+  reached main.
+
+Logan delegated round 5's merges and pushes on 2026-11-16 ("Yes,
+delegate"). Pins as in entry 53.
+
+### PL: the lead's own fixes, done by a parcel
+
+PL made five commits on `fda3b40`, verified by VL:
+- **`3012353`, the PROGRAMS key.** PROGRAMS was a wildcard over
+  programs/out, expanded when make read the Makefile, so in a fresh clone
+  the 10 legs that list the program images keyed on none of them (the
+  lead's find, 2026-11-16). It now comes from programs/*.cfta, united
+  with whatever programs/out holds. MEASURED through make (VL): with
+  programs/out absent at both parses, a program changed in
+  tools/gen_programs.py was SKIPPED by `fda3b40`'s check_program_engine
+  line, of 10 inputs, and the new line, of 76, ran and FAILed it.
+- **`5fa7534`, the limit held absent everywhere** (V3's open point, entry
+  57). `limit_lines()` finds the line however it is indented or
+  embedded, in limit_once and limit_absent. drive() records every run
+  without `--producer-files`, and one closing verdict holds them all.
+  Case 6 runs in every tier, 4 steps in `--quick`. Copies of compare_run
+  that print the line where it must not appear each FAIL the gate by
+  name: PL's M1 to M5, and VL's (a) to (f), five of which pass
+  `fda3b40`'s gate. The gate gives 73 ok in `--quick` and 109 in full,
+  against 70 and 108.
+- **`cc3d87a`, check_ensemble's key.** Its program-engine cases load
+  images from programs/out, and its key listed none. MEASURED (PL, at the
+  cache): with one byte of predict-ens-fp64.cftp changed, `5fa7534`'s
+  line SKIPPED, and the new line ran and FAILed the two adaptive
+  program-engine cases. VL's, through make: a change to predict_ens in
+  gen_programs.py, SKIPPED by the old line and FAILed by the new.
+- **`e8a7d89`, the audit.** PL audited every leg's key statically, in
+  all three tiers, and added the 6 inputs missing in 3 legs:
+  - tools/check_equivalence.py, imported by check_records,
+    check_ensemble and check_bodycount;
+  - tools/make_ensemble.py and tools/make_nbody.py, run by check_ensemble
+    and check_bodycount;
+  - src/ias15_limits.h, read by check_bodycount.
+
+  MEASURED for each kind of input, an import, a run script and a file
+  read: after a one-byte change, `cc3d87a`'s line SKIPPED the leg, and
+  the new line ran it.
+- **`4fcd775`, the constants leg,** VL's find. VL traced a cold
+  check-quick, logging every file opened, process started, directory
+  listed and module imported. The leg reads
+  third_party/rebound/src/integrator_ias15.c, which its key did not list.
+  MEASURED (PL, then VL, also through make): with one digit of h[1]
+  changed in the clone, `e8a7d89`'s line SKIPPED, and the new line ran
+  and FAILed, "derived 0.05626256053692215, REBOUND literal
+  0.05626256053693215"; restored, it passed, then skipped warm. No leg
+  reads anything else under third_party/ that its key does not list
+  (PL's search, audit and trace; VL's trace).
+
+**VL** said READY on `e8a7d89` with one defect, the constants key, for
+which PL went back (send-back 3), and READY on `4fcd775`. VL's cache end
+to end, MEASURED: cold, all 25 legs ran and passed; warm, all 25 SKIPPED
+by name; and a change to predict_ens that moves three images' bytes and
+no results ran exactly the 11 legs that list the images, while the other
+14 skipped by name.
+
+**The merge, `620c98b`** (2026-11-19; the lead's ledger, 13:39): `git
+merge --no-ff round5-pl`, its tree equal to `4fcd775`'s.
+`fda3b40..620c98b` changes the Makefile and tools/check_compare_run.py
+alone, 120 insertions and 41 deletions.
+
+**Its GPU check** (lead-wsl/plgpu-620c98b-1119-1339; the RTX 5060 Ti, a
+fresh HIP=1 build in WSL cft-gpu): `check_gpu.py --legs
+check_compare_run`, run directly rather than through make, 13:39:30 to
+16:12:17, its software half on the shared desktop: "check_gpu: 2 ok, 0
+FAIL, in 152m46s on hip:0", RESULT: PASS. The leg: rc 0, RESULT: PASS,
+73 ok, 0 FAIL; 1606 of 1606 processes on the device, and 1606 of 1606
+records the software backend's. Beside it: 665 records, 22,347 steps and
+435 rejected, 3.61 passes an attempt (at most 20), none capped. VL's
+four checks all held:
+- the leg's line;
+- case 6's "4 steps" header, with its two ok lines;
+- the closing verdict, "46 runs (10 with --plan, 1 with --rerun-engine,
+  2 at binary128 or binary256, 3 in the FMA form, 3 through a copy of
+  the driver)";
+- 1606 processes, above the 774 of P1's run of this leg on `5b1cac6`. No
+  hip:0 count of it exists at `fda3b40`, since P1's merge seam did not
+  run it.
+
+**Its suite** (int-check-620c98b.log): 13:38:35 to 16:55:59 on
+2026-11-19, 3 h 17 min on a shared host, beside V2's check_wave runs,
+the GPU check's software half and cft-fp256's M3S. Clean, build and
+check each rc 0; 25 legs; 1,505 lines beginning `  ok `; 17 leg RESULT
+lines, all PASS; no line beginning FAIL; 5 compiler warnings, as before.
+Every leg has `fda3b40`'s counts but check_compare_run, 108 to 109 (my
+count, and the lead's). With timings and temporary directories masked,
+the log differs from `fda3b40`'s in:
+- the commit line;
+- the gate-cache lines of constants, check_records, check_ensemble and
+  check_bodycount, which carry PL's inputs;
+- case 6's header and verdicts;
+- the new closing verdict, "none of the 48 runs of the driver without
+  --producer-files printed a line of it".
+
+Every line carrying a token of 16 or more hex digits, the digests among
+them, is the same, 122 of 122 (the lead's). main fast-forwarded
+`fda3b40..620c98b` and was pushed.
+
+**PL's open notes** (the merge message):
+- check_bodycount and check_gravity reuse the nbody<N>.txt problems they
+  wrote earlier in build/, so their presence, not their bytes, steers the
+  leg. With make_nbody.py broken, check-quick reran check_bodycount on the
+  old problems and passed, then skipped it after build/problems was
+  deleted (VL). make check after make clean catches it; check-quick and
+  check-light do not.
+- A program new in gen_programs.py is keyed from the next make on.
+- An edit of a .cfta never reaches an image: make programs runs
+  gen_programs.py first, which rewrites it.
+- Control i copies the tree's own compare_run.py, so it ignores
+  `--driver`.
+- The closing verdict asks for a run of each of four kinds. Its counts,
+  46 and 48, are printed, not asserted.
+- Runs refused after reading a producer's files are not checked for the
+  limit line. drive() passes the per-run checks only the last 600
+  characters of stderr, so a second copy earlier on a producer run's
+  stderr passes (VL's mutant g).
+- `--quick`'s case 6 runs 4 steps, in which no member rejects an attempt
+  after an accepted step; the full tier's 20 steps hold one.
+
+### P2's first merge, `7444157`, which never reached main
+
+**The merge** (2026-11-20, 00:59; the lead's ledger, 01:00). On
+`round5-int` at `620c98b`, `-c merge.conflictstyle=diff3 merge --no-ff
+--no-commit 9fa5956` stopped on the Makefile alone, in three conflict
+blocks, and the 8 new files merged cleanly. resolve_tiers.py resolved the
+three (below), and p2_hand_edit.py made the hand edit: check-gpu's
+second recipe line, `tools/check_wave.py --build $(B) --device gpu
+--quick --expect '$(GPU_EXPECT)'`, with `wave` among check-gpu's
+prerequisites when HIP=1, and its header comment. The Makefile's sha256
+was f82c107b, the expected file's. It was committed as `7444157`.
+
+**Its GPU check** (lead-wsl/p2seam-7444157-1120-0100; the RTX 5060 Ti,
+01:00:54 to 01:17:26):
+- **`make HIP=1 check-gpu GPU_LEGS=check_records`: rc 2.** Its first
+  line passed: "check_gpu: 2 ok, 0 FAIL, in 15m19s on hip:0". Its second,
+  check_wave `--device gpu --quick`, died before running anything, at
+  check_wave.py:1088:
+
+  ```
+  NotADirectoryError: [Errno 20] Not a directory: '/root/cft-rebound-r5-lead/tree/build/wave/1549'
+  ```
+
+  `make HIP=1 wave` builds the kernel as the file build/wave, and
+  check_wave's default work directory had been build/wave/<pid> since
+  P2's first commit, `3f7d67e` (READ by the lead). Every GPU run of
+  check_wave before the merge had passed `--keep` outside build/ (entry
+  56), so this was the first run of check-gpu's own line.
+- **The lead's seam script, p1p2_seam.py: 15 ok, 8 FAIL.** All eight were
+  the script's. It did not know the kernel record's `# device` line
+  (P2's `46ddfed`), so wave against cpu found "1 difference(s)", the
+  device line alone, and each of six wave controls found 2. A second
+  cause hid behind the first: the script wanted the kernel's backend as
+  `gpu`, and the kernel writes `hip:0:sm_120`. compare_run held the
+  kernel's record IDENTICAL, and the P2 x P3 part passed.
+
+**make check on `7444157` was stopped** at 01:21, in its sixth leg,
+check_door (int-check-7444157.log). Send-back 7 would change the merged
+tree, so that run could not be the bar.
+
+### The response
+
+- **Send-back 7** (entry 56): check_wave's default work directory is
+  build/check_wave/<pid>. V2 said READY on `3d8ab5b`.
+- **The seam script, fixed and verified twice.** At c9e39a38, the kernel
+  record's device line is set aside by name and held by a verdict of its
+  own: exactly one in the kernel's GPU record, naming `--expect`, and none
+  in the port's records. The kernel's backend is wanted as
+  hip:0:<arch>, the arch read from that line.
+  - MEASURED by the lead: on the failed run's saved records, 16 ok and 0
+    FAIL, where the original script FAILs; on the GPU, against the built
+    `7444157` tree, 24 ok and 0 FAIL.
+  - VL said READY through the script's own main(), its run() stubbed
+    from the saved records: all nine planted cases FAIL by name, and
+    unknown header lines still FAIL.
+  - Three cases today's kernel cannot produce still passed. The lead
+    applied VL's three hardenings (f4e475dd): the record's device line
+    must equal the probe's `--device-info` line, `--dry-host` requires no
+    device line, and the arch may end at ':' as well as ','. VL said
+    READY again: the three FAIL by name, and the saved records still
+    give 24 ok.
+- **The redo.** `git reset --keep 620c98b` on round5-int, `7444157` kept
+  in the reflog and never pushed, and the merge redone on `3d8ab5b` with
+  the same kit: the same three blocks, the same resolution and hand
+  edit, and the Makefile again f82c107b. P2's files are `3d8ab5b`'s and
+  every other path is `620c98b`'s. The merged tree differs from
+  `7444157`'s in tools/check_wave.py alone, +6 and -2. It was committed
+  as `61e45bc`.
+
+### The conflict, resolved by a script and checked against a Makefile built another way
+
+MEASURED by the lead before either merge (git merge-tree, in both
+orders): P2 changed each tier's target line, `check: ... wave-host ...`,
+and PL's `4fcd775` changed the constants line just under it, so the
+three tiers make three adjacent-line conflicts. With `e8a7d89` there
+were none.
+- **resolve_tiers.py** works on the diff3 blocks and resolves each line
+  by line: where one side kept the base's line, it takes the other
+  side's. It refuses, and writes nothing, unless:
+  - there are exactly 3 blocks;
+  - ours, base and theirs are the same length in each;
+  - no line was changed by both sides;
+  - every resolved line is a tier's target line or a constants line;
+  - the result equals an expected file byte for byte.
+- **The expected Makefile, by another road:** P2 merged with `e8a7d89`, a
+  clean merge to tree 399adaf7, plus `4fcd775`'s three lines by
+  substitution; with P2's hand edit, sha256 f82c107b.
+- **MEASURED:** both orders, PL then P2 and P2 then PL, resolve equal to
+  it. The refusals shown, each leaving the file unchanged: merge-style
+  markers, two blocks, and a one-byte-wrong expected file. The lead's own
+  first expected file was wrong by a doubled space, and the equality
+  check caught it.
+- **p2_hand_edit.py** lands each of its 4 edits once and refuses a second
+  run. `make -n -p HIP=1` resolves `check-gpu: check-pins all programs
+  wave`.
+
+### `61e45bc`'s checks
+
+**The GPU check** (lead-wsl/p2seam-61e45bc-1120-0213; the RTX 5060 Ti, a
+fresh clone, 02:13:13 to 02:42:23):
+- **`make HIP=1 check-gpu GPU_LEGS=check_records`: rc 0.**
+  - check_records: 4 ok, 0 FAIL, in 15m21s, 4 of 4 processes on the
+    device.
+  - check_wave `--device gpu --quick`, the second line, its command
+    without `--keep`: RESULT: PASS, 147 ok, 0 FAIL.
+  - Its gate 4 on the GPU: 228,352 cases and 0 mismatches, the corpus
+    digest ca7246a62d9533f6, the host build's.
+  - Every record's one device line is the GPU's, and the count verdicts
+    hold on every record.
+- **p1p2_seam.py at f4e475dd: 24 ok, 0 FAIL.**
+  - **P1 x P2, three ways:** one ring wave at fp64 in the FMA form, from
+    a first step of 1e5 s, run by the port on the CPU, by the port on
+    hip:0 and by the kernel. The kernel's backend is hip:0:sm_120, as
+    wanted, and its one device line names the 5060 Ti and equals its
+    `--device-info` line. hip against cpu and wave against cpu are
+    IDENTICAL: 4 sample lines of 394 values, 64 body lines, the header
+    lines and the trailer's five counters. Beside them: 12 steps, 1
+    rejected, 3.769 mean passes and 6 at most, and all 64 bodies moved.
+  - **The controls:** 11, one value planted in a copy of the hip:0
+    record or the kernel's, each FAILing by name on its one planted
+    value.
+  - **compare_run** holds the hip:0 record and the kernel's IDENTICAL to
+    this tree's CPU rerun, 2 particles replayed in each.
+  - **P2 x P3:** the kernel's own attempts records and schedules for
+    three waves, through compare_run `--producer-files`: members 0 and 1
+    not rerun, and 6 particles from P2's files IDENTICAL. One dt of
+    member 0's attempts record moved one ulp FAILs that member's two
+    particles by name.
+
+**The suite** (int-check-61e45bc.log): 02:11:37 to 05:03:15 on
+2026-11-20, 2 h 52 min on a shared host, beside the GPU check for its
+first 31 minutes. Clean, build and check each rc 0; 26 legs; 1,649
+lines beginning `  ok `; 18 leg RESULT lines, all PASS; no line
+beginning FAIL; 5 compiler warnings.
+- The 25 legs it shares with `620c98b` have that suite's counts (my
+  count, and the lead's).
+- check_wave, the 26th, after check_reversal, has 144 ok and RESULT:
+  PASS. Its count rule holds on A at 5 lines of 390 and of 54.
+- Outside check_wave's leg, with timings and temporary directories
+  masked, the log differs from `620c98b`'s only in the commit line and
+  the four new wave-host build lines. The 122 lines carrying a token of
+  16 or more hex digits are all the same (the lead's).
+
+main fast-forwarded `620c98b..61e45bc` and was pushed (the lead's
+ledger, 05:05).
+
+### The outage
+
+The API was unreachable from about 12:35 to 12:56 on 2026-11-19. P2's
+session ended at 12:38, and VL's after its 12:12 entry. Nothing was lost
+(MEASURED by the lead):
+- P2's `f3ef701` was committed, its worktree clean, and its mutant
+  runners finished alone, every one of its 31 full-form mutants logged;
+- VL's item-8 script carried on alone, and restored the files it had
+  edited.
+
+Both were resumed by message, and nothing needed re-running.
+
+### Stated limits, not closed
+
+- **PL's open notes** (above), and P2's (entry 56).
+- **The pin.** Everything in round 5 was measured at cft-fp256 `eae74e3`.
+  cft-fp256's GPU round 2 landed during the round, ending at 9e8ff270,
+  with 340cd287 and c3c39c87 docs-only past it (READ by the lead in its
+  repository). The move waits on Logan's word, after the round closes:
+  "Agreed, finish round 5 on eae74e3e first" (Logan, 2026-11-18).
+
+### What this does not establish
+
+- **check-gpu in full at the merges.** At `620c98b` it ran
+  check_compare_run alone, and at `61e45bc` check_records and check_wave's
+  line. The other legs last ran on a GPU at P1's commits (entry 55).
+- **The RX 7600 at any merge.** Every merge's GPU check ran on the RTX
+  5060 Ti.
+- **A full suite on Linux** at any of these merges.
+- **These records' own merge and suite,** which follow this entry.

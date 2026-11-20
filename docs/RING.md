@@ -4,14 +4,15 @@
 # The ring run's CPU half: what a GPU wave will be held to
 
 **As of 2026-11-12, at `d9c8c8c` and the docs that land with it; round
-5's sections as of 2026-11-18, at `fda3b40`.**
+5's sections as of 2026-11-20, at `61e45bc`.**
 cft-fp256's study GPU-E (its docs/studies/GPU-E-mi300x-ring.md, merged at
 `56006987`) sized an IAS15 run of a Saturn ring on an MI300X: 10^6 test
 particles in 64-body waves, each wave a system of Saturn with J2 and J4,
 six moons and 57 particles. Round 4 (ROUND4.md) built on the CPU what
 that run computes and what it will be checked against. Round 5
-(ROUND5.md) taught the driver to take a producer's own files, and held
-this tree on a GPU as it is. This file says what exists, what holds it,
+(ROUND5.md) taught the driver to take a producer's own files, held this
+tree on a GPU as it is, and built the wave kernel, the port's step at
+the hardware's binary64. This file says what exists, what holds it,
 and what a GPU run must carry to be held. docs/VALIDATION.md entries 46
 to 51 are round 4's measurements, and entries 54 on are round 5's.
 
@@ -96,6 +97,7 @@ Each gate is one leg in all three suite tiers.
 | one particle out of its wave | `tools/check_replay.py` | three waves at every format, rejecting nothing, first, and after accepted steps; each sampled particle and every massive body at the wave's bits, with its counters; the records load bearing; refusals; a dt file through a pipe | 49 |
 | the driver | `tools/check_compare_run.py` | its PASS on a nine-wave ensemble, and a change planted in every column it compares, for members and for particles, each failing by name: bits, not values; a record of another format, arithmetic or problem refused, and one lacking a field the rerun needs (as REBOUND's own ias15_ref's does); another producer's record that carries every field is held like this tree's; and, with `--producer-files`, particles replayed from a producer's own files, the same as from a rerun's, a producer whose exit test is not this tree's, each file refused by its run key when it is another wave's, and the limit's line word for word | 50, 51, 57 |
 | the parts together | `tools/check_ring_seams.py` | part 1, the ring in its own field, with the node counter (P1 x P2); part 2, a ring particle replayed with its zonal line (P2 x P3, P1 x P3); part 3, the driver on the ring's own shape (P2 x P4, P1 x P4) | 51 |
+| the wave kernel, `src/wave/` (round 5) | `tools/check_wave.py` | gate 4, its arithmetic and flags against libcft's software binary64; its records the port's bit for bit through the driver, every member, the particles replayed, the attempts files the port's; plants in 14 copies, a closing coverage verdict and the printed counts; the contraction, attempts, physics and flag controls; on the host twin here, and on a GPU in check-gpu | 56 |
 
 Where a gate compares one run of this tree with another, a defect both
 runs share cancels; of the runs above, only REBOUND's own IAS15, at
@@ -270,7 +272,10 @@ refuses by name where there is no `hip:0`. It runs eleven legs, ten in
 their quick form and check_dropin in its `--light` form: check_records,
 check_equivalence, check_program_engine, check_ensemble, check_ring,
 check_replay, check_compare_run, check_zonal, check_reversal,
-check_corrector and check_dropin_light.
+check_corrector and check_dropin_light. Under `HIP=1` it also builds
+`wave`, and its second line runs check_wave `--device gpu --quick` on the
+kernel, held to `GPU_EXPECT`; `GPU_LEGS` and `GPU_SKIP` do not reach that
+line (the wave kernel's section, below).
 
 **What it holds,** for every process a leg starts, whatever starts it:
 - **That it ran on the device.** Every process prints the probe's
@@ -324,7 +329,91 @@ check_corrector and check_dropin_light.
   forced routes the device does not publish. check_checkpoint passes on
   `hip:0`, outside check-gpu.
 
-LEAD-FILL: the wave kernel's section (round 5, P2, entry 56): what check_wave holds of a kernel's records and files
+## What check_wave holds of the wave kernel's records
+
+Round 5's P2 (VALIDATION entry 56). The kernel is the port's step under
+`--arith fma` at binary64, in the hardware's own arithmetic: one 64-body
+ring wave a workgroup, one thread a body. The host twin is the same
+source, built for the CPU.
+
+    make wave-host                       # the host twin, its controls and gate 4's corpus
+    make HIP=1 [the HIP variables] wave  # the kernel, build/wave, with the GPU's controls and corpus
+    build/wave --problem FILE [--dt DT] [--epsilon EPS] [--steps N] [--sample K]
+               [--max-iter M] [--pc-tol-shift S] [--member K] [--no-flag-abort]
+               [--device host|gpu] [--quiet] [--attempts-dir DIR]
+               [--format fp64] [--arith fma] [--cs kahan]
+    python tools/check_wave.py [--build build] [--quick] [--keep DIR]
+           [--device host|gpu] [--wave PATH] [--twin PATH] [--corpus PATH]
+
+Every tier builds `wave-host` and runs check_wave on the twin;
+check-gpu's second line runs it on the kernel.
+
+**What a kernel's record carries.** The port's record format, so the
+driver holds it unchanged:
+- `program=wave` and `engine=wave`, so compare_run reruns it with
+  `--rerun-engine loop`; in the FMA form the two engines give the same
+  bits;
+- a `backend=` naming the device: `host`, or `hip:<index>:<arch>`;
+- on a GPU, one `# device` line, the GPU's own description, which
+  check_wave holds equal to the probe's `--device-info` line.
+  compare_run holds header lines one way only, so a line only the
+  producer writes may stand (READ by VL).
+
+**What check_wave holds** (entry 56):
+- **The arithmetic,** gate 4: add, sub, mul, div, sqrt, fma and
+  augmentedAddition, and the four flags, against libcft's software
+  binary64. In full, 1,064,352 cases, 0 mismatches on the desktop and
+  on both GPUs, with one operand digest on every build. On a GPU, the
+  GPU build's corpus is held to the host build's.
+- **The records, bit for bit:** cases A to F, the ring from a good and a
+  far too large first step, a particle aimed past Janus, this tree's own
+  problems, one wave alone and the ring with massive test particles,
+  through compare_run `--rerun-engine loop`, every member sampled and its
+  particles replayed. On a GPU each must also be the host twin's, line
+  for line. The kernel's attempts records and corrector schedules must
+  be the port's own, under its `--run-key`.
+- **The comparison itself:** plants in 14 copies of an ensemble record,
+  each held value by value to the clean record:
+  - every class in every member, on its first and last sampled lines;
+  - every massive body, and the last in every member;
+  - sample 0 in every member.
+
+  A closing verdict names any gap, and every IDENTICAL member and
+  particle line must report the record's own count of sample lines and
+  values.
+- **The physics beside the bits,** asserted on the ring: the distance
+  from Saturn, the angle swept and the energy.
+- **The controls:** contraction, the attempts comparison, the physics,
+  and the four flags.
+
+**The kernel's own files through the driver** (P2 x P3, entry 58). The
+kernel writes each member's attempts record and schedule
+(`--attempts-dir`) under the port's `--run-key`, and compare_run takes
+them with `--producer-files`. MEASURED on the RTX 5060 Ti at `61e45bc`:
+three waves, members 0 and 1 not rerun, and all 6 particles, two a wave,
+replayed IDENTICAL from the kernel's files. One dt moved one ulp in
+member 0's attempts record FAILs that member's two particles by name.
+What such files do not hold is above: a producer's decisions are held
+only where a member is rerun.
+
+**Three ways, one ring wave** (P1 x P2, entry 58). The port on the CPU,
+the port on `hip:0` through libcft, and the kernel give the same bits: 4
+sample lines of 394 values, 64 body lines, the header lines and the
+trailer's five counters, beside 11 planted controls that each FAIL by
+name.
+
+**What it does not hold** (entry 56's open notes):
+- the test-test pairs, which only the port computes, so two coincident
+  test particles stop only the port;
+- a planted step or steps_done past compare_run's completeness checks,
+  and a plant that compare_run refuses outright;
+- an off-by-one in the particle-selection loops, or a deleted trailer
+  key;
+- anything past binary64.
+
+The kernel opens the first device the GPU runtime shows it, whatever
+`GPU_ARTIFACT` names, and its probe holds that device's line to
+`GPU_EXPECT` before anything runs.
 
 ## The format difference's scope
 
@@ -449,4 +538,7 @@ docs/VALIDATION.md:
 - **51:** the seams, the P3 x P4 wiring, VL, the merges and the suites;
 - **54:** round 5's P0, this tree built with libcft's GPU backend;
 - **55:** round 5's P1, this tree on `hip:0` as it is, and check-gpu;
-- **57:** round 5's P3, the driver taking a producer's own files.
+- **56:** round 5's P2, the wave kernel and check_wave;
+- **57:** round 5's P3, the driver taking a producer's own files;
+- **58:** round 5's integration: PL's gate-cache keys, the merges, the
+  GPU checks and the suites.
