@@ -908,22 +908,36 @@ ROUND4.md's "After this round", in its order, with what the round added:
    a slot from cft-fp256. It finds what G1B refuses on this engine's
    default path. Believed: the clock's augmented sum calls `vaugadd` at
    every step and G1B refuses AUGADD, and the record's exact-time pair,
-   which `compare_run` holds, comes from it.
+   which `compare_run` holds, comes from it. **Done** in round 5
+   (entry 55): `make HIP=1 check-gpu`. The belief was measured false:
+   `vaugadd` is the API call `cft_augmented_add`, which at the pin runs
+   on the host at every step attempt, and every record the legs made on
+   `hip:0` was the software backend's (entries 54 and 55).
 3. **A divide and square root inside a kernel,** cft-fp256's work and the
    study's question 2 (decision 3), at binary64, binary128 and binary256,
    round to nearest, with the five flags and host `cft_div`'s and
    `cft_sqrt`'s bits. The zonal term adds 10 divides and a square root a
-   body a force evaluation to gravity's one each a pair.
+   body a force evaluation to gravity's one each a pair. READ from
+   cft-fp256's lead (2026-11-17): its GPU round 2 kept `cft_div` and
+   `cft_sqrt` on today's program route on `hip:N`, and measured, but did
+   not build, a divide callable from device code; which shape to build
+   is with Logan.
 4. **The wave kernel,** one wave a system, held to this round's CPU
    references through `tools/compare_run.py`. Its first brief carries the
    GPU seam test: the driver pointed at the first GPU record, with a
    difference planted in that record shown caught. To sample its
    particles without a rerun, a GPU run must write each wave's attempts
    record and corrector schedule, and the driver must take them: not
-   built (docs/RING.md).
+   built (docs/RING.md). **Done at binary64** in round 5: the kernel's
+   records are the port's bit for bit on both GPUs (entry 56), the GPU
+   seam test is check-gpu's part 3 (entry 55), and the driver takes a
+   producer's own files, which hold its arithmetic and not its decisions
+   (entry 57).
 5. **The ladder:** the RX 7600 at 3 x 10^4 particles, then the RTX 5060
    Ti at 10^5, each rung's records compared with the others' and the
-   CPU's.
+   CPU's. Not done. P2's rate rows ran both rungs over 10 orbits, one
+   run each, with two members of each held IDENTICAL by compare_run; the
+   rungs were not compared with each other (entry 56).
 6. **The MI300X,** when AMD's time is approved.
 
 P5, the wave kernel at the hardware's binary64, has Logan's yes
@@ -963,3 +977,34 @@ narrowing in one format, and physics beside.
 
 Round 3's list, "What the next round starts with" above, still waits, as
 ROUND4.md said it would.
+
+## What round 5 built, and what waits on Logan
+
+*Written 2026-11-20, as the round closed. ROUND5.md was the plan,
+docs/VALIDATION.md entries 54 to 58 are the record, and docs/RING.md says
+what a GPU run is held to. Everything was measured at cft-fp256
+`eae74e3`.*
+
+**What round 5 built.**
+- **This tree with libcft's GPU backend,** `make HIP=1` (entry 54), and
+  on `hip:0` as it is, `make HIP=1 check-gpu` (entry 55): every process
+  the record-making legs start, held to the software backend's record,
+  on the RX 7600 and on the RTX 5060 Ti.
+- **The wave kernel at the hardware's binary64** (entry 56): the port's
+  step in the FMA form, one system a workgroup, its records the port's
+  bit for bit on both GPUs. tools/check_wave.py holds it, a leg in every
+  tier and check-gpu's second line.
+- **The driver takes a producer's own files** (entry 57), and prints
+  what they do not hold.
+- **The gate cache keys on every file a leg runs, imports or reads,**
+  PL's open notes aside (entry 58).
+
+**Round 5 is closed** when these records land. Entry 58 has every
+merge, GPU check and suite. The open notes stand in the merge messages
+and in entries 55 to 58: P1's three, PL's seven and P2's nine.
+
+**What waits on Logan's word: the pin's move,** off cft-fp256 `eae74e3`
+to 9e8ff270, its GPU round 2's whole state, or to 340cd287 or c3c39c87,
+which are docs only past it (READ by the lead, in its repository).
+Logan's word of 2026-11-18 was "Agreed, finish round 5 on eae74e3e
+first": the move is its own step, after the close.

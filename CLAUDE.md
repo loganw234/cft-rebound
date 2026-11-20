@@ -28,15 +28,16 @@ inherit the PATH from an earlier successful build in the same session.
 
 | target | what it means | last measured |
 |---|---|---|
-| `make check` | every gate at every format, **never skips** | 3 h 04 min, 24 legs, `de376d8`, 2026-11-12, beside the lead's own runs (2 h 37 min at `d9c8c8c`, shared host) |
+| `make check` | every gate at every format, **never skips** | 2 h 52 min, 26 legs, `61e45bc`, 2026-11-20, shared host; 3 h 17 min, 25 legs, `620c98b`, 2026-11-19, shared host |
 | `make check-quick` | cheaper arguments + the gate cache | 42 min cold, 13 s warm, 19 legs, `9e9879f`, 2026-11-06 |
 | `make check-light` | cheaper arguments + cache + **scaled step counts** | 63 min cold, 24 legs, `e5636a9`, 2026-11-12, shared host |
 
-24 legs each at `d9c8c8c`, and 25 since check_reversal (entry 52):
-count the `--leg` lines under each target, since every round adds some.
+24 legs each at `d9c8c8c`, 25 since check_reversal (entry 52), and 26
+since check_wave (entry 56): count the `--leg` lines under each target,
+since every round adds some.
 A time from a shared host is that host's load as much as the suite's,
-and the rows are not like for like: `9e9879f`'s ran from clean with the
-build, round 4's on a built tree.
+and the rows are not like for like: `9e9879f`'s and round 5's ran from
+clean with the build, round 4's on a built tree.
 
 `make check` is the one whose meaning must not change, so it always
 executes. The cache (`tools/gate_cache.py`) keys on the **artifacts a leg
@@ -76,10 +77,20 @@ software backend can never satisfy a run against a card.
   in.** Round 4 sent gates back four times for that one shape: every
   control on a binary64 record, none on the exact-time pair, only x (the
   particle's and the primary's), only the last sample line. Each time a
-  copy comparing less passed the gate (entries 50, 51). Plant one change
-  a column, on more than one line, and run the mutant that skips each. A
-  mutation script that fails to apply its edit runs the clean copy as
-  the "mutant": make it refuse unless the edit lands exactly once.
+  copy comparing less passed the gate (entries 50, 51). Round 5 sent it
+  back nine more times: P1's seam three, check_wave six (entries 55,
+  56). Plants at both ends of every loop still let a skipped middle line
+  pass, until check_wave held compare_run's printed count of the values
+  it compared to the record's own. Plant one change a column, on more
+  than one line, and run the mutant that skips each. A mutation script
+  that fails to apply its edit runs the clean copy as the "mutant": make
+  it refuse unless the edit lands exactly once.
+- **A run with other arguments is not the gate's run.** Every GPU run of
+  check_wave passed `--keep` outside build/, so check-gpu's own line
+  first ran at the merge, and crashed: its default work directory was
+  build/wave/<pid>, where `make HIP=1 wave` puts the kernel. The lead's
+  seam script, dry-run only on the host twin, had never seen a GPU
+  record's header (entry 58).
 
 ## A rejection leaves state only before the first accepted step
 

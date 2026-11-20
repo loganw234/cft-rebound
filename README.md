@@ -197,6 +197,9 @@ Nothing is vendored by hand.
     src/ias15_cft.c          the port: every floating-point operation is a cft.h call
     src/ias15_zonal.inc      J2 and J4 of one body in the run's own format, the
                              term a problem's `zonal` line names
+    src/wave/                the wave kernel: the port's step in the FMA form at
+                             the hardware's binary64, one source for the host
+                             twin and a GPU kernel (HIP), and gate 4's corpus
     src/ias15_engine.h       the same file as a library: the entry points the shim
                              drives (-DIAS15_CFT_LIBRARY, no main)
     src/ias15_constants.h    GENERATED: the Gauss-Radau constants at every format
@@ -257,6 +260,11 @@ Nothing is vendored by hand.
                                    its own field, a replay with the zonal line, the driver
     tools/check_reversal.py        the gate: a reversal runs its own problem back - its
                                    active and zonal lines carried, each load-bearing
+    tools/check_gpu.py             on a GPU host, in no tier (`make HIP=1 check-gpu`):
+                                   the record-making legs on hip:0, every process
+                                   held to the software backend's record
+    tools/check_wave.py            the gate: the wave kernel's records are the port's,
+                                   bit for bit, on the host twin or on a GPU
     tools/oracle.py          scores a record from its exact bits (mpmath)
     tools/compare_formats.py the round-off floor: one run at two formats, differenced
     tools/horizon.py         percentiles of an ensemble's error against time, and crossings
@@ -267,7 +275,9 @@ Nothing is vendored by hand.
     tools/extract_particle.py      one test particle alone with its wave's massive
                                    bodies, and the wave's schedule re-keyed for it
     tools/compare_run.py     a run's records against this tree: sampled members and
-                             particles rerun here, bit for bit, by name
+                             particles rerun here, bit for bit, by name; with
+                             --producer-files, particles replayed from the
+                             producer's own attempts records and schedules
     tools/sweep.py           the precision-versus-error measurement
     tools/tabulate.py        its tables and figure
     programs/*.cfta          GENERATED: 66 orbit-sequencer programs
@@ -288,6 +298,8 @@ Nothing is vendored by hand.
     docs/bench/              the bench sheet: five figures from real integrations across
                              every operating mode (report.html) and the CSVs behind them
     hw/                      that image's build flow, card series and benchmarks
+    hw/gpu/                  what runs where on a GPU, what a call costs there, and
+                             what each program asks of a GPU's loader
     docs/INTEGRATORS.md      which other REBOUND integrators port well, ranked
     docs/PYTHON.md           reaching the integrator from rebound.Simulation, and
                              the four sharp edges that come with it
@@ -580,6 +592,36 @@ convention for a fixed step.
   exits; `tools/check_zonal.py` holds the trace to cft-fp256's golden
   model.
 
+### Holding another run's records
+
+    python tools/compare_run.py RECORD --problem FILE --format F --arith A
+           [--exe build/ias15_cft] [--programs programs/out]
+           [--seed 1] [--strata 8] [--format-diff F2] [--plan]
+           [--rerun-engine loop|program] [--keep DIR]
+           [--producer-files DIR [--particle-strata P]]
+
+`tools/compare_run.py` holds a run's record, an ensemble's or one
+system's, against this tree: a seeded sample of its members rerun here,
+and test particles of each replayed alone, bit for bit and by name, with
+the physics counters beside each verdict. It reads only the record
+format, so another engine's records are held the same way
+(docs/RING.md). Round 5 added the last line:
+
+- `--producer-files DIR`: the producer's own attempts record and
+  corrector schedule for member k, `DIR/member<k>.att` and
+  `DIR/member<k>.sched`, in the forms `--attempts-out` and
+  `--record-iters` write, each keyed with what `--run-key` prints for
+  the member's rerun. Particles are replayed from them with no rerun of
+  their member, and a file keyed for another run is refused by name.
+- `--particle-strata P`: with `--producer-files`, particles are also
+  sampled in one member from each of P ranges of member index, besides
+  the member sample's (default: `--strata`'s).
+
+Such files hold the producer's arithmetic, not its decisions: a
+member's step sizes, outcomes and passes are held only where it is
+rerun. The driver prints that limit beside its plan (docs/RING.md;
+docs/VALIDATION.md entry 57).
+
 ### The two suite targets, and why one of them skips
 
 `make check` runs every gate at every format. On this host that was about
@@ -725,6 +767,99 @@ run to be bit identical to an uninterrupted one, and
 at a few hundred bodies - where the per-particle summation order could
 drift from REBOUND's and nowhere else - and checks that the 1024-body
 cap is reachable and that 1025 is refused.
+
+### Running the record-making legs on a GPU
+
+    make clean
+    make HIP=1 [HIP_PLATFORM=nvidia HIP_ROOT=... HIP_ARCH=...] all programs
+    make HIP=1 [the same variables] [GPU_EXPECT=TEXT] [GPU_LEGS=a,b] \
+         [GPU_SKIP=a,b] check-gpu
+
+`HIP=1` builds libcft with cft-fp256's GPU backend, the `hip:N` device
+(docs/VALIDATION.md entry 54). `HIP_ROOT`, `HIP_PLATFORM`, `HIP_CUDA`
+and `HIP_ARCH` pass through to libcft's Makefile, and the link takes the
+GPU runtime: libamdhip64 on ROCm, the CUDA runtime under HIP's NVIDIA
+layer. `HIP=1` with `XRT=1` is refused: one libcft holds a card or a
+GPU, never both. The build reads `HIP` only where `OS` is not
+`Windows_NT`, and check-gpu passes it to tools/check_gpu.py on every OS
+(Makefile:988). Round 5 built with `make HIP=1 PYTHON=python3 all
+programs` for the RX 7600 under ROCm, and with `HIP_PLATFORM=nvidia
+HIP_ROOT=/opt/rocm-7.2.4 HIP_ARCH=120` added for the RTX 5060 Ti. Run
+`make clean` first: in a tree first built without HIP, `make HIP=1 all`
+returns 0 and leaves libcft.a software-only, and `hip:0` is then
+refused by name.
+
+`make HIP=1 check-gpu` runs this tree on the GPU as it is
+(tools/check_gpu.py; docs/VALIDATION.md entry 55). It is in none of the
+three tiers, it never consults the gate cache, and where there is no
+`hip:0` it refuses by name. It runs the witness's controls, the routes
+on the device and the GPU seam test, then eleven record-making legs in
+their quick forms, check_dropin in its `--light` one, with
+`CFT_REBOUND_ARTIFACT` naming the device. Every process those legs start
+must print the device's `CFT_HIP_INFO` line, and its record and output
+files must be the software backend's from the same arguments, byte for
+byte but for the backend's name, the self-tests' banners, the timings
+and the routes the device does not publish. A process refused by its
+own arguments before it opens a device, as the software backend refuses
+the same arguments, prints no device line: it is counted apart, and
+still as a device process (docs/VALIDATION.md entry 55).
+
+Under `HIP=1`, check-gpu also builds `wave`, and once the legs pass, its
+second line runs the wave kernel's gate on the GPU,
+`tools/check_wave.py --device gpu --quick` with `GPU_EXPECT` (below).
+`GPU_LEGS` and `GPU_SKIP` do not reach that line.
+
+- `GPU_ARTIFACT`: the device, `hip:0` by default.
+- `GPU_EXPECT`: text the device line must contain, or nothing runs. On a
+  host with two GPUs it names the one meant: in WSL `cft-gpu`, "RTX 5060
+  Ti", with `CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=1` set
+  first, so that `hip:0` is never the RTX 4070.
+- `GPU_LEGS`: only these legs, comma separated. The controls, the routes
+  and the seam then do not run; to keep them with fewer legs, use
+  `GPU_SKIP`.
+- `GPU_SKIP`: every leg but these.
+
+Where strace is installed, each leg runs under it, and every exec of
+`ias15_cft` or `check_dropin` must be one the witness accounts for. On a
+host without it, WSL `cft-gpu` among them, nothing sees a process run
+past the witness. Entry 55 has each leg's measured time on the RX 7600,
+for booking a window.
+
+### The wave kernel
+
+    make wave-host                       # the host twin, its two contraction
+                                         # controls and gate 4's corpus
+    make HIP=1 [the HIP variables] wave  # the kernel, build/wave, with the
+                                         # GPU's controls and corpus
+    build/wave --problem FILE [--dt DT] [--epsilon EPS] [--steps N] [--sample K]
+               [--max-iter M] [--pc-tol-shift S] [--member K] [--no-flag-abort]
+               [--device host|gpu] [--quiet] [--attempts-dir DIR]
+               [--format fp64] [--arith fma] [--cs kahan]
+    python tools/check_wave.py [--build build] [--quick] [--keep DIR]
+           [--device host|gpu] [--wave PATH] [--twin PATH] [--corpus PATH]
+
+`src/wave/` is the port's step under `--arith fma` at binary64, in the
+hardware's own arithmetic, written once for the host and for a GPU. On a
+GPU it runs one system a workgroup, one thread a body. It reads the port's
+problem files and writes the port's record format, naming itself
+`program=wave`, so `tools/compare_run.py --rerun-engine loop` holds its
+records to `ias15_cft --arith fma --format fp64` bit for bit. With
+`--attempts-dir` it writes each member's attempts record and corrector
+schedule, which `compare_run --producer-files` takes. It refuses by name
+what the port has and it has not: any other format, REBOUND's form,
+`--cs augmented`, adaptive modes other than PRS23, softening, a step
+floor, dt files, a system of more bodies than it holds, and a non-finite
+input value.
+
+`tools/check_wave.py` is a leg in all three tiers, on the host twin, and
+every tier builds `wave-host` for it. check-gpu runs it on the kernel as
+`--device gpu --quick --expect '$(GPU_EXPECT)'` (Makefile:990); the
+usage line above, the tool's own, does not show `--expect`, the text
+the GPU's device line must contain, or nothing runs. It holds gate 4's
+arithmetic, the records, the attempts files, the plants and the
+controls (docs/RING.md; docs/VALIDATION.md entry 56). Its scratch is
+`<build>/check_wave/<pid>`, removed after a pass, unless `--keep`. It is
+never `<build>/wave/`, where `make HIP=1 wave` puts the kernel.
 
 ## What was found
 

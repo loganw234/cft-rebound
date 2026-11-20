@@ -3,8 +3,12 @@
 
 # Round 5: the GPU half begins - this tree on a GPU as it is, then the wave kernel at the hardware's binary64
 
-**Status, 2026-11-16: P0 built and smoke-run on the RX 7600; the
-parcels not yet dispatched.**
+**Status, 2026-11-20: all four parcels are on main, and the round closes
+when these records land.** P3 landed at `4a8fe99` and P1 at `fda3b40` on
+2026-11-18, PL, the lead's own gate fixes, at `620c98b` on 2026-11-19,
+and P2 at `61e45bc` on 2026-11-20, each on its verifier's READY and a
+full make check (docs/VALIDATION.md entries 55 to 58; P0 is entry 54).
+The pin stays at cft-fp256 `eae74e3`; its move waits on Logan's word.
 
 Logan approved the round on 2026-11-16 ("the plan is also approved"),
 after its outline: the pin to G1C, this tree on `hip:0`, then P5 at
@@ -35,9 +39,15 @@ through it on the software backend.
 lead on 2026-11-16 and its docs/HOSTAPI.md, "The GPU backend":
 - **On the GPU:**
   - elementwise `cft_run`, one `cft_sf_compute` an element;
-  - `cft_reduce`, softfloat.c's tree, one level a launch;
+  - `cft_reduce`, softfloat.c's tree, one level a launch. This port's
+    default path never calls it: the corrector's maxima are `cft_class`
+    and a host loop unless `reduce_seg` is forced on (src/ias15_cft.c:1835).
+    Under gdb on the RX 7600, P1 found no backend reduction call, and V1
+    no entry to `cft_reduce` or `cft_reduce_seg`;
   - `cft_program_run_ex`, one thread a lane. Scratch depth is fixed at
-    256 slots and banks at 512. A program using augmentedAddition's codes
+    256 slots and banks at 512. This port's widest program,
+    gravity-fold256-fp128, uses all 256 slots: it fits, with no margin
+    (P1, measured on both GPUs). A program using augmentedAddition's codes
     AUGADD and AUGERR is refused by its loader, by name. An index table is
     refused at the call (device.c:861 and :2281; V0). `seq_features` is
     0x75f1f: the software backend's less INDEXED and AUGADD.
@@ -46,8 +56,9 @@ lead on 2026-11-16 and its docs/HOSTAPI.md, "The GPU backend":
   GPU; classification, centring and rounding run on the host
   (divsqrt.c's `divsqrt_via_program`).
 - **On the host, on every device:** `cft_augmented_add`, which this
-  port's exact-time clock calls at every step (src/ias15_cft.c:3049)
-  and its compensated sums under `--cs augmented` (:1680).
+  port's exact-time clock calls at every step attempt, rejected ones
+  included (src/ias15_cft.c:3049; P1 and V1 under gdb, 5 calls in 5
+  attempts), and its compensated sums under `--cs augmented` (:1680).
 - **Refused:** `cft_get_image_id`, since a GPU loads no image; and a
   non-zero `cft_open_ex` depth, which this port never asks for (it calls
   `cft_open`).
@@ -140,9 +151,12 @@ the earliest, and shares both GPUs.
   this repository and its two pins, carried over SSH. Nothing was
   fetched from the web, and check-pins passes there.
 - **Done:** the smoke above.
-- **To do:** VALIDATION entry 54, the round's ledger, and P0's full
-  `make check` on the desktop, where `HIP=0` changes nothing. The build
-  in WSL `cft-gpu` is P1's, in its first window there.
+- **Done:** VALIDATION entry 54, the round's ledger, and P0's full
+  `make check` on the desktop at `d7b5047`, where `HIP=0` changes
+  nothing: rc 0, 25 legs, 1,463 lines beginning `  ok `, 0 FAIL, 06:06
+  to 09:38 on 2026-11-16, on a shared host (r5-check-d7b5047.log). main
+  fast-forwarded to `5b1cac6` and was pushed that morning. P1 built the
+  tree in WSL `cft-gpu` (VALIDATION entry 55).
 - **Found, not fixed:**
   - GCC 13 on Ubuntu warns at src/ias15_cft.c:2155 that `vcopy`'s
     source is null. It does so only in the library object
@@ -166,18 +180,30 @@ Every record the suite makes, made on `hip:0`, must be the software
 backend's, or its leg refuses by name. Beside the bits go what the
 default path costs on a GPU, so that P2 knows what it replaces.
 
+Measured by P1: a whole-output comparison sets aside the header's
+`backend=` value, the trailer's timings and the `by=` of a route the
+device does not publish, and also the first lines of the door and
+corrector self-tests, which name the backend they ran on.
+
 - **Where:** the RX 7600 first, then the RTX 5060 Ti.
 - **What:** the suite's record-making legs in `--quick`, with
   `CFT_REBOUND_ARTIFACT=hip:0`:
   - check_records, check_equivalence, check_program_engine at binary64;
   - check_ensemble, check_ring, check_replay and check_compare_run;
   - check_zonal and check_reversal;
-  - check_corrector and check_dropin, through the registered integrator.
+  - check_corrector and check_dropin. check_dropin goes through the
+    registered integrator; check_corrector does only in its `--library`
+    step, and otherwise runs the standalone program (P1's report, item 3;
+    this line first said both went through it).
 
   A full `make check` is out of reach. On kepler the calls make a run 7
   to 30 times slower, and V0 measured `check_dropin --light` at 449 s in
   software on nvidia-box, so roughly 1 to 3.5 hours on `hip:0`. Book
-  such windows long, or hold a named subset.
+  such windows long, or hold a named subset. Measured: inside
+  check_corrector's `--library` step, `check_dropin --light` took 62 min
+  alone on the RTX 5060 Ti (P1, at `20dad58`, 2026-11-16) and 66 min
+  there (V1, at `ab75fbe`, 2026-11-18), each time with its host, the
+  desktop, shared.
 - **Prove the GPU ran.** A leg that quietly ran the software backend is
   a stand-in, and is a finding. Each run's `CFT_HIP_INFO` device line is
   required beside its verdict. The record's `backend=hip:0` only echoes
@@ -195,12 +221,16 @@ default path costs on a GPU, so that P2 knows what it replaces.
 - **What runs where, confirmed by measurement:** the clock's augmented
   sum on the host at every step; the divides and square roots by the
   program route; the index-table routes absent; programs within 256
-  scratch slots and 512 bank slots.
+  scratch slots and 512 bank slots. P1 measured the first at every step
+  attempt, rejected ones included, and the last with no margin: one
+  program uses all 256 slots (VALIDATION entry 55).
 - **Costs:** per call and per step, at each format, on each GPU,
   MEASURED and labelled, on the trailer's `wall_seconds`. Its `seconds`
   and `steps_per_s` are CPU time, 1.5 to 2.0 times the wall time on
   `hip:0` (V0, over 24 runs; BELIEVED, not measured: HIP's own threads
-  are the cause). One run a row ranks nothing
+  are the cause). That ratio is ROCm's: P1 measured 1.54 to 1.92 on the
+  RX 7600, and 1.02 to 1.03 on the RTX 5060 Ti through HIP's NVIDIA
+  layer, in all 12 of its cost rows there. One run a row ranks nothing
   within the noise (CLAUDE.md).
 - **Physics counters beside the bits,** as every gate prints them.
 - **Not P1's:** any change to the port's source. A refusal that would
@@ -223,6 +253,12 @@ holds it to the CPU port bit for bit.
   subnormals, on both toolchains by default (no fast-math). P2's first
   gate measures that on a corpus against libcft's software binary64,
   `cft_div` and `cft_sqrt` included, before anything rests on it.
+  - **Contraction, measured by P2 (2026-11-16).** The control P2's brief
+    named, the checked source built with contraction on, cannot fail as
+    worded: with the flag checks in, every product is read by its check,
+    and that build gave the shipped build's records on g++ and on nvcc.
+    The control that bites compiles the checks out: with contraction off
+    that source passes compare_run, and with it on it fails.
 - **Flags.** A GPU has no IEEE flags. Where the port aborts on OVERFLOW,
   DIVBYZERO or UNDERFLOW, the kernel checks the results itself and
   stops by name. Anything it cannot check is a stated limit.
@@ -232,7 +268,12 @@ holds it to the CPU port bit for bit.
   - gravity in ascending pair order, with the `active` split;
   - J2 and J4 in src/ias15_zonal.inc's order;
   - the step control;
-  - the exact-time clock, an augmented sum done as TwoSum in binary64.
+  - the exact-time clock, an augmented sum as libcft's
+    `cft_augmented_add` computes it. Not TwoSum in binary64, as this line
+    first said: libcft's augmentedAddition rounds an exact tie toward
+    zero, where TwoSum rounds it to even. P2 measured 7,259 such ties in
+    152,735 cases, and a TwoSum clock's records differ from the port's in
+    two of the three cases it tried (2026-11-16).
 
   So its records are `ias15_cft --arith fma --format fp64`'s, bit for
   bit, every column, member by member.
@@ -269,9 +310,23 @@ must take them: not built."
   schedule, in the formats ias15_cft's `--attempts-out` and
   `--record-iters` write. It samples particles by replaying them against
   the producer's own schedule, with no rerun of the member.
+  - **Measured by P3: a producer's files hold its arithmetic, not its
+    decisions.** A replay takes each attempt's dt and outcome, and its
+    passes, as given. A producer whose first attempt took 5 passes where
+    this tree's takes 7, so that 2 of its 3 sample lines are not this
+    tree's, has that member held, NOT RERUN, both its particles
+    IDENTICAL (P3's GATE 1b, whose run ends rc 1 because another member,
+    rerun, FAILs; VALIDATION entry 57). Where nothing else differs, the
+    run says RESULT: PASS (V3, on a three-wave ring, wave 0 at 2 passes
+    where this tree takes 4). The same member FAILs once it is rerun. The
+    decisions are held only in a member that is rerun.
 - **What it is held to:**
   - with ias15_cft as the producer, particles sampled from its own files
-    are identical to those sampled through a rerun;
+    are identical to those sampled through a rerun. This test cannot fail
+    by itself: ias15_cft's files are a rerun's to the byte, and a driver
+    that replays rerun members from the rerun's schedule instead, while
+    naming the producer's, passed it (P3's mutant M1). GATE 1b's producer,
+    whose exit test is not this tree's, fails such a driver;
   - one change planted in each file, the attempts record and the
     schedule, is caught by name;
   - a schedule from another wave is refused by its run key.
@@ -358,3 +413,84 @@ where this round's GPUs change them:
   MI300X:** after P2's kernel is held at small sizes. The MI300X waits on
   AMD's time.
 - **The card:** nothing in this round needs it.
+
+## What the round found against this plan
+
+Each item was measured unless it says otherwise. Its record is in
+docs/VALIDATION.md, by entry.
+
+**Where it starts, and P1** (entries 54 and 55):
+- `cft_reduce` runs on the GPU, but this port's default path never calls
+  it.
+- The 256 scratch slots fit with no margin: gravity-fold256-fp128 uses
+  all of them.
+- The clock's augmented sum runs on the host at every step attempt,
+  rejected ones included, not at every step.
+- The trailer's CPU time is 1.5 to 2.0 times its wall time under ROCm,
+  and 1.02 to 1.03 under HIP's NVIDIA layer.
+- A whole-output comparison must also set aside the door and corrector
+  self-tests' first lines, which name the backend.
+- check_corrector goes through the registered integrator only in its
+  `--library` step.
+- `check_dropin --light` took 62 min alone on the RTX 5060 Ti, and 66
+  min there, inside the plan's estimate of 1 to 3.5 hours.
+- Of the legs outside P1's list, gate_real's self-contained mode refuses
+  `hip:0` on its identity check, check_checkpoint passes there as it
+  is, and check_seams fails only on the forced routes the device does
+  not publish. P1 first read gate_real's refusal as binding the other
+  two.
+- The GPU seam as worded, one difference planted and shown caught, was
+  not enough. P1's seam went back three times, each time for a copy of
+  compare_run that compared less and passed.
+
+**P2** (entry 56):
+- The clock is not TwoSum in binary64: libcft rounds an exact tie toward
+  zero.
+- The contraction control as worded cannot fail on the checked source.
+  The control that bites compiles the flag checks out.
+- The flags the port aborts on include INVALID, which the plan's list
+  leaves out.
+- Under nvcc, a bit-level negation or abs is an add, which quiets a
+  signaling NaN.
+- Gate 4's corpus depended on the compiler's order of argument draws.
+- MinGW's library fma and sqrt are not correctly rounded, and g++ calls
+  them at -O0.
+- GPU-E2's estimates priced libcft's software binary64, not the
+  hardware's, so they are not the kernel's.
+- The port computes a ring wave's test-test pairs and the kernel does
+  not, so two coincident test particles stop only the port.
+- check_wave went back six times for copies of compare_run, or of
+  check_wave, that did less and passed, and once for its work directory,
+  which was the kernel's own path (and entry 58).
+- The plan left the ladder's full sizes out of the round. P2's rate rows
+  ran GPU-E2's rungs over 10 orbits anyway, 527 waves on the RX 7600 and
+  1,755 on the 5060 Ti, one run each, with two members of each held
+  IDENTICAL by compare_run. The rungs were not compared with each other.
+
+**P3** (entry 57):
+- A producer's files hold its arithmetic, not its decisions; those are
+  held only in a member that is rerun.
+- The plan's first P3 test cannot fail by itself. GATE 1b, a producer
+  whose exit test is not this tree's, can.
+- A planted pass count is caught by the trailer's counters, not by the
+  bits.
+- "With no rerun of the member" never applies to a rejecting wave, which
+  stays in the member sample.
+- compare_run's output at first said a NOT RERUN member was held, and
+  passed a producer whose exit test stopped two passes early. The limit
+  is now printed, and held word for word.
+
+**The integration** (entry 58):
+- The gate cache's keys missed files that legs execute or read: the
+  program images in a fresh clone, check_ensemble's images, 6 inputs in 3
+  legs, and the constants leg's REBOUND file. PL closed them.
+- A GPU run with other arguments than the gate's is not the gate's run.
+  check_wave's own line in check-gpu first ran at the merge, and crashed
+  on its work directory; the lead's seam script first met a GPU record's
+  header there too.
+- cft-fp256's GPU round 2 landed during the round. Round 5 stayed on
+  `eae74e3` at Logan's word, and the pin moves only on that word, after
+  the close.
+
+**Not in this round, as planned:** binary128 and binary256 on a GPU, the
+ladder compared rung against rung, and the MI300X.
