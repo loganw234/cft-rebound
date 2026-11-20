@@ -81,9 +81,19 @@
 #        compare_run's own particle lines name them) and leave the others
 #        IDENTICAL; and every member it is not in must stay IDENTICAL, its
 #        particles too. A record copy holds up to one plant a member, and
-#        each member is left out of one copy of its own. One closing verdict
-#        holds the coverage, from the plants actually made: a class, line
-#        or column missing fails by name;
+#        each member is left out of one copy of its own. Each copy must
+#        hold exactly its planned values, measured against the clean record
+#        value by value (measured_plants()) - by member, column, body and
+#        the sampled line the plan names, found apart from the planting - or
+#        it is refused by name. One closing verdict (coverage()) holds the
+#        coverage from those measured values, against classes it reads from
+#        the record itself (own_columns(), COUNTERS), with record_classes()
+#        required to agree: every class in every member, on the member's
+#        first and last sampled lines (found there, and required to differ),
+#        the particle class only on particles the clean compare_run replays,
+#        each on its own body, every column at least once, and each member
+#        left out of a copy that planted another and held it IDENTICAL with
+#        its particles; a gap fails by name;
 #      - E's plants: a column on two lines of the one-system record;
 #      - the attempts comparison: a member's attempts record with one dt
 #        changed must not be the port's;
@@ -532,6 +542,79 @@ def plants(text, clean):
     return copies
 
 
+def own_columns(text):
+    """The coverage verdict's own reading of a record, apart from Cols and
+    record_classes(): the `# columns:` words (the step field, the fields
+    after it, the per-body fields, the exact-time pair), the `# active`
+    count, each member's sampled lines' indices and each member's trailer
+    keys."""
+    rows = text.splitlines()
+    words = next((l for l in rows if l.startswith("# columns:")), "# columns:").split(":", 1)[1].split()
+    def between(a, b):
+        return words[words.index(a) + 1:words.index(b)] if a in words and b in words else []
+    scalars = between("step", "then")
+    per = between("body", ";")
+    pair = words[words.index("pair") + 1:] if "pair" in words else []
+    act = re.search(r"^# active (\d+)", text, re.M)
+    samples, keys = {}, {}
+    for l in rows:
+        t = l.split()
+        if t[:1] == ["system"] and len(t) > 4 and t[2] == "sample":
+            samples.setdefault(int(t[1]), []).append(int(t[3]))
+        elif t[:2] == ["#", "system"] and len(t) > 3 and t[3].startswith("steps_done="):
+            keys[int(t[2])] = [kv.split("=", 1)[0] for kv in t[3:] if "=" in kv]
+    return {"step": "step" in words, "scalars": scalars, "per": per, "pair": pair,
+            "active": int(act.group(1)) if act else None, "samples": samples, "keys": keys}
+
+
+def measured_plants(clean, copy):
+    """What a copy holds, measured against the clean record value by value:
+    each difference as (member, where, column, body) - where is the sample's
+    index on a sample line, "trailer" on a member's trailer and "total" on
+    the record's own total; column is a `# columns:` word ("step" for the
+    step field) or a trailer key; body is the body's index for a per-body
+    column. And the lines that differ in any other way."""
+    own = own_columns(clean)
+    a, b = clean.splitlines(), copy.splitlines()
+    nsc, nper = len(own["scalars"]), len(own["per"])
+    found, other = [], []
+    if len(a) != len(b):
+        other.append("%d lines, where the clean record has %d" % (len(b), len(a)))
+    for i, (x, y) in enumerate(zip(a, b)):
+        if x == y:
+            continue
+        tx, ty = x.split(), y.split()
+        if tx[:1] == ["system"] and len(tx) == len(ty) and tx[:4] == ty[:4] and len(tx) > 4 and tx[2] == "sample":
+            w, k = int(tx[1]), int(tx[3])
+            bar = tx.index("|")
+            for j, (u, v) in enumerate(zip(tx, ty)):
+                if u == v:
+                    continue
+                if j == 4:
+                    found.append((w, k, "step", None))
+                elif 5 <= j < 5 + nsc:
+                    found.append((w, k, own["scalars"][j - 5], None))
+                elif 5 + nsc <= j < bar and nper:
+                    body, f = divmod(j - 5 - nsc, nper)
+                    found.append((w, k, own["per"][f], body))
+                elif j > bar and j - bar - 1 < len(own["pair"]):
+                    found.append((w, k, own["pair"][j - bar - 1], None))
+                else:
+                    other.append("line %d, field %d" % (i + 1, j + 1))
+        elif tx[:2] == ty[:2] and (tx[:2] == ["#", "system"] or x.startswith("# steps_done=")) and len(tx) == len(ty):
+            w = int(tx[2]) if tx[1] == "system" else None
+            for u, v in zip(tx, ty):
+                if u != v:
+                    ku, kv = u.split("=", 1)[0], v.split("=", 1)[0]
+                    if ku != kv or "=" not in u:
+                        other.append("line %d, %r for %r" % (i + 1, v, u))
+                    else:
+                        found.append((w, "trailer" if w is not None else "total", ku, None))
+        else:
+            other.append("line %d" % (i + 1))
+    return found, other
+
+
 def hold_plants(work, tag, text, clean, prob, cft):
     """THE PLANTS (part 5): copies of an ensemble record of three members,
     one value planted a member a copy, each held to what compare_run must
@@ -543,11 +626,19 @@ def hold_plants(work, tag, text, clean, prob, cft):
     sampled = {w: [i for i, l in enumerate(rows) if l.startswith("system %d sample " % w)][1:] for w in range(3)}
     trail = {w: next(i for i, l in enumerate(rows) if l.startswith("# system %d steps_done=" % w)) for w in range(3)}
     total = next(i for i, l in enumerate(rows) if l.startswith("# steps_done="))
-    done = []                                           # (member, class, column, line) of every plant made
-    copy_members = []                                   # the members each copy planted, as made
+    # each member's first and last sampled lines, by their sample indices
+    # (past the initial sample 0), read here apart from `sampled`: the line a
+    # plan names is held to these, not to the line the planting chose
+    own = own_columns(text)
+    ends = {}
+    for w, ks in own["samples"].items():
+        ks = sorted(k for k in ks if k >= 1)
+        ends[w] = (ks[0], ks[-1]) if ks else (None, None)
+    measured = []                                       # (copy, member, where, column, body), measured
+    left_out = set()                                    # members held IDENTICAL beside another member's plant
     for n, copy in enumerate(copies, 1):
         mut = list(rows)
-        made = []
+        made, planned = [], []
         for w, cls, col, body, at in copy:
             if body == "missing":
                 # the clean compare_run named no such particle of member w
@@ -571,6 +662,7 @@ def hold_plants(work, tag, text, clean, prob, cft):
                 # (as many as compare_run's line says) and its own body
                 carries = (lambda q, body=body: body is None or (q[2] is not None and (body < q[2] or body == q[1])))
                 desc = "%s, %s on line %d (%s to %s)" % (cls, label, i + 1, old, new)
+                planned.append((w, ends.get(w, (None, None))[0 if at == 0 else 1], col, body))
             elif cls == "step":
                 i = sampled[w][at]
                 toks = mut[i].split()
@@ -582,6 +674,7 @@ def hold_plants(work, tag, text, clean, prob, cft):
                         r"its place makes it sample \d+ at step %s" % (w, i + 1, new, old))
                 preg, carries = None, None
                 desc = "step, the step field on line %d (%s to %s)" % (i + 1, old, new)
+                planned.append((w, ends.get(w, (None, None))[0 if at == 0 else 1], "step", None))
             else:
                 i = trail[w]
                 toks = mut[i].split()
@@ -607,9 +700,24 @@ def hold_plants(work, tag, text, clean, prob, cft):
                     carries = lambda q: True
                 desc = "counter, the trailer's %s on line %d (%s to %s%s)" % (
                     col, i + 1, old, new, ", the total with it" if col == "steps_rejected" else "")
+                planned.append((w, "trailer", col, None))
+                if col == "steps_rejected":
+                    planned.append((None, "total", "steps_rejected", None))
             made.append((w, cls, desc, mreg, preg, carries))
-            done.append((w, cls, col, at))
-        copy_members.append({m[0] for m in made})
+        # what the copy holds, measured against the clean record value by
+        # value: exactly its planned values, or it is refused by name
+        meas, odd = measured_plants(text, "\n".join(mut))
+        lost = sorted(set(planned) - set(meas), key=str)
+        extra = sorted(set(meas) - set(planned), key=str)
+        verdict(meas and not odd and not lost and not extra,
+                "%s copy %d holds exactly its %d planned value(s), measured against the clean record: %s%s" % (
+                    tag, n, len(planned), "; ".join("member %s %s %s%s" % (
+                        m[0], "sample %d" % m[1] if isinstance(m[1], int) else m[1], m[2],
+                        "" if m[3] is None else " of body %d" % m[3]) for m in sorted(meas, key=str)) or "NOTHING",
+                    "" if (meas and not odd and not lost and not extra) else
+                    "; NOT SO: planned and not in the copy: %s; in the copy and not planned: %s; other: %s" % (
+                        lost or "none", extra or "none", odd or "none")))
+        measured.extend((n,) + m for m in meas)
         path = os.path.join(work, "%s_plants_%d.rec" % (tag, n))
         write(path, "\n".join(mut) + "\n")
         rc, out = compare(path, prob, cft, 3)
@@ -617,6 +725,13 @@ def hold_plants(work, tag, text, clean, prob, cft):
         parts = particle_lines(out)
         planted = {m[0] for m in made}
         quiet = [u for u in range(3) if u not in planted]
+        touched = {m[0] for m in meas if m[0] is not None}
+        for u in range(3):
+            # left out, measured: nothing of u's in the copy, another member's
+            # value in it, and u held IDENTICAL with its two particles
+            if u not in touched and touched - {u} and said.get(u) == "IDENTICAL" and \
+                    [q[3] for q in parts if q[0] == u] == ["IDENTICAL", "IDENTICAL"]:
+                left_out.add(u)
         # a member a copy leaves alone: IDENTICAL, its two particles too
         still = all(said.get(u) == "IDENTICAL" and len([q for q in parts if q[0] == u]) == 2 and
                     all(q[3] == "IDENTICAL" for q in parts if q[0] == u) for u in quiet)
@@ -643,31 +758,108 @@ def hold_plants(work, tag, text, clean, prob, cft):
                 for l in out.splitlines():
                     if l.startswith(("member %d " % w, "  member %d: particle" % w, "RESULT")):
                         print("      " + l[:300])
-    # THE COVERAGE, from the plants made, against the classes the record
-    # carries, read again from the record: every class in every member - a
-    # sample-line class on the member's first sampled line and on its last -
-    # and every column of every class at least once; each gap by name
-    classes, counter, E, _ = record_classes(text)
+    coverage(tag, text, clean, measured, left_out)
+
+
+def coverage(tag, text, clean, measured, left_out):
+    """THE COVERAGE, part 5's closing verdict: from what the copies
+    measurably hold (measured_plants(), each value as (copy, member, where,
+    column, body)) and the members measurably left out, against classes
+    read here apart from record_classes(): own_columns()' reading of the
+    `# columns:` words, of each member's trailer keys and of the `# active`
+    count, and COUNTERS. Every class in every member - a sample-line class
+    on the member's first sampled line and on its last, found here and
+    required to differ; the particle class only on a particle the clean
+    compare_run replays, and each such particle planted on its own body -
+    every column at least once, and each member left out of a copy that
+    planted another member, held IDENTICAL with its particles there.
+    record_classes(), which the plan is dealt from, must agree. Each gap by
+    name."""
+    own = own_columns(text)
+    members = sorted(own["samples"])
+    nact = own["active"]
+    replayed = {}                                       # member -> the bodies of the particles compare_run replays
+    for q in particle_lines(clean):
+        replayed.setdefault(q[0], set()).add(q[1])
+    want = [("schedule", own["scalars"] + own["pair"]), ("massive", own["per"]), ("particle", own["per"])]
+    if own["step"]:
+        want.append(("step", ["step"]))
+    counters = list(COUNTERS)
     gaps = []
-    for w in range(E):
-        for cls, _ in classes:
-            for at, which in ((0, "first"), (-1, "last")):
-                if not any(d[0] == w and d[1] == cls and d[3] == at for d in done):
-                    gaps.append("class %s not planted in member %d on its %s sampled line" % (cls, w, which))
-        if counter[1] and not any(d[0] == w and d[1] == "counter" for d in done):
+    rc_classes, rc_counter, rc_E, rc_nact = record_classes(text)
+    if [(c, list(cl)) for c, cl in rc_classes] != [(c, list(cl)) for c, cl in want]:
+        gaps.append("record_classes() gives the classes %s, where the record carries %s" % (
+            "; ".join("%s (%s)" % (c, " ".join(cl)) for c, cl in rc_classes),
+            "; ".join("%s (%s)" % (c, " ".join(cl)) for c, cl in want)))
+    # the counters as sets of keys: a trailer's own order is not COUNTERS'
+    if sorted(rc_counter[1]) != sorted(counters):
+        gaps.append("record_classes() gives the counters %s, where COUNTERS names %s (order aside)" % (
+            " ".join(rc_counter[1]) or "none", " ".join(counters)))
+    if (rc_E, rc_nact) != (len(members), nact):
+        gaps.append("record_classes() gives %s members and active %s, where the record has %d and %s" % (
+            rc_E, rc_nact, len(members), nact))
+    for w in members:
+        if sorted(own["keys"].get(w, [])) != sorted(counters):
+            gaps.append("member %d's trailer keys are %s, where COUNTERS names %s (order aside)" % (
+                w, " ".join(own["keys"].get(w, [])) or "none", " ".join(counters)))
+
+    def kind(m):
+        """A measured difference's class, read here: a per-body column is
+        massive below the active count, and particle only on a particle the
+        clean compare_run replays for that member."""
+        if m[2] == "trailer":
+            return "counter" if m[3] in counters else None
+        if not isinstance(m[2], int):
+            return None
+        if m[3] == "step":
+            return "step"
+        if m[3] in own["scalars"] or m[3] in own["pair"]:
+            return "schedule"
+        if m[3] in own["per"] and m[4] is not None and nact is not None:
+            if m[4] < nact:
+                return "massive"
+            return "particle" if m[4] in replayed.get(m[1], ()) else None
+        return None
+    have = [(m[1], kind(m), m[2], m[3], m[4]) for m in measured]    # (member, class, where, column, body)
+    lines = {}
+    for w in members:
+        ks = sorted(k for k in own["samples"][w] if k >= 1)
+        if len(ks) < 2 or ks[0] == ks[-1]:
+            gaps.append("member %d has no two sampled lines to plant first and last on (%s)" % (w, ks))
+            continue
+        lines[w] = (ks[0], ks[-1])
+        for cls, _ in want:
+            for k, which in ((ks[0], "first"), (ks[-1], "last")):
+                if not any(h[0] == w and h[1] == cls and h[2] == k for h in have):
+                    gaps.append("class %s not planted in member %d on its %s sampled line (sample %d)" % (
+                        cls, w, which, k))
+        if not any(h[0] == w and h[1] == "counter" for h in have):
             gaps.append("class counter not planted in member %d" % w)
-    for cls, columns in classes + [counter]:
+        if not replayed.get(w):
+            gaps.append("member %d has no particle the clean compare_run replays" % w)
+        for b in sorted(replayed.get(w, ())):
+            if not any(h[0] == w and h[1] == "particle" and h[4] == b for h in have):
+                gaps.append("member %d's replayed particle, body %d, never planted on its own body" % (w, b))
+    for cls, columns in want + [("counter", counters)]:
         for col in columns:
-            if not any(d[1] == cls and d[2] == col for d in done):
+            if not any(h[1] == cls and h[3] == col for h in have):
                 gaps.append("column %s of class %s not planted in any member" % (col, cls))
-    left = sorted({u for u in range(E) if any(u not in got for got in copy_members)})
-    if left != list(range(E)):
-        gaps.append("member(s) %s never left out of a copy" % ", ".join(str(u) for u in range(E) if u not in left))
-    verdict(E == 3 and not gaps, "%s plants' coverage, from the %d plants made in %d copies: the record carries members "
-            "0 to %d and the classes %s; each class planted in each member, a sample-line class on the member's first "
-            "and last sampled lines, every column at least once, and each member left out of a copy%s" % (
-                tag, len(done), len(copy_members), E - 1,
-                "; ".join("%s (%s)" % (c, " ".join(cl)) for c, cl in classes + [counter]),
+    for w in members:
+        if w not in left_out:
+            gaps.append("member %d never left out of a copy that planted another member and held it IDENTICAL with "
+                        "its particles" % w)
+    verdict(len(members) == 3 and not gaps,
+            "%s plants' coverage, measured from the %d values the copies hold: the record carries members %s and "
+            "the classes %s; each class planted in each member, a sample-line class on the member's first and last "
+            "sampled lines (%s), the particle class on the particles compare_run replays, each on its own body "
+            "(%s), every column at least once, record_classes() agreeing, and each member left out of a copy that "
+            "planted another, held IDENTICAL with its particles (%s)%s" % (
+                tag, len(measured), ", ".join(map(str, members)),
+                "; ".join("%s (%s)" % (c, " ".join(cl)) for c, cl in want + [("counter", counters)]),
+                ", ".join("member %d: samples %d and %d" % ((w,) + lines[w]) for w in sorted(lines)),
+                ", ".join("member %d: bodies %s" % (w, " ".join(map(str, sorted(replayed[w]))))
+                          for w in sorted(replayed)) or "none",
+                ", ".join(map(str, sorted(left_out))) or "none",
                 "" if not gaps else ": NOT SO: " + "; ".join(gaps)))
 
 
