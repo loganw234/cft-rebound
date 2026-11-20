@@ -8200,7 +8200,8 @@ a producer whose member 4 took 5 passes on its first attempt where this
 tree takes 7, its record that schedule's replay, so that 2 of its 3
 sample lines are not this tree's. With that member NOT RERUN, the driver
 holds it, both its particles IDENTICAL. GATE 1b's run ends rc 1, since
-member 2, rerun, FAILs (check_compare_run.py:836); where nothing else
+member 2, rerun, FAILs (check_compare_run.py:836 at `4a8fe99`, :863
+since PL); where nothing else
 differs, the run says RESULT: PASS, as V3 measured on a three-wave ring
 of make_ring.py's, wave 0 at 2 passes where this tree takes 4. The same
 member FAILs once it is rerun. So the decisions are held only where the
