@@ -8830,12 +8830,11 @@ temporary directories are masked, except the new build's id line and
 that sha256 line. Entry 45's six wide-state digests are in both logs at
 the same counts.
 
-**The branch tip.** `3048046`, the records, ran its own full make
-check: rc 0, 26 legs, 1649 lines beginning `  ok `, 0 FAIL, and 18
-lines beginning RESULT, all PASS, from 06:10:33 to 09:11:40 on
-2026-11-21. Every leg has `6e874c4`'s counts, in the same order. The
-commit after it changes only this entry, so that suite holds it docs
-aside.
+**The branch tip.** `3048046`, the records, ran its own full make check:
+rc 0, 26 legs, 1649 lines beginning `  ok `, 0 FAIL, and 18 lines
+beginning RESULT, all PASS, from 06:10:33 to 09:11:40 on 2026-11-21.
+Every leg has `6e874c4`'s counts, in the same order. The commit after it
+changes only this entry, so that suite holds it docs aside.
 
 ### The same integrations through both libraries
 
@@ -8864,11 +8863,11 @@ differ:
 own builds at both pins:
 - **155 pairs, 150 of them identical,** record for record: 134 records,
   plus 16 selftest, `--dump-constants` and probe runs. The other 5 were
-  VP's own argument errors, refused identically by both builds; their
-  corrected forms are among the 150.
+  VP's own argument errors, refused identically by both builds; runs of
+  the same kinds, with the arguments they need, are among the 150.
 - **What they covered:**
-  - all 6 problems at 3 formats on 3 engines, at other dt, epsilon and
-    steps;
+  - all 6 problems at 3 formats, on the loop engine in both orders and
+    on the program engine, at other dt, epsilon and steps;
   - `--cs augmented`; adaptive modes 0, 1 and 3; softening with a
     minimum dt; `--max-iter`; `--pc-tol-shift`;
   - all four routes forced on, every route carrying calls in each such
@@ -8895,8 +8894,8 @@ own builds at both pins:
     ways, are identical to both straight runs;
   - 34 of 34 controls differ.
   - The archives differ only in the identity's commit and in REBOUND's
-    walltime, rand_seed and particle-pointer bytes, which also differ
-    between two saves by one build.
+    walltime, walltime_last_steps, rand_seed and particle-pointer bytes,
+    which also differ between two saves by one build.
 
 **`make example`** at both pins: rc 0 (VP, MEASURED in its own trees;
 the lead's logs carry no rc line), and the same 75 lines once the tree's
