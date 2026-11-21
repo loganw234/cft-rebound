@@ -1003,8 +1003,9 @@ what a GPU run is held to. Everything was measured at cft-fp256
 merge, GPU check and suite. The open notes stand in the merge messages
 and in entries 55 to 58: P1's three, PL's seven and P2's nine.
 
-**What waits on Logan's word: the pin's move,** off cft-fp256 `eae74e3`
-to 9e8ff270, its GPU round 2's whole state, or to 340cd287 or c3c39c87,
-which are docs only past it (READ by the lead, in its repository).
-Logan's word of 2026-11-18 was "Agreed, finish round 5 on eae74e3e
-first": the move is its own step, after the close.
+**The pin's move, after the close** (docs/VALIDATION.md entry 59): off
+cft-fp256 `eae74e3` to `96d99d8`, G3A's main, at Logan's word of
+2026-11-20: "Wait for G3A's main", then "Keep 96d99d84" when G3A2
+landed at 5ac396d3 the same day. Logan's word of 2026-11-18 had been
+"Agreed, finish round 5 on eae74e3e first", so round 5 ran on `eae74e3`
+throughout.

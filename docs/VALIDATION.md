@@ -8718,3 +8718,181 @@ Both were resumed by message, and nothing needed re-running.
   5060 Ti.
 - **A full suite on Linux** at any of these merges.
 - **These records' own merge and suite,** which follow this entry.
+
+## 59. The pin moves to cft-fp256 `96d99d8`, G3A's main: the same bits from the same calls through the new library, and `make HIP=1 check-gpu` in full on both GPUs
+
+**2026-11-20 and 21.** The runs used:
+- this desktop, on the software backend, booked shared (B0232);
+- the RTX 5060 Ti through WSL cft-gpu (B0234 and B0235, with B0238 for
+  the desktop's CPUs);
+- the RX 7600 on nvidia-box (B0236 and B0237, then B0239 and B0240,
+  after the first two ended at 23:30 with the run still going and it ran
+  45 minutes unbooked);
+- MSYS2 mingw64 gcc, Miniconda Python 3.12.15 with mpmath 1.3.0, and
+  REBOUND at bdfda4bd.
+
+The lead's commits on `pin-g3a`, from main at `a87dabf`, are:
+- `6e874c4`, the pin;
+- this one, the records.
+
+It is Logan's word of 2026-11-20. Asked which cft-fp256 commit the pin
+should move to, Logan answered "Wait for G3A's main". Later that day
+cft-fp256's G3A2 landed, and Logan answered "Keep 96d99d84". As entries
+38 and 53 did, this entry moves the pin and establishes one thing: the
+calls this port makes return the same bits through the new library. It
+adopts nothing, and this repository sets no `CFT_HIP_TIER`.
+
+### Which commit
+
+`96d99d84760e0e4381d7b15dad42a101c3ed1718` is cft-fp256's main as pushed
+on 2026-11-20 at 10:08.
+- **What it holds** (READ, from its lead): G3A's merge `92d3a944`, then
+  `8ae3c3f4` (CLAUDE.md's vendored count) and `96d99d84` (one sentence
+  of G3A's VALIDATION entry). MEASURED, `92d3a944..96d99d84` touches
+  CLAUDE.md and docs/VALIDATION.md and nothing else.
+- **Its CI** (MEASURED by the lead with `gh run view`): GitHub run
+  44789374100, `gates`, ran from 11:04:57 to 12:59:46 on 96d99d84 and
+  succeeded.
+- **The merges since `eae74e3e`** (READ, their messages):
+  - GPU round 2: G2A, augmentedAddition on hip:N; G2B, index tables and
+    scratch depths on hip:N; G2C, the divide and the square root on
+    hip:N; G2D, round 2's gates;
+  - the studies M4RR, M3S and GPU-G;
+  - round 3's G3A: a fixed tier for fp256's FMA, ADD, SUB and MUL, which
+    hip:N runs only under `CFT_HIP_TIER=fixed`. The default stays
+    generic.
+
+What this repository builds of it is host/src, host/include and
+host/Makefile. MEASURED with `git diff --stat eae74e3e 96d99d84`, 8 of
+those files changed, +1,676 and −105 lines:
+- augmented.c, device.c and softfloat.h, which this repository's build
+  compiles;
+- backend.h and cft.h;
+- backend_hip.cpp (+1,062) and the new fma256_fixed.h (436 lines), which
+  libcft builds only under HIP=1, so only in the GPU checks below;
+- the Makefile.
+
+Without HIP, libcft.a is its 16 C objects (the build log). The ABI is
+0.18 at both commits (cft.h's `CFT_ABI_VERSION_MINOR`).
+
+### How it was run
+
+One worktree from main at `a87dabf`, `cft-rebound-pin`, with fresh
+clones of its pins (`git clone --no-local`):
+- REBOUND, from cft-rebound-r5's clone, at bdfda4bd;
+- cft-fp256, from the sibling checkout `../cft-fp256`, at 96d99d84.
+
+Nothing was fetched from GitHub. `make check-pins` passes, and there is
+no source edit. The baseline is `a87dabf`'s own suite (entry 58's
+records' merge): the same tree at the old pin, run that morning.
+
+### The suite at both pins
+
+| | old pin `eae74e3`, at `a87dabf` | new pin `96d99d8`, at `6e874c4` |
+|---|---|---|
+| `make check` | rc 0, 3 h 03 min | rc 0, 3 h 13 min |
+| legs | 26 | 26 |
+| lines beginning `  ok ` | 1649 | 1649 |
+| RESULT lines | 18, all PASS | 18, all PASS |
+| build warnings | 5 | 5 |
+
+Read from the logs, not the exit codes. Every leg has the same counts in
+both, in the same order (the lead's legcmp.py).
+
+Normalising dates, temporary directories and timings leaves 46 differing
+lines:
+- the commit and branch lines, 4;
+- the new tree's build of libcft.a, which the old tree had built before
+  its suite, 25;
+- the lead's line giving the new libcft.a's sha256, 1;
+- the tree's path, in gen_programs' lines, check_ring's and
+  check_wave's, 16.
+
+Every line carrying a 16-hex-digit token is identical once the two
+libcft commits are masked, except the new build's id line and that
+sha256 line. Entry 45's six wide-state digests are in both logs at the
+same counts.
+
+### The same integrations through both libraries
+
+**The lead's,** gpu/pin_ab_g3a.py, with entry 53's arguments. It ran
+every problem in data/problems at binary64, binary128 and binary256:
+- on the loop engine, in REBOUND's order and in the FMA form;
+- on the program engine, with each build's own programs.
+
+**54 of 54 are identical,** every counter included, with the identity
+line set apart and the trailer's timings removed.
+- Each identity line names its own pin.
+- The two libcft.a files differ: sha256 `e07daf2f...` at the old pin,
+  entry 53's, and `bade03dd...` at the new.
+
+**Its controls** (gpu/pin_ab_g3a_ctl.py), through the same run and
+comparison: the untouched case is identical, and two changed copies
+differ:
+- the new build at `--steps 101` in place of 100;
+- one planted digit in a sample line.
+
+**`make example`** at both pins: rc 0, and the same 75 lines once the
+tree's path is normalised, but for one value in the column of seconds.
+
+### On both GPUs
+
+Each GPU ran `6e874c4`, built with HIP=1 from bundles whose sha256 was
+checked at both ends:
+- (a) `make HIP=1 check-gpu` in full: every leg, the controls, the
+  routes and the seam, then check_wave's line, `--device gpu --quick`;
+- (b) the lead's seam script, lead-wsl/p1p2_seam.py at `f4e475dd` (entry
+  58);
+- (c) for information only, check_records on hip:0 with
+  `CFT_HIP_TIER=fixed`.
+
+| | RTX 5060 Ti (WSL cft-gpu) | RX 7600 (nvidia-box) |
+|---|---|---|
+| (a) check_gpu | 64 ok, 0 FAIL, 379 min 22 s | 65 ok, 0 FAIL, 806 min 04 s |
+| (a) check_wave `--device gpu --quick` | 147 ok, 0 FAIL | 147 ok, 0 FAIL |
+| (b) p1p2_seam | 24 ok, 0 FAIL | 24 ok, 0 FAIL |
+| (c) CFT_HIP_TIER=fixed, check_records | check_gpu 2 ok, 0 FAIL; its check_records 4 ok, 0 FAIL, 15 min 31 s | check_gpu 2 ok, 0 FAIL; its check_records 4 ok, 0 FAIL, 31 min 49 s |
+
+**The 5060 Ti's legs:**
+- check_records 13m51s, check_equivalence 2m46s, check_program_engine
+  5m20s, check_ensemble 7m02s;
+- check_ring 2m10s, check_replay 10m24s, check_compare_run 144m05s,
+  check_zonal 13m28s;
+- check_reversal 6m37s, check_corrector 85m30s, check_dropin_light
+  70m06s.
+
+**The RX 7600's legs:**
+- check_records 31m33s, check_equivalence 6m12s, check_program_engine
+  11m41s, check_ensemble 15m49s;
+- check_ring 4m15s, check_replay 20m16s, check_compare_run 300m39s,
+  check_zonal 31m31s;
+- check_reversal 15m11s, check_corrector 194m15s, check_dropin_light
+  143m29s.
+
+The RX 7600's 65th check_gpu verdict is control g, which needs strace.
+nvidia-box has it; on the 5060 Ti's WSL host, check_gpu prints "control
+g NOT RUN: no strace on this host".
+
+**(c) ran the fixed tier** (MEASURED): on each GPU, every device line in
+(c) says `tier fixed`, where (a)'s say `tier generic`. On each GPU,
+check_records' own verdict holds the records of its four processes on
+the device to the software backend's.
+
+**What this closes from entry 58:** this is the first `check-gpu` in
+full, and the first run on the RX 7600, since round 5's merges. It ran
+at main's code, with the new pin.
+
+### Also in these records
+
+- ROADMAP's "What waits on Logan's word" and ROUND5.md's status line now
+  record the move.
+
+### What this does not establish
+
+- **The card.** No XRT build was made at this pin.
+- **cft-fp256's G3A2**, fp128 on the same fixed tier. It became
+  cft-fp256's main at 5ac396d3 later on 2026-11-20, with green CI (READ,
+  its lead). Logan kept 96d99d84.
+- **The fixed tier beyond check_records.** (c) is one leg, at the quick
+  form, on each GPU.
+- **A full suite on Linux** at this pin.

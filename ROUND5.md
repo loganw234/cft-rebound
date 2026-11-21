@@ -8,7 +8,8 @@ when these records land.** P3 landed at `4a8fe99` and P1 at `fda3b40` on
 2026-11-18, PL, the lead's own gate fixes, at `620c98b` on 2026-11-19,
 and P2 at `61e45bc` on 2026-11-20, each on its verifier's READY and a
 full make check (docs/VALIDATION.md entries 55 to 58; P0 is entry 54).
-The pin stays at cft-fp256 `eae74e3`; its move waits on Logan's word.
+The pin stayed at cft-fp256 `eae74e3` for the round; after the close it
+moved to `96d99d8`, G3A's main, at Logan's word (entry 59).
 
 Logan approved the round on 2026-11-16 ("the plan is also approved"),
 after its outline: the pin to G1C, this tree on `hip:0`, then P5 at
@@ -489,8 +490,8 @@ docs/VALIDATION.md, by entry.
   on its work directory; the lead's seam script first met a GPU record's
   header there too.
 - cft-fp256's GPU round 2 landed during the round. Round 5 stayed on
-  `eae74e3` at Logan's word, and the pin moves only on that word, after
-  the close.
+  `eae74e3` at Logan's word. The pin moved on that word after the close,
+  to `96d99d8` (entry 59).
 
 **Not in this round, as planned:** binary128 and binary256 on a GPU, the
 ladder compared rung against rung, and the MI300X.
